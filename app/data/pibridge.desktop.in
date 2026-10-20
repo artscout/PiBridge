@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=PiBridge
+GenericName=VR hub
+Comment=VR hub for Pimax headsets on Linux. Not affiliated with Pimax.
+Exec=@PIBRIDGE_APP_EXEC@
+Icon=pibridge
+Terminal=false
+Categories=Game;Settings;
+Keywords=VR;SteamVR;headset;eye tracking;
+StartupWMClass=pibridge

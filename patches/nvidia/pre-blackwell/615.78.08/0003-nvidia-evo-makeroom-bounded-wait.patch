@@ -1,0 +1,179 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "Rouan (rvdende)" <noreply@github.invalid>
+Date: Mon, 19 Oct 2026 12:00:00 +0000
+Subject: [PATCH 3/4] nvkms: bound the EVO pushbuffer wait in nvEvoMakeRoom()
+
+Stop-gap: after two consecutive 5 s timeouts the channel is marked dead and
+further methods are dropped instead of spinning forever under the nvkms
+lock, so a display channel that stops retiring methods no longer takes the
+whole desktop down. It does not fix the stall, and the dead channel stays
+dead until the module is reloaded.
+
+Author: Rouan (rvdende), commit 3271055 on branch
+fix-evo-makeroom-unbounded-wait of github.com/rvdende/open-gpu-kernel-modules,
+posted in NVIDIA/open-gpu-kernel-modules PR #1262 (2026-07-28). Rebased by
+omarchyvr (laughtt) without changes (line offsets only).
+
+GPUs: all (the EVO channel code is common); written for the 2Heads1OR hangs
+on RTX 20/30/40.
+Headset: Pimax Dream Air.
+Driver: 615.78.08.
+Status: Ported by omarchyvr from 610.57.04, compile-checked, NOT tested on hardware.
+
+License: MIT OR GPL-2.0, as open-gpu-kernel-modules.
+---
+ src/nvidia-modeset/include/nvkms-dma.h   | 20 +++++++++
+ src/nvidia-modeset/include/nvkms-types.h |  8 ++++
+ src/nvidia-modeset/src/nvkms-dma.c       | 53 ++++++++++++++++++++++--
+ 3 files changed, 78 insertions(+), 3 deletions(-)
+
+diff --git a/src/nvidia-modeset/include/nvkms-dma.h b/src/nvidia-modeset/include/nvkms-dma.h
+index 724bee4..3559f63 100644
+--- a/src/nvidia-modeset/include/nvkms-dma.h
++++ b/src/nvidia-modeset/include/nvkms-dma.h
+@@ -100,6 +100,16 @@ static inline void nvDmaSetEvoMethodData(
+     NVEvoChannelPtr pChannel,
+     const NvU32 data)
+ {
++    /*
++     * Must be checked here and not only in nvDmaSetStartEvoMethod(): callers
++     * push the method header there but the data words through this function
++     * directly, so dropping only the header would leave the data words being
++     * written into a ring that is no longer being consumed.
++     */
++    if (pChannel->pb.dead) {
++        return;
++    }
++
+     *(pChannel->pb.buffer) = data;
+     pChannel->pb.buffer++;
+ }
+@@ -180,6 +190,16 @@ static inline void nvDmaSetStartEvoMethod(
+         nvEvoMakeRoom(pChannel, countPlusHeader);
+     }
+ 
++    /*
++     * nvEvoMakeRoom() gives up on a channel that has stopped retiring methods
++     * rather than waiting on it forever. There is no room and there never will
++     * be, so drop the method instead of writing past the end of the ring.
++     * Checked after the call above because that call is what can set it.
++     */
++    if (p->dead) {
++        return;
++    }
++
+     nvDmaSetEvoMethodData(pChannel,
+         DRF_DEF(_UDISP, _DMA, _OPCODE,        _METHOD) |
+         DRF_NUM(_UDISP, _DMA, _METHOD_COUNT,  count) |
+diff --git a/src/nvidia-modeset/include/nvkms-types.h b/src/nvidia-modeset/include/nvkms-types.h
+index f0e917d..3f8b6f6 100644
+--- a/src/nvidia-modeset/include/nvkms-types.h
++++ b/src/nvidia-modeset/include/nvkms-types.h
+@@ -212,6 +212,14 @@ typedef struct _NVDmaBufferEvoRec
+     NvU32           offset_max; // Push buffer max offset (in bytes)
+     NvU32           put_offset; // Push buffer last kicked off offset
+     NvU32           fifo_free_count; // fifo free space (in words)
++    /*
++     * Set when the channel has stopped retiring methods and we have given up
++     * waiting for it. Once set, methods pushed to this channel are dropped
++     * rather than written: the display is already dead, and the alternative --
++     * spinning in nvEvoMakeRoom() forever -- wedges the calling thread and
++     * takes the session with it. See nvEvoMakeRoom().
++     */
++    NvBool          dead;
+     NVDevEvoPtr     pDevEvo;
+ } NVDmaBufferEvoRec;
+ 
+diff --git a/src/nvidia-modeset/src/nvkms-dma.c b/src/nvidia-modeset/src/nvkms-dma.c
+index aaa0b7e..d4cb5d7 100644
+--- a/src/nvidia-modeset/src/nvkms-dma.c
++++ b/src/nvidia-modeset/src/nvkms-dma.c
+@@ -39,6 +39,11 @@ void nvDmaKickoffEvo(NVEvoChannelPtr pChannel)
+     NVDmaBufferEvoPtr p = &pChannel->pb;
+     NvU32 putOffset = (NvU32)((char *)p->buffer - (char *)p->base);
+ 
++    /* Nothing was written and nothing is being consumed; see nvEvoMakeRoom(). */
++    if (p->dead) {
++        return;
++    }
++
+     if (p->put_offset == putOffset) {
+         return;
+     }
+@@ -104,14 +109,37 @@ NvBool nvEvoPollForEmptyChannel(NVEvoChannelPtr pChannel, NvU32 sd,
+     return TRUE;
+ }
+ 
++/*
++ * How many consecutive 5-second timeouts to tolerate before declaring the
++ * channel dead. A display channel that has not retired a single method in this
++ * long is not going to: waiting longer only keeps the calling thread pinned.
++ *
++ * This was 6 (30s) on the first attempt, which made the whole thing dead code:
++ * measured on a Vive Pro 2 wedge, the session became unusable enough to force a
++ * hard reboot after the THIRD timeout (15s), so the give-up path was never
++ * reached. The window between "display channel stopped" and "user has already
++ * power-cycled the box" is about ten seconds, so bound it inside that.
++ */
++#define NV_EVO_MAKE_ROOM_MAX_TIMEOUTS 2 /* 10 seconds */
++
+ void nvEvoMakeRoom(NVEvoChannelPtr pChannel, NvU32 count)
+ {
+     NVDmaBufferEvoPtr push_buffer = &pChannel->pb;
+     NvU32 getOffset;
+     NvU32 putOffset;
+     NvU64 startTime = 0;
++    NvU32 timeouts = 0;
+     const NvU64 timeout = 5000000; /* 5 seconds */
+ 
++    /*
++     * The channel already failed; do not go back to waiting on it. The caller
++     * checks this too, but nvEvoMakeRoom() is the only place that can set it,
++     * so re-check here to keep the invariant local.
++     */
++    if (push_buffer->dead) {
++        return;
++    }
++
+     putOffset = (NvU32) ((char *)push_buffer->buffer -
+                          (char *)push_buffer->base);
+ 
+@@ -158,9 +186,18 @@ void nvEvoMakeRoom(NVEvoChannelPtr pChannel, NvU32 count)
+         }
+ 
+         /*
+-         * If we have been waiting too long, print an error message.  There
+-         * isn't much we can do as currently structured, so just reset
+-         * startTime.
++         * If we have been waiting too long, print an error message and reset
++         * startTime so the next timeout is measured afresh.
++         *
++         * After NV_EVO_MAKE_ROOM_MAX_TIMEOUTS of these we stop waiting
++         * altogether and mark the channel dead. This used to loop forever --
++         * "there isn't much we can do as currently structured" -- but forever
++         * is worse than giving up: the caller is typically holding the nvkms
++         * lock, so a display channel that stops retiring methods hangs every
++         * other client behind it and takes the whole session down. Dropping
++         * methods on a dead channel leaves the display frozen, which it
++         * already is, but keeps the rest of the machine alive and lets the
++         * session be torn down and restarted.
+          */
+         if (nvExceedsTimeoutUSec(push_buffer->pDevEvo, &startTime, timeout)) {
+             nvEvoLogDev(push_buffer->pDevEvo, EVO_LOG_ERROR,
+@@ -169,6 +206,16 @@ void nvEvoMakeRoom(NVEvoChannelPtr pChannel, NvU32 count)
+                 pChannel->hwclass, pChannel->instance,
+                 count, push_buffer->fifo_free_count, getOffset, putOffset);
+             startTime = 0;
++
++            if (++timeouts >= NV_EVO_MAKE_ROOM_MAX_TIMEOUTS) {
++                nvEvoLogDev(push_buffer->pDevEvo, EVO_LOG_ERROR,
++                    "Channel 0x%08x:%d has made no progress in %d seconds; "
++                    "marking it dead and dropping further methods.",
++                    pChannel->hwclass, pChannel->instance,
++                    (int)(NV_EVO_MAKE_ROOM_MAX_TIMEOUTS * (timeout / 1000000)));
++                push_buffer->dead = TRUE;
++                return;
++            }
+         }
+ 
+         nvkms_yield();

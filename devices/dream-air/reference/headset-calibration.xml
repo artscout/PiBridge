@@ -1,0 +1,28 @@
+<?xml version="1.0" ?>
+<DeviceConfiguration deviceUID="reference" cameraModel="ov7251" pimax_calibration_version="Pimax_Calibration_tag_0.3" calibration_date="2026_07_28_13_05_49">
+    <Camera cam_name="trackingA" name="trackingA" id="0">
+        <Calibration size="640 480" principal_point="325.3779138659 248.2829309197 " focal_length="234.7133343909 234.7063990438 " model="FISHEYE_4_PARAMETERS" radial_distortion="0.0589502951 -0.0603263194 0.0320281449 -0.0082048556 0.0011599741 -0.0001122173  " undistortion_limit="0.0"/>
+        <Rig translation="-0.0000000000 0.0000000000 -0.0000000000 " rowMajorRotationMat="1.0000000000 0.0000000000 0.0000000000 0.0000000000 1.0000000000 0.0000000000 0.0000000000 0.0000000000 1.0000000000 "/>
+        <TimeAlignment delta="0"/>
+    </Camera>
+    <Camera cam_name="trackingB" name="trackingB" id="1">
+        <Calibration size="640 480" principal_point="323.5127203336 246.6016440000 " focal_length="232.5652236825 232.5033897129 " model="FISHEYE_4_PARAMETERS" radial_distortion="0.0621048914 -0.0624350891 0.0299895506 -0.0071381886 -0.0014184378 0.0032868008  " undistortion_limit="0.0"/>
+        <Rig translation="-0.0996975113 0.0070973858 -0.0497311326 " rowMajorRotationMat="-0.5777754392 -0.1162377714 -0.8078764277 0.1175517878 -0.9913384091 0.0585639461 -0.8076862752 -0.0611305087 0.5864349425 "/>
+        <TimeAlignment delta="0"/>
+    </Camera>
+    <Camera cam_name="Pi-controllerA" name="Pi-controllerA" id="2">
+        <Calibration size="640 480" principal_point="321.4975205619 238.7863695883 " focal_length="229.5386922132 229.3012015187 " model="FISHEYE_4_PARAMETERS" radial_distortion="0.0593801789 -0.0612851780 0.0304399110 -0.0073413736 -0.0010965746 -0.0005859653  " undistortion_limit="0.0"/>
+        <Rig translation="-0.0009893824 -0.0372773587 -0.0141332379 " rowMajorRotationMat="0.9117445436 -0.3899444131 0.1290939268 0.3602957706 0.6082888764 -0.7072281106 0.1972532508 0.6913233668 0.6950993868 "/>
+        <TimeAlignment delta="0"/>
+    </Camera>
+    <Camera cam_name="Pi-controllerB" name="Pi-controllerB" id="3">
+        <Calibration size="640 480" principal_point="320.9087685723 240.9238810171 " focal_length="233.8722007973 233.6539527313 " model="FISHEYE_4_PARAMETERS" radial_distortion="0.0593253043 -0.0603298036 0.0304801136 -0.0077272603 0.0009042975 0.0002227603  " undistortion_limit="0.0"/>
+        <Rig translation="-0.0937258425 0.0378415546 -0.0763450753 " rowMajorRotationMat="-0.5599233201 -0.4982339044 -0.6620036647 -0.3270775328 -0.6011872576 0.7291050465 -0.7612530218 0.6247694437 0.1736576490 "/>
+        <TimeAlignment delta="0"/>
+    </Camera>
+    <Image format="interleaved"/>
+    <SFConfig>
+        <Stateinit ombc="-0.07417106183 -2.573029401 0.6280404502" tbc="-0.006352548001 -0.01406156932 -0.01943735371" aBias="0.07980569618 -0.02250049623 0.03881475541" wBias="0.003401352358 0.006936110497 -0.0070139068" ka="0.006161988608 0.001589564342 0.0211836086" kg="0.005048087978 0.002992024173 0.001048694797" na="0.001403426494 -0.01279517257 0.01563209552" ng="-0.002306800954 0.0006115683315 -8.538845378e-05" ombg="0.0001069447074 0.0008575760998 0.0007911460955" accelDelta="0.0" delta="0.001637992156"/>
+        <IMUNoise movingAccelNoise="0.0" movingGyroNoise="0.0" stationaryAccelNoise="0.0" stationaryGyroNoise="0.0"/>
+    </SFConfig>
+</DeviceConfiguration>

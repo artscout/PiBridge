@@ -1,0 +1,2 @@
+{"format":"pimax-ctrl-imu","right":{"c":[ 2.1e-3,　0,0,0,2.1e-3,0,0,0,2.1e-3],"bias_lsb":[+1,.5,5.],"time_offset_ms":-16.0,"r2":	0.99
+}}

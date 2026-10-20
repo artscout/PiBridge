@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# The controller take's steps file has what app/src/core/rec_steps.cpp parseRecSteps accepts: a "steps" list, each
+# with a known kind, a text, seconds > 0 and 0 <= settle < seconds.  cmake -DFILE=... -P check_steps.cmake
+file(READ ${FILE} json)
+string(JSON n LENGTH "${json}" steps)
+if(n EQUAL 0)
+    message(FATAL_ERROR "no steps")
+endif()
+math(EXPR last "${n} - 1")
+foreach(i RANGE ${last})
+    string(JSON kind GET "${json}" steps ${i} kind)
+    string(JSON text GET "${json}" steps ${i} text)
+    string(JSON secs GET "${json}" steps ${i} seconds)
+    string(JSON settle GET "${json}" steps ${i} settle)
+    if(NOT kind MATCHES "^(prepare|still|tilt-hold|move)$")
+        message(FATAL_ERROR "step ${i}: unknown kind ${kind}")
+    endif()
+    if(text STREQUAL "" OR NOT secs GREATER 0 OR settle LESS 0 OR NOT settle LESS secs)
+        message(FATAL_ERROR "step ${i}: bad text / seconds / settle")
+    endif()
+endforeach()
+message(STATUS "${n} steps ok")

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# PiBridge headset keepalive (port of omarchyvr-keepalived.service + the Crystal Super Lighthouse drop-in).
+# Options come from ~/.config/pibridge/pibridge.conf (refresh_hz, follow, audio_to_headset): with the defaults
+# this is `--video 90 --follow vrserver --audio`: the panel is on and the headset audio is the default only while
+# SteamVR runs; otherwise the headset idles like under Pimax Play (one keepalive with rate 0, then none: green LED).
+# The app rewrites the settings file and reloads this unit (SIGHUP) or restarts it.
+[Unit]
+Description=PiBridge headset keepalive (wake + 58 04 39 every 213 ms while the VR runtime runs)
+# two keepalive daemons on the same hidraw nodes would fight over the rate. pimax-keepalived is this daemon under
+# PiBridge's earlier name, omarchyvr-keepalived the original.
+Conflicts=pimax-keepalived.service omarchyvr-keepalived.service
+
+[Service]
+ExecStart=%h/.local/bin/pibridge-keepalived
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=default.target

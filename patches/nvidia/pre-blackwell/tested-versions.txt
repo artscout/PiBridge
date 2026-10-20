@@ -1,0 +1,3 @@
+# From omarchyvr (MIT). Driver versions the NVIDIA patches were tested on (one per line, # comments allowed).
+# Any other version is patched only when the user opts in (app: Allow the patch on untested NVIDIA drivers).
+610.57.04

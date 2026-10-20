@@ -1,0 +1,7 @@
+# From omarchyvr (MIT). Driver versions the NVIDIA patches were PORTED to: <version>/ next to this file holds the three patches written
+# for that source; they apply with --fuzz=0 and the patched open modules were compile-checked. NOT tested on hardware, so
+# the version stays "untested" (it needs the opt-in, see tested-versions.txt), but the opt-in applies the clean port and
+# never the relaxed --fuzz=2 retry. A version moves to tested-versions.txt only after a hardware test (omarchyvr docs/NVIDIA-615.md has the plan).
+615.78.08
+# 595.99.02: ported in PiBridge 2026-10-19 (fuzz and two API changes), built and loaded on an RTX 5090 (no 2Heads1OR there)
+595.99.02

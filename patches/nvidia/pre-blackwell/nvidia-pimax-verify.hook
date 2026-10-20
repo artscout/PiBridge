@@ -1,0 +1,15 @@
+# From omarchyvr (patches/nvidia/, MIT).
+# pacman hook TEMPLATE: after dkms built the nvidia modules (70-dkms-install.hook), check that nvidia-modeset has the
+# Pimax flip-fix (merged_head_sync parameter). Prints a loud banner and logs to the journal if not.
+# Install together with 65-nvidia-pimax-patch.hook, see the install command in nvidia-pimax-patch.hook.
+
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = nvidia-open-dkms
+
+[Action]
+Description = Verifying that the built nvidia-modeset has the Pimax merged_head_sync parameter...
+When = PostTransaction
+Exec = /usr/local/lib/omarchyvr/nvidia-patch-reapply.sh --hook --verify --fallback

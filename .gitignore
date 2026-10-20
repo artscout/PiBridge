@@ -1,0 +1,11 @@
+build/
+build-*/
+.cache/
+compile_commands.json
+# Pimax Play's binaries: personal use only, never in the repository (the kit lives in ~/.local/share/pibridge/windata)
+windll/
+# winbridge / loader build outputs
+*.exe
+winbridge/*.so
+winbridge/winbridge-client
+winbridge/vit-replay

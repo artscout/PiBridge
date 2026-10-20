@@ -1,0 +1,30 @@
+{
+  "about": "Controller tracking take (docs/research/ctrl-tracking-improvements.md, 'Live takes'): the steps for the app's guided recording, in the rec_steps format of app/src/core/rec_steps.h (only \"steps\" is read). The recording around it: the inside-out session running (Monado + pibridge-ctrltrack live), pibridge-cam record OUT.pxcam --source broker for the whole script, PIMAX_CTRL_IMU_LOG set for the session (the fuser log of both hands). Do it twice: with PIMAX_CAM_AE=1 (the LED frames at the Windows pair 40/62) and with PIMAX_CAM_AE=0 (25/35). About 2.2 GB per minute.",
+  "record": {"pxcam_from_broker": true, "imu_log": true, "cam_ae": [1, 0], "seconds": 93},
+  "steps": [
+    {"id": "ctrl-prepare", "kind": "prepare", "seconds": 10, "settle": 0,
+     "text": "Put the headset on. Pick up both controllers and press a button on each."},
+    {"id": "ctrl-still-front", "kind": "still", "seconds": 10, "settle": 2,
+     "text": "Hold both controllers still at chest height in front of you."},
+    {"id": "ctrl-point-low", "kind": "move", "seconds": 15, "settle": 0,
+     "text": "Point around normally, with your arms low and to the sides."},
+    {"id": "ctrl-fast", "kind": "move", "seconds": 10, "settle": 0,
+     "text": "Swing the controllers fast and flick your wrists, in front and to the sides."},
+    {"id": "ctrl-left-behind", "kind": "move", "seconds": 5, "settle": 0,
+     "text": "Put your left hand behind your back and keep it there."},
+    {"id": "ctrl-left-back", "kind": "move", "seconds": 5, "settle": 0,
+     "text": "Bring your left hand back in front of you."},
+    {"id": "ctrl-right-behind", "kind": "move", "seconds": 5, "settle": 0,
+     "text": "Now put your right hand behind your back and keep it there."},
+    {"id": "ctrl-right-back", "kind": "move", "seconds": 5, "settle": 0,
+     "text": "Bring your right hand back in front of you."},
+    {"id": "ctrl-cross", "kind": "move", "seconds": 8, "settle": 0,
+     "text": "Cross your hands, and hold one controller behind the other."},
+    {"id": "ctrl-desk", "kind": "still", "seconds": 10, "settle": 3,
+     "text": "Put both controllers down on the desk in front of you and leave them there."},
+    {"id": "ctrl-dark", "kind": "still", "seconds": 5, "settle": 1,
+     "text": "Turn the room light off now, if you can. Keep looking at the desk."},
+    {"id": "ctrl-done", "kind": "prepare", "seconds": 5, "settle": 0,
+     "text": "Done. You can turn the light back on."}
+  ]
+}

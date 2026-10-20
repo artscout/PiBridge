@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# PiBridge eye tracker (port of omarchyvr-eyed.service): the eye chip's gaze in /dev/shm/omarchyvr-eye-gaze for
+# the SteamVR driver. Options come from ~/.config/pibridge/pibridge.conf (eye_start_list, eye_profile,
+# eye_tracking, eye_flip_x, follow): with the defaults it runs only while SteamVR's vrserver runs, with the Crystal
+# Super's start list and the user's eye profile from ~/.config/pibridge (or ~/.config/pimax-linux, ~/.config/omarchyvr), flip x on.
+# The app starts and stops this unit (eye tracking switch), reloads it (SIGHUP) after a settings change, and stops it
+# while pimax-eyecal runs (the eye chip has one owner).
+[Unit]
+Description=PiBridge eye tracker (gaze to shared memory for SteamVR)
+# two eye daemons on the same chip would fight over it; they also share the gaze file. pimax-eyed is this daemon
+# under PiBridge's earlier name, omarchyvr-eyed the original.
+Conflicts=pimax-eyed.service omarchyvr-eyed.service
+After=pibridge-keepalived.service
+
+[Service]
+ExecStart=%h/.local/bin/pibridge-eyed
+ExecReload=/bin/kill -HUP $MAINPID
+# no PIMAX_EYE_FLIP_X environment as in omarchyvr-eyed.service: eye_flip_x=1 in pibridge.conf covers it
+Restart=on-failure
+RestartSec=5
+Nice=-5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: PiBridge <noreply@pibridge.invalid>
+Date: Mon, 19 Oct 2026 12:00:00 +0000
+Subject: [PATCH 4/4] nvkms: use 2Heads1OR for VR headsets wider than
+ single-head DSC allows
+
+Single-head DSC is limited to a picture width of 5120 (nvt_dsc_pps.c); a
+wider mode needs dual DSC, i.e. 2Heads1OR. nvEvoUse2Heads1OR() only picks
+2Heads1OR when the pixel clock exceeds one head's maximum, so a VR headset
+whose wide mode fits one head's pixel clock (the Pimax Crystal Super's
+7104x3840 modes, 2028 / 2564 MHz) fails the DP bandwidth check (HBR3 x4,
+DSC 8.0 bpp needed). Use 2Heads1OR for a VR HMD (isVrHmd: RM's "direct mode
+display" answer for the EDID's vendor/product) wider than 5120.
+
+GPUs: RTX 20/30/40 (Turing, Ampere, Ada: merge-mode HALs). On RTX 50
+(Blackwell) supportsMergeMode is FALSE and nvEvoUse2Heads1OR() returns
+before this check, so it does nothing there; the Crystal Super on RTX 50
+needs the FEC re-read patch instead (blackwell/).
+Headset: Pimax Crystal Super (any VR HMD wider than 5120).
+Driver: 610.57.04 (written on 595.99.02; applies to 610.57.04 without changes).
+Status: UNTESTED. On 610.57.04 it was only checked to apply (git apply);
+not compiled there and not tried on any GPU. On 595.99.02 it compiled and
+loaded on an RTX 5090, where the code path is never reached.
+
+License: MIT OR GPL-2.0, as open-gpu-kernel-modules.
+---
+ src/nvidia-modeset/src/nvkms-evo.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/nvidia-modeset/src/nvkms-evo.c b/src/nvidia-modeset/src/nvkms-evo.c
+index 068af73..1a7245f 100644
+--- a/src/nvidia-modeset/src/nvkms-evo.c
++++ b/src/nvidia-modeset/src/nvkms-evo.c
+@@ -9880,6 +9880,15 @@ NvBool nvEvoUse2Heads1OR(const NVDpyEvoRec *pDpyEvo,
+         return FALSE;
+     }
+ 
++    /* A VR headset wider than single-head DSC allows (pic_width <= 5120,
++     * nvt_dsc_pps.c) needs dual DSC, i.e. 2Heads1OR, even when one head could
++     * drive its pixel clock: the Pimax Crystal Super's 7104x3840 modes
++     * (2028 / 2564 MHz) can fit one head, and without this its only modes
++     * fail the DP bandwidth check (HBR3 x4, DSC 8.0 bpp needed). */
++    if (pDpyEvo->isVrHmd && (nvEvoVisibleWidth(pTimings) > 5120)) {
++        return TRUE;
++    }
++
+     /* Use 2Heads1OR mode only if the required pixel clock is greater than the
+      * maximum pixel clock support by a head. */
+     return (pTimings->pixelClock > pHeadCaps->maxPClkKHz);

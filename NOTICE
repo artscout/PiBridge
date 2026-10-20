@@ -1,0 +1,76 @@
+PiBridge (VR hub for Pimax headsets on Linux; not affiliated with Pimax) contains code ported from omarchyvr
+(https://github.com/laughtt/omarchyvr, by laughtt / José Mauricio Carpio Herrera and contributors), licensed MIT OR
+Apache-2.0; it is used here under its MIT terms, reproduced below. The device descriptions in devices/ are copied
+from omarchyvr unchanged. Files ported from omarchyvr say so in their second line.
+
+Other third-party material in this tree:
+- app/third_party/openvr/openvr.h: the OpenVR SDK header (Valve, BSD-3-Clause, see app/third_party/openvr/LICENSE).
+  The app loads SteamVR's own libopenvr_api.so at run time; it is not part of this tree.
+- tools/slam/data/basalt-euroc_config.json: Basalt's generic EuRoC VIO config (data/euroc/euroc_config.json of
+  Basalt commit df6e970, https://gitlab.freedesktop.org/mateosss/basalt, Copyright (c) 2019, Vladyslav Usenko and
+  Nikolaus Demmel, BSD-3-Clause), unmodified, embedded into pibridge-slam as omarchyvr-slam embeds it.
+- devices/dream-air/reference/ (headset-calibration.xml, lens.conf, gyro-bias): omarchyvr's Dream Air reference
+  data (MIT, as above), every serial scrubbed there.
+- app/src/qv/: settings and preview code from artscout-qv-vulkan-linux (MIT); each file says where it came from.
+- patches/chovr/*.patch: changes to CustomHeadsetOpenVR (https://github.com/sboys3/CustomHeadsetOpenVR, sboys3),
+  GPL-2.0 as CustomHeadsetOpenVR itself. They are not built into PiBridge.
+- patches/nvidia/**/*.patch: changes to NVIDIA's open-gpu-kernel-modules, under that project's MIT/GPL-2.0 dual
+  licence. The pre-Blackwell 2Heads1OR patches are omarchyvr's (one of them, the bounded EVO wait, by Rouan (rvdende),
+  NVIDIA/open-gpu-kernel-modules PR #1262). Not built into PiBridge.
+- patches/ (the rest): scripts, notes and rules from omarchyvr (MIT, as above). See patches/README.md.
+- libpibridge-room/ and tools/roomsetup/: the room setup, ported in large part from ZoneTweak
+  (https://github.com/killdano/ZoneTweak, Go, by killdano), MIT; its licence is reproduced at the end of this file.
+  Each ported file says which ZoneTweak file it comes from.
+
+Pimax, Crystal Super and Dream Air are trademarks of their owners. PiBridge is an independent project and is not made,
+endorsed or supported by Pimax.
+
+----
+
+MIT License
+
+Copyright (c) 2026 The omarchyvr contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+----
+
+ZoneTweak (https://github.com/killdano/ZoneTweak), used by libpibridge-room/ and tools/roomsetup/:
+
+MIT License
+
+Copyright (c) 2026 killdano
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

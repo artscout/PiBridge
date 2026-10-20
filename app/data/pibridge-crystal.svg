@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<!-- PiBridge app icon: a pibridgeed gem outline in the app's indigo on a dark rounded square (same drawing as appIcon()). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <rect x="2" y="2" width="60" height="60" rx="14" ry="14" fill="#141417"/>
+  <g transform="translate(8 8) scale(2)" fill="none" stroke="#7a88ff" stroke-width="1.7"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M7 4.5 H17 L21 9.5 L12 20.5 L3 9.5 Z"/>
+    <path d="M3 9.5 H21"/>
+    <path d="M7 4.5 L9.5 9.5 L12 4.5 L14.5 9.5 L17 4.5"/>
+    <path d="M9.5 9.5 L12 20.5 L14.5 9.5"/>
+  </g>
+</svg>

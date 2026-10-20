@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: PiBridge <noreply@pibridge.invalid>
+Date: Mon, 19 Oct 2026 12:00:00 +0000
+Subject: [PATCH] displayport: re-read the sink's FEC capability in the SST DSC
+ check
+
+The DP library reads the sink's FEC capability (DPCD 0x090) once, at
+detection. Some sinks NAK their first AUX reads while their display bridge
+is still starting; the Pimax Crystal Super VR headset does this. The failed read leaves FEC cached as "unsupported" for the whole
+session, so compoundQueryAttachSSTIsDscPossible() says DSC is impossible
+and every mode above the uncompressed link bandwidth is rejected (on the
+Crystal Super: all of its 7104x3840 modes, HBR3 x4, DSC 8.0 bpp needed).
+
+Read the FEC capability again in the check when the cached value says no
+and the GPU supports FEC. The check also dereferenced the native device
+without a NULL test; a mode can be validated before the DP library has
+found the sink (seen with an EDID override at boot), so test it first.
+
+GPUs: RTX 50 (Blackwell). Headset: Pimax Crystal Super.
+Driver: 595.99.02. Applies unchanged (git apply, not built there) to
+610.57.04, 615.71.09 and 615.78.08.
+Tested: RTX 5090 + Crystal Super, 7104x3840 over DP with DSC (with an
+EDID override that sets 8 bpc: the headset's EDID says "undefined" colour
+depth, NVKMS then uses 6 bpc and DSC refuses 6 bpc; that part is not a
+driver change).
+
+License: MIT OR GPL-2.0, as open-gpu-kernel-modules.
+---
+ src/common/displayport/src/dp_connectorimpl.cpp | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/src/common/displayport/src/dp_connectorimpl.cpp b/src/common/displayport/src/dp_connectorimpl.cpp
+index caf1c8e..f140673 100644
+--- a/src/common/displayport/src/dp_connectorimpl.cpp
++++ b/src/common/displayport/src/dp_connectorimpl.cpp
+@@ -1976,10 +1976,23 @@ bool ConnectorImpl::compoundQueryAttachSSTIsDscPossible
+     main->getDscCaps(&bGpuDscSupported);
+     DeviceImpl * nativeDev = this->findDeviceInList(Address());
+ 
++    //
++    // The sink's FEC capability is read once, at detection. Some sinks (a VR
++    // headset whose display bridge is still starting) NAK their first AUX reads,
++    // which leaves FEC "unsupported" and DSC impossible for the whole session, so
++    // every mode above the uncompressed link bandwidth is rejected. Read it again
++    // here when the cached value says no and the GPU supports FEC.
++    //
++    if (nativeDev && !nativeDev->isFECSupported() && this->isFECSupported())
++    {
++        nativeDev->getFECSupport();
++    }
++
+     if (bGpuDscSupported &&                                 // if GPU supports DSC
+         this->isFECSupported() &&                           // If GPU supports FEC
+         pDscParams &&                                       // if client sent DSC info
+         pDscParams->bCheckWithDsc &&                        // if client wants to check with DSC
++        nativeDev &&                                        // a mode can be validated before the sink is found
+         nativeDev->isDSCPossible() &&                       // if device supports DSC decompression
+         (nativeDev->isFECSupported() || main->isEDP()) &&   // if device supports FEC decoding or is an DSC capable eDP panel which doesn't support FEC
+         (modesetParams.modesetInfo.bitsPerComponent != 6))  // DSC doesn't support bpc = 6

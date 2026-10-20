@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: MIT
+# PiBridge: lets the logged-in user (uaccess) open the headset without root. Copy to /etc/udev/rules.d/ (docs/INSTALL.md).
+# Vendor 34a4: the headset's HID interfaces (hidraw) and its USB devices; 2104:0561: the Tobii eye chip (usbfs).
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="34a4", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="34a4", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2104", ATTRS{idProduct}=="0561", MODE="0660", TAG+="uaccess"

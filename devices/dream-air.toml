@@ -1,0 +1,223 @@
+# Pimax Dream Air (SLAM edition): the one real module.
+# Every value below is cited to the code that uses it today (rust/...:line) or to the capture it came from.
+# Schema: docs/ARCHITECTURE.md "Device descriptor". Parsed by rust/pimax-device/src/toml_lite.rs (one-line values only).
+
+[device]
+id = "dream-air"
+name = "Pimax Dream Air (SLAM)"
+vendor = "pimax"
+status = "real"                       # real | mock
+usb_vid = 0x34a4                      # pimax-proto/src/lib.rs:35
+usb_pids = [0x0044]                   # headset HID, 4 interfaces; pimax-proto/src/lib.rs:37,41
+usb_aux = [0x0043, 0x0014]            # display bridge MCU (lib.rs:39), tracking cameras UVC (pimax-cam/src/v4l2.rs:37-39)
+firmware_seen = ["MCU 0.0.33/0.0.32", "FPGA 0.1.1", "bridge 1.2.6", "SLAM 1.9.9.8", "Tobii 7.32.0"]
+command_interface = 0                 # IF0: commands and replies; IF1-IF3 must stay open and drained (keepalive)
+
+[display]
+status = "works"
+mode = [7104, 3840]                   # two rotated 3552x3840 panels side by side; pimax-lens/src/pvrfit.rs:1716,1731
+refresh_hz = [72, 90]                 # omarchyvr-tools/src/vr/config.rs:30-58 (90 Hz experimental)
+edid_vendor = "PVR"                   # omarchyvr-tools/src/vr/edid.rs:5
+edid_product = 0x1019                 # omarchyvr-tools/src/vr/edid.rs:7
+needs = ["edid_override_non_desktop", "nvidia_2heads1or_patches", "drm_lease"]
+
+[tracking]
+status = "works"
+head = "slam"                         # Basalt via Monado; 3DoF IMU fallback
+imu_interface = 2
+
+[controllers]
+status = "works"
+slots = [2, 3]                        # left, right; pimax-proto/src/lib.rs:49-51
+pairing = "start_pair"                # [[hid]] start_pair below
+optical_tracking = "experimental"
+
+[eye_tracking]
+status = "works"
+usb_vid = 0x2104                      # Tobii EyeChip; pimax-eye/src/replay.rs:21-23
+usb_pid = 0x0561
+calibration = "~/.config/omarchyvr/eye-calibration.toml"
+
+[ipd]
+status = "works"
+motor = true
+min_mm = 58.0                         # pimax-eye/src/ipd.rs:16-17
+max_mm = 72.0
+readback = "IF2 report 53 31, u16 LE at bytes 45..46, /100 mm"   # pimax-eye/src/ipd.rs:61-66
+
+# Reference data (user decision 2026-10-17, "approve shipping calibrations"): reference/ holds the project headset's
+# own Pimax Windows calibration with every serial scrubbed, the default for every Dream Air until the headset's own
+# data is read or imported (it always wins): headset-calibration.xml (factory cameras + IMU; pimax-cam REFERENCE_XML),
+# controllers/left.json, right.json (Pimax LED models; pimax-ctrltrack), lens.conf (fitted lens profile; pimax-lens),
+# gyro-bias (typical gyro bias, deg/s; omarchyvr-config devicedata). Installed with the data copy; also compiled in.
+
+[cameras]
+status = "works"
+count = 4                             # OV7251 tiles on one UVC node; pimax-cam/src/frame.rs:13-28
+tile = [640, 480]
+frame = [2560, 832]
+passthrough = "works"
+auto_exposure = "start_ae"            # [[hid]] camera_ae below
+
+[audio]
+status = "unknown"                    # DP audio works but the sink name is not recorded yet; mic is silent while the display is off (LESSONS 19)
+sink_match = []
+source_match = []
+
+[calibration]
+factory = "usb READ_DOC 0x0a, 84 blocks, zlib XML"   # pimax-proto/src/calib.rs:38
+paths = ["~/.config/omarchyvr/lens.conf", "~/.config/omarchyvr/ipd.env", "~/.config/omarchyvr/eye-calibration.toml", "~/.cache/omarchyvr/gyro-bias", "~/.local/share/omarchyvr/roommap"]
+
+[onboarding]
+steps = ["detect", "checks", "fixes", "udev", "ipd", "pair", "eye_cal", "room", "done"]
+
+# ---------------------------------------------------------------------------------------------------------------------
+# HID allowlist (IF0 output reports, 64 bytes, zero padded; hidraw write adds report id 0).
+# Rule: only bytes seen in Windows captures, and only the ones the stack already sends. See LESSONS row 11.
+# ---------------------------------------------------------------------------------------------------------------------
+
+[[hid]]
+id = "wake"
+bytes = "58 06 1a 05 01 00 00"
+source = "pimax-proto/src/frame.rs:46 wake(); init-sequence.md"
+
+[[hid]]
+id = "keepalive"
+bytes = "58 04 39 00 {rate:u8} 00"
+params = ["rate=0x00|0x48|0x5a"]      # 0 = exit/stop, 72 Hz, 90 Hz
+source = "pimax-proto/src/frame.rs:53 keepalive(); every 213 ms (lib.rs:47); reset.rs:26-30"
+
+[[hid]]
+id = "app_unlock"
+bytes = "58 05 5b 05 02 02"
+source = "pimax-proto/src/frame.rs:66 video_prepare_commands()"
+
+[[hid]]
+id = "panel_on"
+bytes = "58 04 29 00 01"
+source = "pimax-proto/src/frame.rs:67"
+
+[[hid]]
+id = "announce_refresh"
+bytes = "58 0d 1a 05 02 {fps:u8}"
+params = ["fps=72|90"]
+source = "pimax-proto/src/frame.rs:69"
+
+[[hid]]
+id = "announce_gpu"
+bytes = "58 0d 1a 05 05"
+source = "pimax-proto/src/frame.rs:70"
+
+[[hid]]
+id = "stop"
+bytes = "58 04 1a 05 04"
+source = "omarchyvr-tools/src/vr/reset.rs:27-28"
+
+[[hid]]
+id = "read_serial"
+bytes = "58 04 16 {slot:u8} 1e"
+params = ["slot=0|2|3"]               # 0 = headset, 2/3 = controllers
+source = "pimax-proto/src/frame.rs:77; pimax/src/session.rs:479"
+
+[[hid]]
+id = "read_info"
+bytes = "58 03 50 {slot:u8}"
+params = ["slot=0|2|3"]
+source = "pimax-proto/src/frame.rs:78; omarchyvr-tools/src/info.rs:46"
+
+[[hid]]
+id = "read_version"
+bytes = "58 03 03 {slot:u8}"
+params = ["slot=0|2|3"]
+source = "pimax-proto/src/frame.rs:80; pimax/src/session.rs:485"
+
+[[hid]]
+id = "read_doc_controller"
+bytes = "58 07 0a {slot:u8} 00 00 00 10"
+params = ["slot=2|3"]
+source = "pimax-proto/src/frame.rs:79 attach_commands()"
+
+[[hid]]
+id = "read_calib_block"
+bytes = "58 07 0a 00 01 {addr:u16le} 10"
+params = ["addr=0..0xffff"]
+source = "pimax-proto/src/calib.rs:38 read_block_request()"
+
+[[hid]]
+id = "eye_power_on"
+bytes = "58 05 3c 05 00 01"
+policy = "once_per_enumeration"
+min_interval_ms = 5000
+approved = "user, 2026-10-14 (eye-module enable; disable was never captured and is never sent)"
+source = "pimax-eye/src/power.rs:17-22"
+
+[[hid]]
+id = "ipd_motor"
+bytes = "58 06 5c 05 01 {ipd:u16le}"
+params = ["ipd=5800..7200"]           # mm x 100, 58-72 mm
+policy = "once_per_request"
+min_interval_ms = 1000
+approved = "user, 2026-10-14 (once per apply); 2026-10-15 confirmed by the Windows capture take 6: 58 06 5c 05 01 a8 16 = 58.00 mm, reply 4c 04 5c 05 01 07"
+source = "pimax-eye/src/ipd.rs:39-45 motor_report(); controllers-settings.md R2.1 eSpiCmdSetIPD"
+
+[[hid]]
+id = "start_pair"
+bytes = "58 04 04 00 {slot:u8}"
+params = ["slot=2|3"]
+policy = "once_per_request"
+min_interval_ms = 30000
+approved = "user, 2026-10-14 (once per user request, never retried)"
+source = "omarchyvr-autod/src/pairing.rs:87-92; captures/20261013-124629-controllers-hub2.pcap frames 59024, 98342, 182552"
+
+[[hid]]
+id = "haptic"
+bytes = "58 09 07 {slot:u8} {amp:u8} {dur:u16le} 00 00 00"
+params = ["slot=2|3", "amp=1..100", "dur=1..65535"]   # percent, milliseconds; slot 2 left / 3 right; no reply
+policy = "session"                    # the driver and the app throttle (<= 1 per 8 ms per hand, newest wins)
+approved = "user, 2026-10-15 (Windows capture: Pimax Play test pulse 58 09 07 03 19 2c 01; game stream takes 14/15)"
+source = "pimax-proto/src/frame.rs haptic_command(); analysis/windows-capture-20261015.md steps 3, redo take 5"
+
+[[hid]]
+id = "unpair"
+bytes = "58 03 05 {slot:u8}"
+params = ["slot=2|3"]                 # 2 left, 3 right; reply 4c 04 05 SS 01 07
+policy = "once_per_request"
+min_interval_ms = 1000
+approved = "user, 2026-10-15 (Windows capture: left 58 03 05 02 redo take 3 t=40.871, right 58 03 05 03 t=52.533)"
+source = "omarchyvr-autod/src/unpair.rs unpair_report(); analysis/windows-capture-20261015.md redo take 3"
+
+[[hid]]
+id = "sys_reset"
+bytes = "58 04 28 00 00"
+policy = "once_per_request"
+min_interval_ms = 30000
+approved = "user, 2026-10-15 (Windows capture take 2: eSpiCmdSysReset 58 04 28 00 00 at t=8.722, reply 4c 04 28 00 01 07; headset back on USB 7.8 s later)"
+source = "omarchyvr-tools/src/vr/reset.rs sys_frames(); analysis/windows-capture-20261015.md take 2"
+
+[[hid]]
+id = "camera_ae"
+bytes = "58 19 51 00 01 32 {e0:u16le} {e1:u16le} {e2:u16le} {e3:u16le} {g0:u16le} {g1:u16le} {g2:u16le} {g3:u16le} {led_e:u16le} {led_g:u16le}"
+params = ["e0=100..4108", "e1=100..4108", "e2=100..4108", "e3=100..4108", "g0=13..215", "g1=13..215", "g2=13..215", "g3=13..215", "led_e=1..4108", "led_g=13..215"]
+policy = "session"
+approved = "user, 2026-10-14 (Windows ranges only; sent only with PIMAX_CAM_AE=1)"
+source = "pimax-cam/src/ae.rs:30-36,118-129 (limits ae.rs:386-389); camera-frames.md Windows frame"
+
+# Explicitly refused (checked before the allowlist, with the reason shown). Everything not listed above is refused
+# anyway; these entries only give a better message. The 0x5b activation blobs are covered by the allowlist: only
+# app_unlock's exact bytes pass. Eye-chip calibration ops (0x3f2/0x407/0x42e/0x3fc/0x44c/0x456) go over the Tobii
+# bulk endpoint, not this HID interface; pimax-eye refuses them in its own code.
+[[hid_denied]]
+prefix = "58 ?? 19"
+why = "DeviceCheckResult: not approved (omarchyvr-autod/src/pairing.rs:14)"
+
+[[hid_denied]]
+prefix = "58 ?? 3c 05 00 00"
+why = "eye-module disable was never captured; never send"
+
+[[hid_denied]]
+prefix = "58 ?? 55"
+why = "activation blob 0x55: not needed, never send"
+
+[[hid_denied]]
+prefix = "58 ?? 56"
+why = "activation blob 0x56: not needed, never send"

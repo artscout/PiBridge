@@ -1,0 +1,193 @@
+# Pimax Crystal Super (Micro-OLED module, P3C10): EXPERIMENTAL. It speaks the Dream Air protocol (58 .. frames on IF0,
+# the same IMU and controller reports); every command below was seen in the Windows capture of 2026-10-17 with
+# Pimax Play 2.0.2.103 (analysis/crystal-super-capture-20261017.md, take names in `source`). Nothing here has run
+# against the headset from Linux yet. Captured but not allowed yet: the IPD motor, the eye-module power off. Camera
+# exposure (`camera_ae`) is allowed with the Crystal's own Windows ranges (user, 2026-10-19), sent only with PIMAX_CAM_AE=1.
+# PiBridge (not in omarchyvr's copy; user, 2026-10-19 in chat): controller vibration (`haptic`), and approval lines on the
+# commands of libpimax's controller attach burst and video prepare, which Monado's Pimax driver sends through
+# PiBridge's libpimax (monado-abi). Every frame below them was found byte for byte in the 2026-10-17 capture takes
+# (decoded take files, IF0 EP 0x01 of the headset 34a4:0040).
+# PiBridge (user, 2026-10-19 in chat): controller pairing (`start_pair`) and unpairing (`unpair`). These two were NOT in
+# the Crystal capture (no take has opcode 0x04 or 0x05); they are the Dream Air's approved entries byte for byte, for
+# the same controllers (identical LED models, same slots and report format, analysis/crystal-super-capture-20261017.md).
+
+[device]
+id = "crystal-super"
+name = "Pimax Crystal Super"
+vendor = "pimax"
+status = "real"
+usb_vid = 0x34a4
+usb_pids = [0x0040]                   # headset HID, 4 interfaces like the Dream Air; pimax-proto/src/model.rs
+usb_aux = [0x0041, 0x0014]            # display bridge MCU (ASCII log), tracking cameras UVC (same id as the Dream Air)
+firmware_seen = ["SLAM 1.9.9.8"]
+command_interface = 0                 # IF0: commands and replies; IF1-IF3 drained (same layout as the Dream Air)
+
+[display]
+status = "experimental"
+mode = [7104, 3840]                   # PVR window size (pimax-info.json): two rotated 3552x3840 panels
+refresh_hz = [72, 90]                 # take settings: 58 0d 1a 05 02 48 and 02 5a; Pimax Play's default is 90
+edid_vendor = "PVR"                   # CustomHeadsetOpenVR Crystal Super config (edidVendorId 53826); product unknown
+needs = ["drm_lease"]
+note = "the panel has not been lit from Linux yet; the NVIDIA notes for the 7104x3840 mode probably apply"
+
+[tracking]
+status = "experimental"
+head = "inside_out"                   # IMU reports 53 31 08 00 on IF2 at ~500/s (take cold2); SLAM not tried
+imu_interface = 2
+
+[controllers]
+status = "unknown"
+slots = [2, 3]                        # take controllers: 58 04 16 02/03 1e, 58 03 50 02/03
+pairing = "start_pair"                # [[hid]] start_pair below (the Dream Air frame; not in the Crystal capture)
+
+[eye_tracking]
+status = "experimental"
+usb_vid = 0x2104                      # Tobii, powered on by 58 05 3c 05 00 01 (take cold2)
+usb_pid = 0x0561
+start_list = "user"                   # no built-in list: `pimax-eye frames` makes it from the user's own Windows capture
+
+[ipd]
+status = "unknown"
+motor = false                         # the motor exists (take ipd: 58 06 5c 05 01 <mm*100 LE>), not enabled yet
+
+[cameras]
+status = "experimental"               # same UVC stream and metadata as the Dream Air (analysis/crystal-super-capture-20261017.md)
+count = 4                             # OV7251 tiles on one UVC node, 60 fps before the first exposure push
+tile = [640, 480]
+frame = [2560, 832]
+auto_exposure = "start_ae"            # [[hid]] camera_ae below; pimax-cam ae.rs AeModel::CrystalSuper
+
+[audio]
+status = "unknown"                    # USB audio on the HID device (interfaces 4-7), not DisplayPort as on the Dream Air
+sink_match = []
+source_match = []
+
+[calibration]
+factory = "usb READ_DOC 0x0a, 96 blocks (take cold2)"
+paths = []
+
+[onboarding]
+steps = ["detect", "checks", "fixes", "udev", "done"]
+
+# ---------------------------------------------------------------------------------------------------------------------
+# HID allowlist (IF0 output reports, 64 bytes, zero padded). Only bytes Pimax Play sent in the 2026-10-17 capture.
+# ---------------------------------------------------------------------------------------------------------------------
+
+[[hid]]
+id = "wake"
+bytes = "58 06 1a 05 01 00 00"
+source = "take cold2 t=21.339, reply 4c 04 1a 05 01 07; same frame as the Dream Air"
+
+[[hid]]
+id = "keepalive"
+bytes = "58 04 39 00 {rate:u8} 00"
+params = ["rate=0x00|0x48|0x5a"]      # 0 = exit/stop, 72 Hz, 90 Hz
+source = "take cold2 (0x00 then 0x5a every ~220 ms), take settings (0x48), take sleep-wake (0x00)"
+
+[[hid]]
+id = "app_unlock"
+bytes = "58 05 5b 05 02 02"
+approved = "user, 2026-10-19 (chat): first command of pimax_video_prepare (Monado's Pimax driver), as captured"
+source = "take cold2 t=25.750, take cold1 t=48.165"
+
+[[hid]]
+id = "panel_on"
+bytes = "58 04 29 00 01"
+approved = "user, 2026-10-19 (chat): second command of pimax_video_prepare, as captured"
+source = "takes cold2, ipd, sleep-wake (reply 4c 04 29 00 01 07); cold2 t=25.751, cold1 t=48.167, lighthouse3 t=1.947"
+
+[[hid]]
+id = "announce_refresh"
+bytes = "58 0d 1a 05 02 {fps:u8}"
+params = ["fps=72|90"]
+approved = "user, 2026-10-19 (chat): third command of pimax_video_prepare (fps = PIMAX_FPS, 72 or 90), as captured"
+source = "take cold2 t=25.962 (0x5a), take settings t=15.037 (0x48)"
+
+[[hid]]
+id = "announce_gpu"
+bytes = "58 0d 1a 05 05"
+approved = "user, 2026-10-19 (chat): last command of pimax_video_prepare (GPU vendor 0), as captured"
+source = "take cold2 t=26.058, takes settings, sleep-wake"
+
+[[hid]]
+id = "stop"
+bytes = "58 04 1a 05 04"
+source = "take settings t=13.047 (before the rate change)"
+
+[[hid]]
+id = "read_serial"
+bytes = "58 04 16 {slot:u8} 1e"
+params = ["slot=0|2|3"]               # 0 = headset, 2/3 = controllers
+approved = "user, 2026-10-19 (chat): first command of the controller attach burst (pimax_controller_attach, slots 2/3)"
+source = "takes cold2, controllers; slot 2/3: cold2 t=39.423/39.420, cold1, controllers t=29.598/40.676, lighthouse, lighthouse2"
+
+[[hid]]
+id = "read_info"
+bytes = "58 03 50 {slot:u8}"
+params = ["slot=0|2|3"]
+approved = "user, 2026-10-19 (chat): second command of the controller attach burst"
+source = "takes cold2, controllers; slot 2/3: cold2 t=39.425/39.421, cold1, controllers t=29.599/40.677, lighthouse, lighthouse2"
+
+[[hid]]
+id = "read_version"
+bytes = "58 03 03 {slot:u8}"
+params = ["slot=0|2|3"]
+approved = "user, 2026-10-19 (chat): last command of the controller attach burst"
+source = "takes cold2, controllers; slot 2/3: cold2 t=39.447/39.476, cold1, controllers t=29.610/40.706, lighthouse, lighthouse2"
+
+[[hid]]
+id = "read_module_type"
+bytes = "58 04 3a 05 01"
+source = "take cold2 (reply 4c 05 3a 05 01 05 = Micro-OLED module; CustomHeadsetOpenVR GetSuperModuleType)"
+
+[[hid]]
+id = "read_doc_controller"
+bytes = "58 07 0a {slot:u8} 00 00 00 10"
+params = ["slot=2|3"]
+approved = "user, 2026-10-19 (chat): third command of the controller attach burst"
+source = "takes cold1, cold2; cold2 t=39.463/39.446, controllers t=29.609/40.689, lighthouse, lighthouse2"
+
+[[hid]]
+id = "read_calib_block"
+bytes = "58 07 0a 00 01 {addr:u16le} 10"
+params = ["addr=0..0xffff"]
+source = "take cold2, 96 blocks"
+
+[[hid]]
+id = "camera_ae"
+bytes = "58 19 51 00 01 32 {e0:u16le} {e1:u16le} {e2:u16le} {e3:u16le} {g0:u16le} {g1:u16le} {g2:u16le} {g3:u16le} {led_e:u16le} {led_g:u16le}"
+params = ["e0=2200..10410", "e1=2200..10410", "e2=2200..8941", "e3=2200..8941", "g0=13..449", "g1=13..449", "g2=13..439", "g3=13..439", "led_e=40", "led_g=62"]
+policy = "session"
+approved = "user, 2026-10-19 (Windows ranges of the Crystal Super capture 2026-10-17; sent only with PIMAX_CAM_AE=1)"
+source = "all 14 takes, 16751 commands every 80 ms (first: take cold2 t=27.880, 2200/13); per-pair min/max and the LED pair 40/62 as sent; analysis/crystal-super-ae.md; pimax-cam/src/ae.rs CRYSTAL_*"
+
+[[hid]]
+id = "haptic"
+bytes = "58 09 07 {slot:u8} {amp:u8} {dur:u16le} 00 00 00"
+params = ["slot=2|3", "amp=1..100", "dur=1..65535"]   # percent, milliseconds; slot 2 left / 3 right; no reply
+policy = "session"                    # the driver and the app throttle (<= 1 per 8 ms per hand, newest wins)
+approved = "user, 2026-10-19 (chat): controller vibration, the frame and ranges of the Dream Air entry (the same controllers)"
+source = "take slam: 8x 58 09 07 03 19 2c 01 (Pimax Play test pulse, right, 25 %, 300 ms) t=31.505..99.452; slot 2 and the game envelope (AMP 1..100, DUR 11-12 ms) only in the Dream Air capture 2026-10-15 takes 14/15 (omarchyvr docs/STEAMVR.md section 6); pimax-proto/src/frame.rs haptic_command()"
+
+[[hid]]
+id = "start_pair"
+bytes = "58 04 04 00 {slot:u8}"
+params = ["slot=2|3"]                 # 2 left, 3 right; ack 4c 04 04 00 01 07, result in the firmware log (IF3)
+policy = "once_per_request"
+min_interval_ms = 30000
+approved = "user, 2026-10-19 (chat): pairing/unpairing and vibration test"
+source = "not in the Crystal capture 2026-10-17 (no opcode 0x04 in any of the 14 takes); the Dream Air entry, approved 2026-10-14, byte for byte for the same controllers: omarchyvr captures/20261013-124629-controllers-hub2.pcap frames 59024, 98342, 182552; omarchyvr-autod/src/pairing.rs start_pair_report()"
+
+[[hid]]
+id = "unpair"
+bytes = "58 03 05 {slot:u8}"
+params = ["slot=2|3"]                 # 2 left, 3 right; reply 4c 04 05 SS 01 07
+policy = "once_per_request"
+min_interval_ms = 1000
+approved = "user, 2026-10-19 (chat): pairing/unpairing and vibration test"
+source = "not in the Crystal capture 2026-10-17 (no opcode 0x05 in any of the 14 takes); the Dream Air entry, approved 2026-10-15, byte for byte for the same controllers: omarchyvr analysis/windows-capture-20261015.md redo take 3 (left 58 03 05 02 t=40.871, right 58 03 05 03 t=52.533, reply 4c 04 05 SS 01 07); omarchyvr-autod/src/unpair.rs unpair_report()"
+
+[[hid]]
+id = "eye_power_on"
+bytes = "58 05 3c 05 00 01"
+source = "take cold2 t=27.543 (Pimax Play powers the eye module; pimax-eye/src/power.rs sends it once per enumeration)"

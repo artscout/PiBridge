@@ -1,0 +1,24 @@
+R1 done (2026-10-19): libpibridge-anchor, the world anchor files (port of omarchyvr-anchor world.rs + config.rs, pin 5ffbcc5).
+
+Where: libpibridge-anchor/ (namespace pibridge::anchor, CMake target pibridge_anchor), doc docs/libpibridge-anchor.md,
+tool tools/roommap pibridge-anchor (status, clear). Root CMakeLists parts list: libpibridge-anchor, libpibridge-roommap,
+tools/roommap added.
+
+API (pibridge/anchor/world.h):
+  ring_path(), offset_path(), lease_path()            $XDG_RUNTIME_DIR/pimax-anchor.{head,offset}, ...offset.owner
+  HeadRing::read(path) -> optional<HeadRing>          {pid, samples (ts_ns, Pose, valid)}, newest_ns(), at(ts, max_gap)
+  feed_now() -> Feed                                  kind Missing|NoMonado|Foreign|Stale|Live, live_pid(), plain()
+  read_offset(path) -> optional<(pid, Pose)>
+  take_lease(offset_path(), monado_pid, Role::Apply)  expected<optional<log line>, error text>
+  write_offset(offset_path(), monado_pid, Pose)       refused (PermissionDenied) without the lease
+  recenter_offset(slam_from_head) -> Pose             (new, for Recenter: yaw-only, head at x=z=0 looking -Z)
+  compute_offset, interp, robust_mean, pose_error, Lease/Role/decide_lease, check_feed (pure, for tests)
+
+Recenter recipe: r = HeadRing::read(ring_path()); pid = feed_now().live_pid(); head = newest sample with valid
+position; take_lease(offset_path(), pid, Role::Apply); write_offset(offset_path(), pid, recenter_offset(head)).
+Monado glides to the new offset (PIMAX_ANCHOR_GLIDE) unless it is the session's first one.
+
+Parity: probe of 4909 lines (offset/lease/ring/feed/config/maths, f64 bits) byte-identical to the Rust library;
+8 Rust tests have twins; Monado's own pimax_anchor.h (built from the checkout with stubs) reads our offset and
+writes the ring we parse; pibridge-anchor status/clear = omarchyvr-anchor in 13 difftests. All green.
+Not ported: the AprilTag part (needs the apriltag C library): follow-up.

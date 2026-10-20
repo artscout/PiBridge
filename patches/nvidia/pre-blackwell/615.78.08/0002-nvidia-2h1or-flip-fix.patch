@@ -1,0 +1,995 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: omarchyvr <noreply@omarchyvr.invalid>
+Date: Mon, 19 Oct 2026 12:00:00 +0000
+Subject: [PATCH 2/4] nvkms, nvidia-drm: 2Heads1OR flip hang fixes
+
+Fixes for flips that hang forever on merged (2Heads1OR) heads, as used by
+the Pimax Dream Air at 7104x3840 with DSC.
+
+1. nvkms-hw-flip.c LimitMergedHeadSyncObjects(): a 2Heads1OR flip programs
+   the client's semaphores and completion notifier on the PRIMARY merged
+   hardware head only; the secondary head's window follows through the
+   interlock and flip lock that NVKMS already programs. The stock driver
+   executes the same acquire/release/notifier on both window channels, so a
+   late release from one head can overwrite the acquire value of the next
+   flip: both windows then wait forever and the client's GPU queue waits for
+   a release that never comes (vkQueueWaitIdle blocks, scanout continues, no
+   Xid). Module parameter nvidia_modeset.merged_head_sync (0644, runtime):
+   1 = primary only (default), 2 = acquire on both heads, release + notifier
+   on the primary, 0 = stock behaviour.
+2. nvkms-rm.c nvRMIdleBaseChannel() / nvkms-flip.c nvIdleLayerChannels():
+   when a merged head's window cannot be idled, force-idle ALL merged
+   windows together and ignore the interlock/flip lock between them. The
+   stock code accelerated one window at a time, which cannot complete an
+   update interlocked with the other window, so every modeset on the GPU
+   failed (IdleAllSatelliteChannels) while such a flip was stuck.
+3. nvidia-drm-drv.c: the revoke on file release (nv_drm_postclose) takes
+   the modeset locks non-interruptibly. A SIGKILLed process releases its
+   lease with the signal pending; the interruptible acquisition then failed
+   with -EINTR and the revoke was skipped, leaving the connector granted to
+   a dead file (every later vkAcquireDrmDisplayEXT failed until reboot). A
+   grant held by a closed file is now also dropped at the next grant, and
+   the revoke drops the grant even when the disable commit cannot be staged.
+4. Diagnostics: when a layer channel cannot be idled, one "Stuck layer
+   channel" line (pushbuffer GET/PUT, the last flip's semaphores) and, for
+   merged heads, the last 16 flips. With nvidia_modeset.debug=1 the first 24
+   flips after a merged head starts scanning out a surface are logged too.
+
+GPUs: RTX 20/30/40 (Turing, Ampere, Ada). Does nothing on RTX 50
+(Blackwell has no 2Heads1OR).
+Headset: Pimax Dream Air.
+Driver: 615.78.08.
+Status: Ported by omarchyvr from 610.57.04, compile-checked, NOT tested on hardware.
+
+From omarchyvr (laughtt, https://github.com/laughtt/omarchyvr,
+patches/nvidia/nvidia-2h1or-flip-fix.patch; background:
+analysis/nvidia-flip-hang.md there). License: MIT OR GPL-2.0, as
+open-gpu-kernel-modules.
+---
+ kernel-open/nvidia-drm/nvidia-drm-drv.c       | 180 ++++++--
+ .../nvidia-modeset/nvidia-modeset-linux.c     |  16 +
+ .../nvidia-modeset-os-interface.h             |   9 +
+ src/nvidia-modeset/include/nvkms-dma.h        |   1 +
+ src/nvidia-modeset/include/nvkms-hw-flip.h    |   2 +
+ .../include/nvidia-modeset-os-interface.h     |   9 +
+ src/nvidia-modeset/src/nvkms-dma.c            |  12 +
+ src/nvidia-modeset/src/nvkms-flip.c           |  11 +
+ src/nvidia-modeset/src/nvkms-hw-flip.c        | 416 ++++++++++++++++++
+ src/nvidia-modeset/src/nvkms-rm.c             |  62 ++-
+ 10 files changed, 691 insertions(+), 27 deletions(-)
+
+diff --git a/kernel-open/nvidia-drm/nvidia-drm-drv.c b/kernel-open/nvidia-drm/nvidia-drm-drv.c
+index 64df8c0..5d06ac2 100644
+--- a/kernel-open/nvidia-drm/nvidia-drm-drv.c
++++ b/kernel-open/nvidia-drm/nvidia-drm-drv.c
+@@ -1284,6 +1284,98 @@ static NvU32 nv_drm_get_head_bit_from_connector(struct drm_connector *connector)
+     return 0;
+ }
+ 
++static int __nv_drm_revoke_modeset_permission_locked(
++    struct drm_device *dev,
++    struct drm_modeset_acquire_ctx *pctx,
++    struct drm_file *filep, NvU32 dpyId);
++
++/*
++ * The modeset permission bookkeeping (nv_drm_connector::modeset_permission_filep
++ * and nv_drm_crtc::modeset_permission_filep) stores drm_file pointers without
++ * holding a reference: check whether such a pointer still names an open file
++ * of this device.
++ */
++static bool nv_drm_file_is_open(struct drm_device *dev,
++                                const struct drm_file *filep)
++{
++    struct drm_file *f;
++    bool open = false;
++
++    mutex_lock(&dev->filelist_mutex);
++    list_for_each_entry(f, &dev->filelist, lhead) {
++        if (f == filep) {
++            open = true;
++            break;
++        }
++    }
++    mutex_unlock(&dev->filelist_mutex);
++
++    return open;
++}
++
++/*
++ * Drop modeset permissions which are still recorded for a file that has been
++ * closed.  nv_drm_postclose() revokes the permissions of a file, but if that
++ * ever does not happen the connector and its crtc stay marked as granted, the
++ * head keeps scanning out for a client which no longer exists, and every later
++ * grant of that connector is refused until the module is reloaded.  The
++ * detect path only cleans this up when the connector reads as disconnected,
++ * which never happens for a display with a "connected" override.
++ *
++ * Must be called with the modeset locks held.
++ */
++static void nv_drm_drop_stale_modeset_permissions(
++    struct drm_device *dev,
++    struct drm_modeset_acquire_ctx *pctx)
++{
++    struct nv_drm_device *nv_dev = to_nv_device(dev);
++    int tries;
++
++    /* Each iteration removes every mark of one closed file. */
++    for (tries = 0; tries < 16; tries++) {
++        struct drm_file *stale = NULL;
++        struct drm_connector *connector;
++        struct drm_crtc *crtc;
++        struct drm_connector_list_iter conn_iter;
++
++        drm_connector_list_iter_begin(dev, &conn_iter);
++        drm_for_each_connector_iter(connector, &conn_iter) {
++            struct nv_drm_connector *nv_connector = to_nv_connector(connector);
++
++            if (nv_connector->modeset_permission_filep &&
++                !nv_drm_file_is_open(dev,
++                                     nv_connector->modeset_permission_filep)) {
++                stale = nv_connector->modeset_permission_filep;
++                break;
++            }
++        }
++        drm_connector_list_iter_end(&conn_iter);
++
++        if (!stale) {
++            nv_drm_for_each_crtc(crtc, dev) {
++                struct nv_drm_crtc *nv_crtc = to_nv_crtc(crtc);
++
++                if (nv_crtc->modeset_permission_filep &&
++                    !nv_drm_file_is_open(dev,
++                                         nv_crtc->modeset_permission_filep)) {
++                    stale = nv_crtc->modeset_permission_filep;
++                    break;
++                }
++            }
++        }
++
++        if (!stale) {
++            return;
++        }
++
++        NV_DRM_DEV_LOG_INFO(
++            nv_dev,
++            "Revoking a modeset permission which was left behind by a closed file");
++
++        __nv_drm_revoke_modeset_permission_locked(dev, pctx, stale, 0);
++    }
++}
++
+ static int nv_drm_grant_modeset_permission(struct drm_device *dev,
+                                            struct drm_nvidia_grant_permissions_params *params,
+                                            struct drm_file *filep)
+@@ -1296,14 +1388,19 @@ static int nv_drm_grant_modeset_permission(struct drm_device *dev,
+     NvU32 head = 0, freeHeadBits, targetHeadBit, possible_crtcs;
+     int ret = 0;
+     struct drm_connector_list_iter conn_iter;
++    struct drm_modeset_acquire_ctx *pctx;
+ #if NV_DRM_MODESET_LOCK_ALL_END_ARGUMENT_COUNT == 3
+     struct drm_modeset_acquire_ctx ctx;
+     DRM_MODESET_LOCK_ALL_BEGIN(dev, ctx, DRM_MODESET_ACQUIRE_INTERRUPTIBLE,
+                                ret);
++    pctx = &ctx;
+ #else
+     mutex_lock(&dev->mode_config.mutex);
++    pctx = dev->mode_config.acquire_ctx;
+ #endif
+ 
++    nv_drm_drop_stale_modeset_permissions(dev, pctx);
++
+     /* Get the connector for the dpyId. */
+     drm_connector_list_iter_begin(dev, &conn_iter);
+     drm_for_each_connector_iter(connector, &conn_iter) {
+@@ -1475,8 +1572,8 @@ nv_drm_atomic_disable_connector(nv_drm_atomic_state_base_t *state,
+     if (nv_connector->modeset_permission_crtc) {
+         crtc_state = drm_atomic_get_crtc_state(
+             state, &nv_connector->modeset_permission_crtc->base);
+-        if (!crtc_state) {
+-            return -EINVAL;
++        if (IS_ERR_OR_NULL(crtc_state)) {
++            return crtc_state ? PTR_ERR(crtc_state) : -EINVAL;
+         }
+ 
+         crtc_state->active = false;
+@@ -1487,38 +1584,41 @@ nv_drm_atomic_disable_connector(nv_drm_atomic_state_base_t *state,
+     }
+ 
+     connector_state = drm_atomic_get_connector_state(state, &nv_connector->base);
+-    if (!connector_state) {
+-        return -EINVAL;
++    if (IS_ERR_OR_NULL(connector_state)) {
++        return connector_state ? PTR_ERR(connector_state) : -EINVAL;
+     }
+ 
+     return drm_atomic_set_crtc_for_connector(connector_state, NULL);
+ }
+ 
+-static int nv_drm_revoke_modeset_permission(struct drm_device *dev,
+-                                            struct drm_file *filep, NvU32 dpyId)
++/*
++ * Revoke the modeset permissions of 'filep': all of them if dpyId is 0 (the
++ * file is being closed), or only the ones of that display.
++ *
++ * The grant is always dropped, both here and in NVKMS, even if the atomic
++ * state which disables the connector cannot be allocated, staged or
++ * committed: a grant that stays behind cannot be removed by anyone later (see
++ * nv_drm_drop_stale_modeset_permissions()).
++ *
++ * Must be called with the modeset locks held.
++ */
++static int __nv_drm_revoke_modeset_permission_locked(
++    struct drm_device *dev,
++    struct drm_modeset_acquire_ctx *pctx,
++    struct drm_file *filep, NvU32 dpyId)
+ {
+-    struct drm_modeset_acquire_ctx *pctx;
+     nv_drm_atomic_state_base_t *state;
+     struct drm_connector *connector;
+     struct drm_crtc *crtc;
+     int ret = 0;
+     struct drm_connector_list_iter conn_iter;
+-#if NV_DRM_MODESET_LOCK_ALL_END_ARGUMENT_COUNT == 3
+-    struct drm_modeset_acquire_ctx ctx;
+-    DRM_MODESET_LOCK_ALL_BEGIN(dev, ctx, DRM_MODESET_ACQUIRE_INTERRUPTIBLE,
+-                               ret);
+-    pctx = &ctx;
+-#else
+-    mutex_lock(&dev->mode_config.mutex);
+-    pctx = dev->mode_config.acquire_ctx;
+-#endif
+ 
+     state = nv_drm_atomic_state_base_alloc(dev);
+-    if (!state) {
++    if (state) {
++        state->acquire_ctx = pctx;
++    } else {
+         ret = -ENOMEM;
+-        goto done;
+     }
+-    state->acquire_ctx = pctx;
+ 
+     /*
+      * If dpyId is set, only revoke those specific resources. Otherwise,
+@@ -1529,9 +1629,8 @@ static int nv_drm_revoke_modeset_permission(struct drm_device *dev,
+         struct nv_drm_connector *nv_connector = to_nv_connector(connector);
+         if (nv_connector->modeset_permission_filep == filep &&
+             (!dpyId || nv_drm_connector_is_dpy_id(connector, dpyId))) {
+-            ret = nv_drm_atomic_disable_connector(state, nv_connector);
+-            if (ret < 0) {
+-                goto done;
++            if (ret == 0) {
++                ret = nv_drm_atomic_disable_connector(state, nv_connector);
+             }
+ 
+             // Continue trying to revoke as much as possible.
+@@ -1547,9 +1646,40 @@ static int nv_drm_revoke_modeset_permission(struct drm_device *dev,
+         }
+     }
+ 
+-    ret = drm_atomic_commit(state);
+-done:
+-    nv_drm_atomic_state_base_put(state);
++    if (ret == 0) {
++        ret = drm_atomic_commit(state);
++    }
++
++    if (state) {
++        nv_drm_atomic_state_base_put(state);
++    }
++
++    return ret;
++}
++
++static int nv_drm_revoke_modeset_permission(struct drm_device *dev,
++                                            struct drm_file *filep, NvU32 dpyId)
++{
++    struct drm_modeset_acquire_ctx *pctx;
++    int ret = 0;
++#if NV_DRM_MODESET_LOCK_ALL_END_ARGUMENT_COUNT == 3
++    struct drm_modeset_acquire_ctx ctx;
++    /*
++     * Not DRM_MODESET_ACQUIRE_INTERRUPTIBLE: this is also the release path of
++     * the file (nv_drm_postclose()), and a process which was killed runs it
++     * with the fatal signal still pending.  An interruptible acquisition then
++     * fails with -EINTR as soon as one of the modeset locks is contended, and
++     * DRM_MODESET_LOCK_ALL_BEGIN() jumps past the whole revoke: the connector
++     * and the crtc stay granted to a file which no longer exists.
++     */
++    DRM_MODESET_LOCK_ALL_BEGIN(dev, ctx, 0, ret);
++    pctx = &ctx;
++#else
++    mutex_lock(&dev->mode_config.mutex);
++    pctx = dev->mode_config.acquire_ctx;
++#endif
++
++    ret = __nv_drm_revoke_modeset_permission_locked(dev, pctx, filep, dpyId);
+ 
+ #if NV_DRM_MODESET_LOCK_ALL_END_ARGUMENT_COUNT == 3
+     DRM_MODESET_LOCK_ALL_END(dev, ctx, ret);
+diff --git a/kernel-open/nvidia-modeset/nvidia-modeset-linux.c b/kernel-open/nvidia-modeset/nvidia-modeset-linux.c
+index 62986c4..7ba7613 100644
+--- a/kernel-open/nvidia-modeset/nvidia-modeset-linux.c
++++ b/kernel-open/nvidia-modeset/nvidia-modeset-linux.c
+@@ -139,6 +139,17 @@ MODULE_PARM_DESC(debug, "Enable debug logging");
+ static int debug = 0;
+ module_param_named(debug, debug, int, 0644);
+ 
++MODULE_PARM_DESC(merged_head_sync,
++                 "2Heads1OR flips: which merged hardware heads execute the "
++                 "client's flip sync objects. 1 (default) = semaphores and "
++                 "completion notifier on the primary head only; 2 = acquire "
++                 "on every head, release and notifier on the primary head "
++                 "only; 0 = everything on every head (the behavior before "
++                 "this parameter existed). Can be changed at runtime; it "
++                 "applies to the flips requested after the change.");
++static unsigned int merged_head_sync = 1;
++module_param_named(merged_head_sync, merged_head_sync, uint, 0644);
++
+ #if IS_ENABLED(CONFIG_EXTCON_DISP_CABLE_STATE)
+ /*
+  * Extcon reporting for HDMI video and audio state.
+@@ -289,6 +300,11 @@ NvBool nvkms_debug_logging(void)
+     return debug != 0;
+ }
+ 
++NvU32 nvkms_merged_head_sync(void)
++{
++    return merged_head_sync;
++}
++
+ NvBool nvkms_kernel_supports_syncpts(void)
+ {
+ /*
+diff --git a/kernel-open/nvidia-modeset/nvidia-modeset-os-interface.h b/kernel-open/nvidia-modeset/nvidia-modeset-os-interface.h
+index dc33314..34b1d64 100644
+--- a/kernel-open/nvidia-modeset/nvidia-modeset-os-interface.h
++++ b/kernel-open/nvidia-modeset/nvidia-modeset-os-interface.h
+@@ -129,6 +129,15 @@ NvBool nvkms_opportunistic_display_sync(void);
+ enum NvKmsDebugForceColorSpace nvkms_debug_force_color_space(void);
+ NvBool nvkms_enable_overlay_layers(void);
+ NvBool nvkms_debug_logging(void);
++
++/*
++ * 2Heads1OR: which merged hardware heads execute the client's flip sync
++ * objects (module parameter "merged_head_sync").
++ */
++#define NVKMS_MERGED_HEAD_SYNC_ALL_HEADS            0
++#define NVKMS_MERGED_HEAD_SYNC_PRIMARY_ONLY         1
++#define NVKMS_MERGED_HEAD_SYNC_RELEASE_PRIMARY_ONLY 2
++NvU32 nvkms_merged_head_sync(void);
+ void nvkms_extcon_report_hdmi(NvBool state);
+ void nvkms_extcon_report_hdmi_audio(NvBool state);
+ 
+diff --git a/src/nvidia-modeset/include/nvkms-dma.h b/src/nvidia-modeset/include/nvkms-dma.h
+index 2e92b6b..724bee4 100644
+--- a/src/nvidia-modeset/include/nvkms-dma.h
++++ b/src/nvidia-modeset/include/nvkms-dma.h
+@@ -35,6 +35,7 @@
+ void nvDmaKickoffEvo(NVEvoChannelPtr);
+ 
+ void nvEvoMakeRoom(NVEvoChannelPtr pChannel, NvU32 count);
++void nvEvoReadChannelGetPut(NVEvoChannelPtr pChannel, NvU32 *pGet, NvU32 *pPut);
+ void nvWriteEvoCoreNotifier(const NVDispEvoRec *, NvU32 offset, NvU32 value);
+ 
+ NvBool nvEvoIsCoreNotifierComplete(NVDispEvoPtr pDispEvo,
+diff --git a/src/nvidia-modeset/include/nvkms-hw-flip.h b/src/nvidia-modeset/include/nvkms-hw-flip.h
+index 929e2b3..169123f 100644
+--- a/src/nvidia-modeset/include/nvkms-hw-flip.h
++++ b/src/nvidia-modeset/include/nvkms-hw-flip.h
+@@ -125,4 +125,6 @@ NvBool nvNeedToToggleFlipLock(const NVDispEvoRec *pDispEvo,
+ void nvToggleFlipLockPerDisp(NVDispEvoRec *pDispEvo, const NvU32 headMask,
+                              const NvBool enable);
+ 
++void nvLogStuckLayerChannel(NVDevEvoPtr pDevEvo, NVEvoChannelPtr pChannel);
++
+ #endif /* __NVKMS_HW_FLIP_H__ */
+diff --git a/src/nvidia-modeset/os-interface/include/nvidia-modeset-os-interface.h b/src/nvidia-modeset/os-interface/include/nvidia-modeset-os-interface.h
+index dc33314..34b1d64 100644
+--- a/src/nvidia-modeset/os-interface/include/nvidia-modeset-os-interface.h
++++ b/src/nvidia-modeset/os-interface/include/nvidia-modeset-os-interface.h
+@@ -129,6 +129,15 @@ NvBool nvkms_opportunistic_display_sync(void);
+ enum NvKmsDebugForceColorSpace nvkms_debug_force_color_space(void);
+ NvBool nvkms_enable_overlay_layers(void);
+ NvBool nvkms_debug_logging(void);
++
++/*
++ * 2Heads1OR: which merged hardware heads execute the client's flip sync
++ * objects (module parameter "merged_head_sync").
++ */
++#define NVKMS_MERGED_HEAD_SYNC_ALL_HEADS            0
++#define NVKMS_MERGED_HEAD_SYNC_PRIMARY_ONLY         1
++#define NVKMS_MERGED_HEAD_SYNC_RELEASE_PRIMARY_ONLY 2
++NvU32 nvkms_merged_head_sync(void);
+ void nvkms_extcon_report_hdmi(NvBool state);
+ void nvkms_extcon_report_hdmi_audio(NvBool state);
+ 
+diff --git a/src/nvidia-modeset/src/nvkms-dma.c b/src/nvidia-modeset/src/nvkms-dma.c
+index 75e2046..aaa0b7e 100644
+--- a/src/nvidia-modeset/src/nvkms-dma.c
++++ b/src/nvidia-modeset/src/nvkms-dma.c
+@@ -72,6 +72,18 @@ static NvU32 EvoCoreReadGet(NVDmaBufferEvoPtr push_buffer)
+     return nvDmaLoadPioMethod(pControl, NVC57D_GET);
+ }
+ 
++/*
++ * Report where the hardware is in the channel's pushbuffer (GET) and how far
++ * it was kicked off (PUT), in bytes; for diagnostics.
++ */
++void nvEvoReadChannelGetPut(NVEvoChannelPtr pChannel, NvU32 *pGet, NvU32 *pPut)
++{
++    NVDmaBufferEvoPtr push_buffer = &pChannel->pb;
++
++    *pGet = EvoCoreReadGet(push_buffer);
++    *pPut = push_buffer->put_offset;
++}
++
+ NvBool nvEvoPollForEmptyChannel(NVEvoChannelPtr pChannel, NvU32 sd,
+                                 NvU64 *pStartTime, const NvU32 timeout)
+ {
+diff --git a/src/nvidia-modeset/src/nvkms-flip.c b/src/nvidia-modeset/src/nvkms-flip.c
+index 4f1a7a7..46767fe 100644
+--- a/src/nvidia-modeset/src/nvkms-flip.c
++++ b/src/nvidia-modeset/src/nvkms-flip.c
+@@ -1162,6 +1162,17 @@ void nvIdleLayerChannels(NVDevEvoRec *pDevEvo,
+         if (tryToForceIdle) {
+             NvBool ret = pDevEvo->hal->ForceIdleSatelliteChannel(pDevEvo,
+                 &idleChannelState);
++            if (!ret) {
++                /*
++                 * The pending updates may be interlocked or flip locked with
++                 * each other (2Heads1OR); skipping the semaphores and the
++                 * present interval was not enough.  Try again, ignoring the
++                 * locks, rather than freeing the surfaces under channels
++                 * which still have methods pending.
++                 */
++                ret = pDevEvo->hal->ForceIdleSatelliteChannelIgnoreLock(
++                          pDevEvo, &idleChannelState);
++            }
+             if (!ret) {
+                 nvAssert(ret);
+             }
+diff --git a/src/nvidia-modeset/src/nvkms-hw-flip.c b/src/nvidia-modeset/src/nvkms-hw-flip.c
+index bd65888..a79fb48 100644
+--- a/src/nvidia-modeset/src/nvkms-hw-flip.c
++++ b/src/nvidia-modeset/src/nvkms-hw-flip.c
+@@ -1166,6 +1166,91 @@ static NvBool UpdateOverlayLayerFlipEvoHwState(
+     return TRUE;
+ }
+ 
++/*!
++ * 2Heads1OR: restrict the client's flip sync objects to the primary hardware
++ * head.
++ *
++ * The NvKmsFlipCommonParams of an api head are applied to every hardware head
++ * which is merged into that api head (see nvFlipEvo() and the modeset path),
++ * so without this the semaphores and the completion notifier of one client
++ * flip are executed once per hardware head: every window channel waits on the
++ * acquire semaphore, and every window channel writes the release value and the
++ * notifier.  Clients implement their flip protocol for exactly one acquire and
++ * one release per flip, with the release written when the channel flips away
++ * from the buffer.  If the merged heads do not latch a flip on the same frame,
++ * the release of the head which is behind lands after the client has already
++ * written the acquire value of a later flip to the same semaphore, that later
++ * flip can never be acquired by any of the merged window channels, and the
++ * client's rendering channel waits forever for the corresponding release.
++ * (nvkms-headsurface.c states the same rule for its emulation of these
++ * semantics: semaphores must not be released out of order.)
++ *
++ * The primary hardware head (mergeHeadSection == 0) keeps the sync objects;
++ * the flip occurred event is registered on its channels only as well.  The
++ * secondary heads follow it: their window channels are interlocked and flip
++ * locked with the primary's (see ProcessFlipLockUpdates()), exactly like a
++ * core channel update which is interlocked with a window channel that waits
++ * on a semaphore.
++ *
++ * The module parameter "merged_head_sync" selects the behavior, see
++ * NVKMS_MERGED_HEAD_SYNC_*.
++ */
++static void LimitMergedHeadSyncObjects(
++    const NVDevEvoRec *pDevEvo,
++    const NvU32 head,
++    const NvU8 mergeHeadSection,
++    NVFlipEvoHwState *pFlipState)
++{
++    NvU32 mode = nvkms_merged_head_sync();
++    NvU32 layer;
++
++    if ((mergeHeadSection == 0) ||
++        (mode == NVKMS_MERGED_HEAD_SYNC_ALL_HEADS)) {
++        return;
++    }
++
++    /*
++     * An acquire without a release needs independent acquire and release
++     * semaphores in the window channel.
++     */
++    if ((mode == NVKMS_MERGED_HEAD_SYNC_RELEASE_PRIMARY_ONLY) &&
++        !pDevEvo->hal->caps.supportsIndependentAcqRelSemaphore) {
++        mode = NVKMS_MERGED_HEAD_SYNC_PRIMARY_ONLY;
++    }
++
++    for (layer = 0; layer < pDevEvo->head[head].numLayers; layer++) {
++        NVFlipChannelEvoHwState *pHwState = &pFlipState->layer[layer];
++
++        /*
++         * Only touch the layers which this request programs.  The state of
++         * the other layers is the snapshot of what is in the hardware, which
++         * went through here when it was programmed, and whose surface
++         * references are held by the current state.
++         */
++        if (!pFlipState->dirty.layer[layer]) {
++            continue;
++        }
++
++        nvkms_memset(&pHwState->completionNotifier, 0,
++                     sizeof(pHwState->completionNotifier));
++
++        /* Syncpts are per channel already, see AssignPostSyncptEvoHwState(). */
++        if (pHwState->syncObject.usingSyncpt) {
++            continue;
++        }
++
++        if (mode != NVKMS_MERGED_HEAD_SYNC_RELEASE_PRIMARY_ONLY) {
++            nvkms_memset(&pHwState->syncObject.u.semaphores.acquireSurface, 0,
++                         sizeof(pHwState->syncObject.u.semaphores.acquireSurface));
++            pHwState->syncObject.u.semaphores.acquireValue = 0;
++        }
++
++        nvkms_memset(&pHwState->syncObject.u.semaphores.releaseSurface, 0,
++                     sizeof(pHwState->syncObject.u.semaphores.releaseSurface));
++        pHwState->syncObject.u.semaphores.releaseValue = 0;
++    }
++}
++
+ /*!
+  * Update the NVFlipEvoHwState, using NvKmsFlipCommonParams.
+  *
+@@ -1255,6 +1340,8 @@ NvBool nvUpdateFlipEvoHwState(
+         }
+     }
+ 
++    LimitMergedHeadSyncObjects(pDevEvo, head, mergeHeadSection, pFlipState);
++
+     /*
+      * See the comment for the ILUT in UpdateLayerFlipEvoHwStateCommon for an
+      * overview of this setup.
+@@ -2223,6 +2310,323 @@ static void UpdateHDMIVsifMetadata(NVDevEvoPtr pDevEvo,
+     }
+ }
+ 
++/*
++ * Diagnostics for flips on merged hardware heads (2Heads1OR).
++ *
++ * The last NV_MERGED_FLIP_TRACE_LEN main layer flips which were programmed on
++ * merged heads are kept in a ring, together with the value which the flip's
++ * semaphores held when the flip was programmed.  nvLogStuckLayerChannel()
++ * prints the ring when a layer channel cannot be idled, which is the only
++ * moment at which the state of the client's flip protocol is of interest.
++ * With debug logging enabled (module parameter "debug") the first flips after
++ * a merged head starts to display a surface are printed as they happen.
++ *
++ * All of this runs under the nvkms lock.
++ */
++#define NV_MERGED_FLIP_TRACE_LEN          16
++#define NV_MERGED_FLIP_TRACE_PRINT_BUDGET 24
++
++typedef struct {
++    NvU64 usec;
++    NvU8 head;
++    NvU8 mergeHeadSection;
++    NvU8 minPresentInterval;
++    NvBool surface            : 1;
++    NvBool tearing            : 1;
++    NvBool skipPendingFlips   : 1;
++    NvBool notifier           : 1;
++    NvBool notifierAwaken     : 1;
++    NvBool acquire            : 1;
++    NvBool acquireHeldValid   : 1;
++    NvBool release            : 1;
++    NvBool releaseHeldValid   : 1;
++    NvBool sameSemaphore      : 1;
++    NvU16 notifierOffsetInWords;
++    NvU16 acquireOffsetInWords;
++    NvU16 releaseOffsetInWords;
++    NvU32 acquireValue;
++    NvU32 acquireHeld;
++    NvU32 releaseValue;
++    NvU32 releaseHeld;
++} NVMergedFlipTraceEntry;
++
++static NVMergedFlipTraceEntry mergedFlipTrace[NV_MERGED_FLIP_TRACE_LEN];
++static NvU32 mergedFlipTraceCount;
++static NvU32 mergedFlipTraceLogged;
++static NvU32 mergedFlipTracePrintBudget;
++
++/*
++ * Read the current payload of a flip semaphore through the CPU mapping which
++ * NVKMS keeps of NISO surfaces.  Returns FALSE if there is nothing to read.
++ */
++static NvBool ReadFlipSemaphore(const NVFlipNIsoSurfaceEvoHwState *pNIso,
++                                const NvU32 sd,
++                                NvU32 *pPayload)
++{
++    const NVSurfaceEvoRec *pSurfaceEvo = pNIso->pSurfaceEvo;
++    const NvU64 offsetInBytes = ((NvU64)pNIso->offsetInWords) * 4;
++    const NvU32 size = nvKmsSizeOfSemaphore();
++    struct nvKmsParsedSemaphore parsed = { };
++
++    if ((pSurfaceEvo == NULL) || (pSurfaceEvo->cpuAddress[sd] == NULL)) {
++        return FALSE;
++    }
++
++    if (((offsetInBytes % size) != 0) ||
++        ((offsetInBytes + size) > pSurfaceEvo->planes[0].rmObjectSizeInBytes)) {
++        return FALSE;
++    }
++
++    nvKmsParseSemaphore((NvU32)(offsetInBytes / size),
++                        pSurfaceEvo->cpuAddress[sd], &parsed);
++
++    *pPayload = parsed.payload;
++
++    return TRUE;
++}
++
++static void LogMergedFlipTraceEntry(const NVDevEvoRec *pDevEvo,
++                                    const char *prefix,
++                                    const NVMergedFlipTraceEntry *pEntry)
++{
++    char acquire[64], release[64], notifier[32];
++
++    if (pEntry->acquire) {
++        if (pEntry->acquireHeldValid) {
++            nvkms_snprintf(acquire, sizeof(acquire), "+%u ==0x%08x (held 0x%08x)",
++                           pEntry->acquireOffsetInWords, pEntry->acquireValue,
++                           pEntry->acquireHeld);
++        } else {
++            nvkms_snprintf(acquire, sizeof(acquire), "+%u ==0x%08x",
++                           pEntry->acquireOffsetInWords, pEntry->acquireValue);
++        }
++    } else {
++        nvkms_snprintf(acquire, sizeof(acquire), "none");
++    }
++
++    if (pEntry->release) {
++        if (pEntry->releaseHeldValid) {
++            nvkms_snprintf(release, sizeof(release), "%s+%u :=0x%08x (held 0x%08x)",
++                           pEntry->sameSemaphore ? "same " : "",
++                           pEntry->releaseOffsetInWords, pEntry->releaseValue,
++                           pEntry->releaseHeld);
++        } else {
++            nvkms_snprintf(release, sizeof(release), "%s+%u :=0x%08x",
++                           pEntry->sameSemaphore ? "same " : "",
++                           pEntry->releaseOffsetInWords, pEntry->releaseValue);
++        }
++    } else {
++        nvkms_snprintf(release, sizeof(release), "none");
++    }
++
++    if (pEntry->notifier) {
++        nvkms_snprintf(notifier, sizeof(notifier), "+%u%s",
++                       pEntry->notifierOffsetInWords,
++                       pEntry->notifierAwaken ? " awaken" : "");
++    } else {
++        nvkms_snprintf(notifier, sizeof(notifier), "none");
++    }
++
++    nvEvoLogDev(pDevEvo, EVO_LOG_INFO,
++                "%s t=%llu us head %u section %u: %s mpi %u%s%s; "
++                "acquire %s; release %s; notifier %s",
++                prefix, (unsigned long long)pEntry->usec,
++                pEntry->head, pEntry->mergeHeadSection,
++                pEntry->surface ? "surface" : "NULL",
++                pEntry->minPresentInterval,
++                pEntry->tearing ? " tearing" : "",
++                pEntry->skipPendingFlips ? " skipPendingFlips" : "",
++                acquire, release, notifier);
++}
++
++static void TraceMergedHeadFlip(const NVDevEvoRec *pDevEvo,
++                                const NvU32 sd,
++                                const NvU32 head,
++                                const NvU8 mergeHeadSection,
++                                const NvBool firstSurface,
++                                const NVFlipEvoHwState *pFlipState)
++{
++    const NVFlipChannelEvoHwState *pHwState =
++        &pFlipState->layer[NVKMS_MAIN_LAYER];
++    NVMergedFlipTraceEntry *pEntry =
++        &mergedFlipTrace[mergedFlipTraceCount % NV_MERGED_FLIP_TRACE_LEN];
++
++    nvkms_memset(pEntry, 0, sizeof(*pEntry));
++
++    pEntry->usec = nvkms_get_usec();
++    pEntry->head = head;
++    pEntry->mergeHeadSection = mergeHeadSection;
++    pEntry->minPresentInterval = pHwState->minPresentInterval;
++    pEntry->surface = (pHwState->pSurfaceEvo[NVKMS_LEFT] != NULL);
++    pEntry->tearing = pHwState->tearing;
++    pEntry->skipPendingFlips =
++        pFlipState->skipLayerPendingFlips[NVKMS_MAIN_LAYER];
++
++    if (pHwState->completionNotifier.surface.pSurfaceEvo != NULL) {
++        pEntry->notifier = TRUE;
++        pEntry->notifierAwaken = pHwState->completionNotifier.awaken;
++        pEntry->notifierOffsetInWords =
++            pHwState->completionNotifier.surface.offsetInWords;
++    }
++
++    if (!pHwState->syncObject.usingSyncpt) {
++        const NVFlipNIsoSurfaceEvoHwState *pAcquire =
++            &pHwState->syncObject.u.semaphores.acquireSurface;
++        const NVFlipNIsoSurfaceEvoHwState *pRelease =
++            &pHwState->syncObject.u.semaphores.releaseSurface;
++
++        if (pAcquire->pSurfaceEvo != NULL) {
++            pEntry->acquire = TRUE;
++            pEntry->acquireOffsetInWords = pAcquire->offsetInWords;
++            pEntry->acquireValue =
++                pHwState->syncObject.u.semaphores.acquireValue;
++            pEntry->acquireHeldValid =
++                ReadFlipSemaphore(pAcquire, sd, &pEntry->acquireHeld);
++        }
++
++        if (pRelease->pSurfaceEvo != NULL) {
++            pEntry->release = TRUE;
++            pEntry->releaseOffsetInWords = pRelease->offsetInWords;
++            pEntry->releaseValue =
++                pHwState->syncObject.u.semaphores.releaseValue;
++            pEntry->releaseHeldValid =
++                ReadFlipSemaphore(pRelease, sd, &pEntry->releaseHeld);
++            pEntry->sameSemaphore =
++                (pAcquire->pSurfaceEvo == pRelease->pSurfaceEvo) &&
++                (pAcquire->offsetInWords == pRelease->offsetInWords);
++        }
++    }
++
++    mergedFlipTraceCount++;
++
++    if (!nvDoDebugLogging()) {
++        return;
++    }
++
++    if (firstSurface) {
++        mergedFlipTracePrintBudget = NV_MERGED_FLIP_TRACE_PRINT_BUDGET;
++    }
++
++    if (mergedFlipTracePrintBudget > 0) {
++        mergedFlipTracePrintBudget--;
++        LogMergedFlipTraceEntry(pDevEvo, "2Heads1OR flip", pEntry);
++    }
++}
++
++/*!
++ * Print what is known about a layer channel which could not be idled: where
++ * the hardware stopped in its pushbuffer, the sync objects of the flip which
++ * was programmed last together with the values which its semaphores hold now,
++ * and, for merged heads, the recent flips.
++ */
++void nvLogStuckLayerChannel(NVDevEvoPtr pDevEvo, NVEvoChannelPtr pChannel)
++{
++    const NVDispEvoRec *pDispEvo = pDevEvo->pDispEvo[0];
++    const NVFlipChannelEvoHwState *pHwState = NULL;
++    NvU32 sd, head, layer = 0;
++    NvU32 get = 0, put = 0;
++    NvBool found = FALSE;
++    char acquire[80], release[80];
++
++    if ((pDispEvo == NULL) || (pChannel == NULL)) {
++        return;
++    }
++
++    sd = pDispEvo->displayOwner;
++
++    for (head = 0; (head < pDevEvo->numHeads) && !found; head++) {
++        for (layer = 0; layer < pDevEvo->head[head].numLayers; layer++) {
++            if (pDevEvo->head[head].layer[layer] == pChannel) {
++                found = TRUE;
++                break;
++            }
++        }
++        if (found) {
++            break;
++        }
++    }
++
++    /* Not a layer channel (e.g., the core channel): nothing to add. */
++    if (!found) {
++        return;
++    }
++
++    pHwState = &pDevEvo->gpus[sd].headState[head].layer[layer];
++
++    nvEvoReadChannelGetPut(pChannel, &get, &put);
++
++    nvkms_snprintf(acquire, sizeof(acquire), "none");
++    nvkms_snprintf(release, sizeof(release), "none");
++
++    if (!pHwState->syncObject.usingSyncpt) {
++        const NVFlipNIsoSurfaceEvoHwState *pAcquire =
++            &pHwState->syncObject.u.semaphores.acquireSurface;
++        const NVFlipNIsoSurfaceEvoHwState *pRelease =
++            &pHwState->syncObject.u.semaphores.releaseSurface;
++        NvU32 held = 0;
++
++        if (pAcquire->pSurfaceEvo != NULL) {
++            if (ReadFlipSemaphore(pAcquire, sd, &held)) {
++                nvkms_snprintf(acquire, sizeof(acquire),
++                               "+%u ==0x%08x (holds 0x%08x: %s)",
++                               pAcquire->offsetInWords,
++                               pHwState->syncObject.u.semaphores.acquireValue,
++                               held,
++                               (held ==
++                                pHwState->syncObject.u.semaphores.acquireValue) ?
++                                   "satisfied" : "NOT satisfied");
++            } else {
++                nvkms_snprintf(acquire, sizeof(acquire), "+%u ==0x%08x",
++                               pAcquire->offsetInWords,
++                               pHwState->syncObject.u.semaphores.acquireValue);
++            }
++        }
++
++        if (pRelease->pSurfaceEvo != NULL) {
++            if (ReadFlipSemaphore(pRelease, sd, &held)) {
++                nvkms_snprintf(release, sizeof(release),
++                               "+%u :=0x%08x (holds 0x%08x)",
++                               pRelease->offsetInWords,
++                               pHwState->syncObject.u.semaphores.releaseValue,
++                               held);
++            } else {
++                nvkms_snprintf(release, sizeof(release), "+%u :=0x%08x",
++                               pRelease->offsetInWords,
++                               pHwState->syncObject.u.semaphores.releaseValue);
++            }
++        }
++    }
++
++    nvEvoLogDev(pDevEvo, EVO_LOG_ERROR,
++                "Stuck layer channel 0x%08x:%d (head %u layer %u, merge "
++                "section %u, merged_head_sync %u): get %u put %u; last flip "
++                "programmed: %s, acquire %s, release %s, notifier %s",
++                pChannel->hwclass, pChannel->instance, head, layer,
++                pDispEvo->headState[head].mergeHeadSection,
++                nvkms_merged_head_sync(), get, put,
++                (pHwState->pSurfaceEvo[NVKMS_LEFT] != NULL) ? "surface" : "NULL",
++                acquire, release,
++                (pHwState->completionNotifier.surface.pSurfaceEvo != NULL) ?
++                    "yes" : "none");
++
++    /* Print the recent merged head flips once per new set of entries. */
++    if (mergedFlipTraceLogged != mergedFlipTraceCount) {
++        const NvU32 n = NV_MIN(mergedFlipTraceCount, NV_MERGED_FLIP_TRACE_LEN);
++        NvU32 i;
++
++        for (i = 0; i < n; i++) {
++            const NvU32 idx =
++                (mergedFlipTraceCount - n + i) % NV_MERGED_FLIP_TRACE_LEN;
++            char prefix[32];
++
++            nvkms_snprintf(prefix, sizeof(prefix), "  flip[-%u]", n - 1 - i);
++            LogMergedFlipTraceEntry(pDevEvo, prefix, &mergedFlipTrace[idx]);
++        }
++
++        mergedFlipTraceLogged = mergedFlipTraceCount;
++    }
++}
++
+ /*!
+  * Program a flip on all requested layers on the specified head.
+  *
+@@ -2261,6 +2665,18 @@ void nvFlipEvoOneHead(
+                                     pSdHeadState, pFlipState,
+                                     updateState);
+ 
++    if ((pHeadState->mergeMode != NV_EVO_MERGE_MODE_DISABLED) &&
++        pFlipState->dirty.layer[NVKMS_MAIN_LAYER]) {
++        const NvBool firstSurface =
++            (pSdHeadState->layer[NVKMS_MAIN_LAYER].pSurfaceEvo[NVKMS_LEFT] ==
++                NULL) &&
++            (pFlipState->layer[NVKMS_MAIN_LAYER].pSurfaceEvo[NVKMS_LEFT] !=
++                NULL);
++
++        TraceMergedHeadFlip(pDevEvo, sd, head, pHeadState->mergeHeadSection,
++                            firstSurface, pFlipState);
++    }
++
+     /*
+      * Promote the software state first, such that the hardware programming
+      * paths below see the new state atomically.
+diff --git a/src/nvidia-modeset/src/nvkms-rm.c b/src/nvidia-modeset/src/nvkms-rm.c
+index 7ad713b..da53569 100644
+--- a/src/nvidia-modeset/src/nvkms-rm.c
++++ b/src/nvidia-modeset/src/nvkms-rm.c
+@@ -38,6 +38,7 @@
+ #include "nvkms-private.h"
+ #include "nvkms-modeset.h"
+ #include "nvkms-surface.h"
++#include "nvkms-hw-flip.h"
+ #include "nvkms-vrr.h"
+ 
+ #include "nvkms-push.h"
+@@ -3582,6 +3583,7 @@ static NvBool SyncOneEvoChannel(
+                         "Idling display engine timed out: 0x%08x:%d:%d:%d",
+                         pChan->hwclass, pChan->instance,
+                         sd, errorToken);
++            nvLogStuckLayerChannel(pDevEvo, pChan);
+             return FALSE;
+         }
+ 
+@@ -3616,6 +3618,42 @@ NvBool nvRMSyncEvoChannel(
+ }
+ 
+ 
++/*
++ * Return the main layer channels of all the hardware heads which are merged
++ * into the same api head as 'head' (2Heads1OR), including 'head' itself.
++ */
++static NVEvoChannelMask MergedMainLayerChannelMask(const NVDevEvoRec *pDevEvo,
++                                                   const NvU32 head)
++{
++    const NVDispEvoRec *pDispEvo = pDevEvo->pDispEvo[0];
++    NVEvoChannelMask channelMask =
++        pDevEvo->head[head].layer[NVKMS_MAIN_LAYER]->channelMask;
++    NvU32 apiHead;
++
++    if (pDispEvo == NULL) {
++        return channelMask;
++    }
++
++    for (apiHead = 0; apiHead < ARRAY_LEN(pDispEvo->apiHeadState); apiHead++) {
++        const NvU32 hwHeadsMask = pDispEvo->apiHeadState[apiHead].hwHeadsMask;
++        NvU32 mergedHead;
++
++        if ((hwHeadsMask & NVBIT(head)) == 0x0) {
++            continue;
++        }
++
++        FOR_EACH_EVO_HW_HEAD_IN_MASK(hwHeadsMask, mergedHead) {
++            if (mergedHead < pDevEvo->numHeads) {
++                channelMask |= pDevEvo->head[mergedHead].
++                    layer[NVKMS_MAIN_LAYER]->channelMask;
++            }
++        }
++        break;
++    }
++
++    return channelMask;
++}
++
+ /*
+  * Wait for the requested base channel to be idle (no methods pending), and
+  * call STOP_BASE if the wait times out.
+@@ -3659,10 +3697,30 @@ NvBool nvRMIdleBaseChannel(NVDevEvoPtr pDevEvo, NvU32 head,
+ 
+     if (idleTimedOut) {
+         NVEvoIdleChannelState idleChannelState = {
+-            .channelMask = pMainLayerChannel->channelMask,
++            .channelMask = MergedMainLayerChannelMask(pDevEvo, head),
+         };
+ 
+-        ret = pDevEvo->hal->ForceIdleSatelliteChannel(pDevEvo, &idleChannelState);
++        nvLogStuckLayerChannel(pDevEvo, pMainLayerChannel);
++
++        if (idleChannelState.channelMask != pMainLayerChannel->channelMask) {
++            /*
++             * 2Heads1OR: the pending updates of the merged heads' main layer
++             * channels are interlocked and flip locked with each other.
++             * Applying accelerators to one of these channels at a time cannot
++             * complete them: the channel which is skipped past its semaphore
++             * keeps waiting for the interlock with the other channel, which
++             * is still blocked.  That made every modeset on the device fail
++             * (IdleAllSatelliteChannels()) for as long as such a flip was
++             * stuck, including the modeset which shuts the stuck head down.
++             * Idle all the merged channels together, and ignore the locks
++             * between them.
++             */
++            ret = pDevEvo->hal->ForceIdleSatelliteChannelIgnoreLock(
++                      pDevEvo, &idleChannelState);
++        } else {
++            ret = pDevEvo->hal->ForceIdleSatelliteChannel(pDevEvo,
++                                                          &idleChannelState);
++        }
+ 
+         *stoppedBase = ret;
+     }
