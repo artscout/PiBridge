@@ -99,6 +99,9 @@ void touchImages(const QString& root, int cams) {
 RecEnv envFor(const QTemporaryDir& d) {
     RecEnv e;
     e.home = d.path() + QStringLiteral("/home");
+    // a prefix with nothing installed under it, so the <prefix>/lib|share/pibridge candidates fall through to the
+    // dev-tree fallbacks these tests set up (deterministic regardless of a real ~/.local install)
+    e.prefix = d.path() + QStringLiteral("/prefix");
     e.configDir = e.home + QStringLiteral("/.config/pibridge");
     e.dataHome = e.home + QStringLiteral("/.local/share");
     e.runtimeDir = d.path() + QStringLiteral("/run");

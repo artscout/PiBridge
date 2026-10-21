@@ -290,9 +290,10 @@ TEST(a_pid_with_another_comm_is_never_ours) {
     CHECK(steamvrRunning(r) && !monadoRunning(r));
     // the tap under SteamVR + driver_monado: refused in plain words (SteamVR's compositor draws the image)
     const auto e = start(r, {}, false, "tap");
-    CHECK(!e && contains(e.error(), "SteamVR runs") && contains(e.error(), "--source mirror"));
-    // auto picks SteamVR's mirror while vrserver runs (pickSource only: nothing is started here)
-    CHECK(pickSource(r, "auto") == Source::Mirror && pickSource(r, "mirror") == Source::Mirror);
+    CHECK(!e && contains(e.error(), "SteamVR runs") && contains(e.error(), "--source layer"));
+    // auto picks the Vulkan capture layer while vrserver runs (pickSource only: nothing is started here)
+    CHECK(pickSource(r, "auto") == Source::Layer && pickSource(r, "layer") == Source::Layer);
+    CHECK(pickSource(r, "mirror") == Source::Mirror); // the GL mirror is still available on request
     std::ofstream(r.proc / "4242/comm") << "pibridge-record\n";
     CHECK(runningPid(r) == std::optional<std::uint32_t>(4242));
     std::ofstream(r.proc / "4242/stat") << "4242 (pibridge-record) Z 1 2 3\n";

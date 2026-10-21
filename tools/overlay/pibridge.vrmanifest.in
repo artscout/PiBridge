@@ -1,0 +1,19 @@
+{
+  "source": "builtin",
+  "applications": [
+    {
+      "app_key": "pibridge.dashboard",
+      "launch_type": "binary",
+      "binary_path_linux": "@PIBRIDGE_OVERLAY_INSTALL_BINARY@",
+      "arguments": "",
+      "is_dashboard_overlay": true,
+      "image_path": "@PIBRIDGE_OVERLAY_INSTALL_ICON@",
+      "strings": {
+        "en_us": {
+          "name": "PiBridge",
+          "description": "The PiBridge window as a SteamVR dashboard tab."
+        }
+      }
+    }
+  ]
+}

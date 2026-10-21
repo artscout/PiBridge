@@ -115,9 +115,9 @@ struct DeviceCalib {
     static std::expected<DeviceCalib, CalibError> parse(std::string_view doc);
     /// Read and parse a file.
     static std::expected<DeviceCalib, CalibError> load(const std::string& path);
-    /// Default search order: $PIMAX_CAM_CALIB, $PIMAX_CALIB, ~/.config/pibridge/headset-calibration.xml and
-    /// ~/.config/pimax-linux/headset-calibration.xml (only when present, docs/CONVENTIONS.md),
-    /// ~/.config/omarchyvr/headset-calibration.xml, <repo>/analysis/headset-calibration.xml (the installed data copy
+    /// Default search order: $PIMAX_CAM_CALIB, $PIMAX_CALIB, ~/.config/pibridge/headset-calibration.xml, then
+    /// ~/.config/pimax-linux/headset-calibration.xml and ~/.config/omarchyvr/headset-calibration.xml (the last two
+    /// only when present, docs/CONVENTIONS.md), <repo>/analysis/headset-calibration.xml (the installed data copy
     /// ~/.local/share/omarchyvr/data, else ~/omarchyvr; $PIMAX_REPO overrides).
     static std::vector<std::string> default_candidates();
     /// Load from path, or from the first existing default candidate, else the shipped reference (uid "reference";

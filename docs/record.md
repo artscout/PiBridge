@@ -12,18 +12,63 @@ pibridge-record start [--eyes left|both] [--fps 30|60|72] [--quality low|medium|
 pibridge-record stop          # finishes the file (always playable) and prints where it is
 pibridge-record status
 pibridge-record start --brief / stop --brief   # one short line ("Recording", "Saved: name.mp4")
-pibridge-record start --source auto|tap|mirror  # auto (default): SteamVR's mirror while SteamVR runs, else Monado's tap
+pibridge-record start --source auto|tap|layer|mirror  # auto (default): the Vulkan capture layer under SteamVR, else Monado's tap
 ```
 
 Defaults: one eye, 30 fps, high quality, sound on, microphone off, at most 1080 lines per eye, h264, NVENC when
 ffmpeg has it (x264 on the CPU otherwise; an NVENC that dies within 5 s falls back to the CPU, same file name).
 
-## Two sources, one recorder
+## Three sources, one recorder
 
-The recorder (`pibridge-record run`) reads frames from one shared-memory ring and encodes them; who fills the ring
-depends on the session (`--source auto`, the Dashboard card does the same):
+The recorder (`pibridge-record run`) encodes frames and does not care where they came from; the session picks the
+source (`--source auto`, the Dashboard card does the same):
 
-- **SteamVR** (Lighthouse, SteamVR + Monado, SteamVR's OpenXR runtime): `pibridge-record-mirror`, started by the
+- **SteamVR** (Lighthouse, SteamVR + Monado, SteamVR's OpenXR runtime): the **Vulkan capture layer** (`--source
+  layer`, the default under SteamVR), described below. The old GL mirror (`--source mirror`) is kept but is no longer
+  the default (it crashes vrserver on NVIDIA/Vulkan).
+- **"Monado directly"** (Development page), Monado's own compositor: the tap below (`--source tap`).
+
+### The Vulkan capture layer (`--source layer`, the SteamVR default)
+
+`tools/record-layer` is a Vulkan implicit layer (`libpibridge-record-layer.so`, manifest
+`VK_LAYER_PIBRIDGE_record.json`) that the loader pulls into SteamVR's `vrcompositor`. There it watches every external
+colour image a VR app shares with the compositor (the signal for "a frame bound for the HMD"), and, while recording is
+active, captures the chosen view. The recorder's `--source layer` path (`tools/record/src/capture_client.cpp`,
+`runLayer()`) is the client/encoder. Two files carry the data between them:
+
+- the **control file** `$XDG_RUNTIME_DIR/pibridge/record-capture` (`active`, `view`, `fps`, `max_height`), written by
+  `pibridge-record start`/`stop`, polled by the layer (`common/pibridge_record_capture_control.h`);
+- the **socket** `$XDG_RUNTIME_DIR/pibridge/record-capture.sock` (`common/pibridge_record_capture_ipc.h`): the layer
+  sends a `HelloMsg` with the exported image fd (`SCM_RIGHTS`) + metadata, then a `FrameMsg` per captured frame; the
+  client acks each frame so the one reused image is never torn.
+
+In the compositor, the layer (once per recording) creates an **exportable** `VkImage` (`VK_FORMAT_R8G8B8A8_UNORM`,
+`OPTIMAL`, `TRANSFER_DST|TRANSFER_SRC`, `VkExternalMemoryImageCreateInfo{OPAQUE_FD}` + device-local
+`VkExportMemoryAllocateInfo{OPAQUE_FD}`), scaled so its height is at most `max_height` (aspect kept; `both` lays the two
+eye layers side by side). Per frame, throttled to `fps`, it records a command buffer on a **separate** command pool and
+blits the selected view/layer(s) into it with its **own fence** — it never `vkQueueWaitIdle`s the compositor's queue
+and never delays the app's own submit. If any Vulkan step fails it disables capture and logs why; VR runs on untouched
+(a leaf, zero missed frames). The log is `$XDG_RUNTIME_DIR/pibridge/record-layer.log`.
+
+The client imports the fd into its own Vulkan device on the same GPU (matched by `deviceUUID`), copies the shared image
+into a host buffer and feeds that to the same ffmpeg encoder as the other sources — so NVENC (`h264_nvenc`) encodes it
+on NVIDIA. (The planned zero-copy `OPAQUE_FD`→CUDA→NVENC and dma_buf→VAAPI paths are TODOs in `capture_client.cpp`;
+they need the CUDA toolkit / `libva-dev`, which are not on the current build host.)
+
+**On-hardware iteration (flagged in the source):** (1) the **source image's layout** before the blit — the layer
+assumes `SHADER_READ_ONLY_OPTIMAL` and restores it; if the live headset shows corruption/validation errors, try
+`GENERAL`/`PRESENT_SRC_KHR` (`submitBlit()` in `layer.cpp`). (2) **cross-process sync** — the handoff relies on the
+blit's fence plus the socket ack round-trip (no ownership transfer); the spec-clean upgrade is a shared EXTERNAL
+timeline semaphore. If colours look swapped, switch the capture format to `B8G8R8A8_UNORM` and the encoder's
+`-pix_fmt` to `bgra`.
+
+**Live-test prerequisite (manifest location):** the Steam Linux Runtime container does not see
+`~/.local/share/vulkan/implicit_layer.d`, so for a Proton/SteamVR run the manifest must be copied to a system path, e.g.
+`/usr/share/vulkan/implicit_layer.d/VK_LAYER_PIBRIDGE_record.json` (needs root; the app's pkexec step, not an agent).
+
+### The GL mirror (`--source mirror`, opt-in)
+
+- **SteamVR**: `pibridge-record-mirror`, started by the
   recorder. It is a `VRApplication_Background` OpenVR client (it never starts SteamVR; an Overlay client only when
   SteamVR answers `IsNotSceneApplication` to a background one) that takes `IVRCompositor::GetMirrorTextureGL` for
   one or both eyes in a headless EGL context (no window, surfaceless or a 1x1 pbuffer) on an NVIDIA EGL device
@@ -39,7 +84,6 @@ depends on the session (`--source auto`, the Dashboard card does the same):
   `<runtime>/bin/linux64/libopenvr_api.so` from `~/.config/openvr/openvrpaths.vrpath` (as the app finds it), with
   dlopen; GL entry points from `eglGetProcAddress` (it links libEGL only). Its log: `<session>/record-mirror.log`;
   a start failure reaches the card as "SteamVR's mirror could not start: <why>".
-- **"Monado directly"** (Development page), Monado's own compositor: the tap below.
 
 ### Monado's tap
 

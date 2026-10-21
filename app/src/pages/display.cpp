@@ -43,7 +43,8 @@ double numOr(const QJsonObject& o, const QString& key, double def) {
 
 } // namespace
 
-DisplayPage::DisplayPage(StateSource& source, QWidget* parent) : QWidget(parent), source_(source) {
+DisplayPage::DisplayPage(StateSource& source, Conf& conf, Actions& actions, QWidget* parent)
+    : QWidget(parent), source_(source), conf_(conf), actions_(actions) {
     setObjectName(QStringLiteral("page"));
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(18, 12, 18, 12);
@@ -58,6 +59,16 @@ DisplayPage::DisplayPage(StateSource& source, QWidget* parent) : QWidget(parent)
         "(CustomHeadsetOpenVR). They work the same whether tracking is inside-out (Monado) or Lighthouse.")));
     info_ = pibridge::ui::dimLabel(QString());
     card->body()->addWidget(info_);
+
+    // Panel refresh rate (refresh_hz): a headset setting, applied live by the headset service (not a CHOVR shader
+    // setting). It also has a quick toggle on the Dashboard headset card; both write the same setting.
+    refresh_ = new pibridge::ui::Segmented({QStringLiteral("72 Hz"), QStringLiteral("90 Hz")});
+    connect(refresh_, &pibridge::ui::Segmented::activated, this,
+            [this](int i) { actions_.setRefreshHz(i == 0 ? 72 : 90, {}); });
+    card->body()->addWidget(pibridge::ui::settingRow(
+        QStringLiteral("Refresh rate"), refresh_, nullptr, false,
+        QStringLiteral("The panel refresh rate the headset runs at (72 or 90 Hz). Takes effect the next time the "
+                       "headset wakes.")));
 
     brightness_ = new pibridge::ui::SliderRow(QStringLiteral("Brightness"), 20, 200, QStringLiteral("%"), true,
                                               QStringLiteral("Scales the rendered image (software). 100% leaves it as is."));
@@ -111,6 +122,7 @@ void DisplayPage::showEvent(QShowEvent* e) {
 
 void DisplayPage::load() {
     loading_ = true;
+    refresh_->setCurrent(conf_.refreshHz() == 72 ? 0 : 1);
     const QJsonObject root = readSettings();
     const QJsonObject gen = root.value(QStringLiteral("generalHeadset")).toObject();
     const QJsonObject col = gen.value(QStringLiteral("colorMultiplier")).toObject();

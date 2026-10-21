@@ -10,7 +10,7 @@
 // model around the elbow in a body frame that follows the head position and half its yaw), older: none (rest pose).
 // Reacquire blends from the prediction to the optical pose; optical outliers vs the prediction are dropped (repeated
 // ones accepted). The gyro calibration y = C x + d is fitted online over 9 camera-to-IMU time offsets and kept in
-// ~/.config/omarchyvr/ctrl-imu.json per hand; a built-in one is used until then.
+// ~/.config/pibridge/ctrl-imu.json per hand; a built-in one is used until then.
 #pragma once
 
 #include <array>
@@ -142,7 +142,7 @@ inline constexpr std::size_t FIT_MAX_PAIRS = 3000;
 Calib default_calib(std::size_t hand);
 /// The saved calibration of `hand`, else the built-in one (unless PIMAX_CTRL_IMU_DEFAULT=0).
 std::optional<Calib> calib_or_default(const std::string& path, std::size_t hand);
-/// PIMAX_CTRL_IMU_CALIB, else $HOME/.config/omarchyvr/ctrl-imu.json.
+/// PIMAX_CTRL_IMU_CALIB, else $HOME/.config/pibridge/ctrl-imu.json.
 std::string calib_path();
 /// Read one hand's calibration from the JSON file.
 std::optional<Calib> load_calib(const std::string& path, std::size_t hand);

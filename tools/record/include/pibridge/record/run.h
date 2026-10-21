@@ -48,11 +48,15 @@ private:
     std::uint64_t next_ = 0;
 };
 
-// Where the frames come from: Monado's tap (comp_recorder.c, "Monado directly") or SteamVR's mirror texture
-// (pibridge-record-mirror, an OpenVR background client; SteamVR and its OpenXR runtime). Same ring, same encoder.
-enum class Source { Tap, Mirror };
+// Where the frames come from:
+//  - Tap: Monado's tap (comp_recorder.c, "Monado directly"), via the shared-memory ring.
+//  - Mirror: SteamVR's GL mirror texture (pibridge-record-mirror), via the same ring. Crashes vrserver on
+//    NVIDIA/Vulkan, so it is no longer the SteamVR default (kept for anyone who wants it).
+//  - Layer: PiBridge's Vulkan capture layer (tools/record-layer), which runs inside vrcompositor and shares the eye
+//    image over a unix socket (pibridge_record_capture_ipc.h). The default under SteamVR. runLayer() is the encoder.
+enum class Source { Tap, Mirror, Layer };
 std::string_view name(Source s);
-std::optional<Source> parseSource(std::string_view s); // tap | monado, mirror | steamvr
+std::optional<Source> parseSource(std::string_view s); // tap | monado, mirror | steamvr, layer | vk
 // pibridge-record-mirror: $PIBRIDGE_RECORD_MIRROR_BIN, else next to this executable, else on the PATH.
 std::filesystem::path mirrorBin();
 
@@ -68,7 +72,13 @@ inline constexpr std::uint64_t kStopFree = 1ull << 30;
 // A file name in `dir` that does not exist yet (name, name-2, name-3, ...).
 std::filesystem::path uniquePath(const std::filesystem::path& dir, const std::string& name);
 
-// The recorder. Returns the exit code.
+// The recorder. Returns the exit code. For Source::Layer it hands off to runLayer().
 int run(const Settings& s, const Roots& r, Source source = Source::Tap);
+
+// The encoder for Source::Layer (capture_client.cpp): connect to the Vulkan capture layer's socket
+// ($XDG_RUNTIME_DIR/pibridge/record-capture.sock), import the shared eye image, read it back per frame and encode it
+// through the same ffmpeg pipeline as the tap/mirror path. Returns the exit code. Built only with Vulkan; without it,
+// it fails cleanly ("this build has no Vulkan capture support").
+int runLayer(const Settings& s, const Roots& r);
 
 } // namespace pibridge::record

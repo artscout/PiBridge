@@ -134,7 +134,7 @@ hands_diff(fuse_calib_nan --exit 134 --env PIMAX_CTRL_IMU_CALIB=@W@/calib.json -
            -- fuse 0 18 10)
 hands_diff(fuse_calib_dir --env PIMAX_CTRL_IMU_CALIB=@W@/calib.json --pre "mkdir -p @W@/calib.json"
            --post "${fdump}" -- fuse 0 22 60)
-hands_diff(fuse_home_calib --pre "mkdir -p @W@/home/.config/omarchyvr && cp ${d}/hands_calib_ok.json @W@/home/.config/omarchyvr/ctrl-imu.json"
+hands_diff(fuse_home_calib --pre "mkdir -p @W@/home/.config/pibridge && cp ${d}/hands_calib_ok.json @W@/home/.config/pibridge/ctrl-imu.json"
            --post "${fdump}" -- fuse 0 24 120)
 set_tests_properties(${hands_diff_tests} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 900)
 # the Rust twins compare against the Rust library: PiBridge's fuser improvements off (docs/research/ctrl-tracking-improvements.md)

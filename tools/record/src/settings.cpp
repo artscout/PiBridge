@@ -16,6 +16,14 @@ namespace pibridge::record {
 namespace fs = std::filesystem;
 
 std::string_view name(Eyes e) { return e == Eyes::Left ? "left" : "both"; }
+std::string_view name(View v) {
+    switch (v) {
+    case View::LeftEye: return "left";
+    case View::RightEye: return "right";
+    case View::BothEyes: return "both";
+    }
+    return "left";
+}
 std::string_view name(Quality q) {
     switch (q) {
     case Quality::Low: return "low";
@@ -29,6 +37,7 @@ std::string_view name(EncoderPref p) {
     switch (p) {
     case EncoderPref::Auto: return "auto";
     case EncoderPref::Nvenc: return "nvenc";
+    case EncoderPref::Vaapi: return "vaapi";
     case EncoderPref::Cpu: return "cpu";
     }
     return "auto";
@@ -40,6 +49,18 @@ std::optional<Eyes> parseEyes(std::string_view s) {
     }
     if (s == "both" || s == "two" || s == "2" || s == "sbs") {
         return Eyes::Both;
+    }
+    return std::nullopt;
+}
+std::optional<View> parseView(std::string_view s) {
+    if (s == "left" || s == "left-eye") {
+        return View::LeftEye;
+    }
+    if (s == "right" || s == "right-eye") {
+        return View::RightEye;
+    }
+    if (s == "both" || s == "both-eyes" || s == "sbs") {
+        return View::BothEyes;
     }
     return std::nullopt;
 }
@@ -70,6 +91,9 @@ std::optional<EncoderPref> parseEncoder(std::string_view s) {
     }
     if (s == "nvenc" || s == "gpu") {
         return EncoderPref::Nvenc;
+    }
+    if (s == "vaapi" || s == "va") {
+        return EncoderPref::Vaapi;
     }
     if (s == "cpu" || s == "x264" || s == "x265" || s == "software") {
         return EncoderPref::Cpu;
@@ -188,6 +212,12 @@ std::expected<void, std::string> Settings::set(std::string_view key, std::string
             return std::unexpected(bad(key, v, "left or both"));
         }
         eyes = *e;
+    } else if (k == "view") {
+        const auto vw = parseView(v);
+        if (!vw) {
+            return std::unexpected(bad(key, v, "left, right or both"));
+        }
+        view = *vw;
     } else if (k == "fps") {
         const auto n = parseU64(v);
         if (!n || *n > UINT32_MAX || std::ranges::find(kFpsChoices, static_cast<std::uint32_t>(*n)) == kFpsChoices.end()) {
@@ -282,17 +312,18 @@ std::string Settings::toToml() const {
     return std::format(
         "# pibridge-record settings (pibridge-record --help). Written by `pibridge-record start --save` and the app.\n"
         "eyes = \"{}\"        # left (one eye, lens-undistorted) | both (side by side)\n"
+        "view = \"{}\"      # left | right | both (the game's own render, one eye or both side by side)\n"
         "fps = {}             # 30 | 60 | 72\n"
         "quality = \"{}\"   # low | medium | high\n"
         "scale = {}            # 0 = fit max_height; 0.1 to 1.0 = fraction of the eye's resolution\n"
         "max_height = {}\n"
         "codec = \"{}\"        # h264 | hevc\n"
-        "encoder = \"{}\"      # auto (NVENC, else CPU) | nvenc | cpu\n"
+        "encoder = \"{}\"      # auto (NVENC/VAAPI by GPU, else CPU) | nvenc | vaapi | cpu\n"
         "dir = \"{}\"\n"
         "audio = \"{}\"       # on (what you hear) | off\n"
         "mic = \"{}\"         # on = also your microphone, mixed in | off\n",
-        name(eyes), fps, name(quality), formatF32(scale), max_height, name(codec), name(encoder), dir, onoff(audio),
-        onoff(mic));
+        name(eyes), name(view), fps, name(quality), formatF32(scale), max_height, name(codec), name(encoder), dir,
+        onoff(audio), onoff(mic));
 }
 
 std::expected<Settings, std::string> Settings::load(const fs::path& p) {

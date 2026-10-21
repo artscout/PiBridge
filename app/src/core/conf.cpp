@@ -9,6 +9,8 @@
 #include <cmath>
 #include <vector>
 
+#include "paths.h"
+
 namespace pibridge::app {
 
 namespace {
@@ -132,8 +134,19 @@ Conf::Conf(QString path, QString fallback) : path_(std::move(path)), fallback_(s
 }
 
 void Conf::reload() {
-    QFile f(!QFileInfo::exists(path_) && !fallback_.isEmpty() && QFileInfo::exists(fallback_) ? fallback_ : path_);
     text_.clear();
+    // The live settings win; then the legacy path (PiBridge's earlier name); then the shipped read-only default seed
+    // (defaultsConfPath(), <prefix>/etc/pibridge/pibridge.conf). set() always writes path_, so none of the fallbacks
+    // is ever overwritten.
+    QString src = path_;
+    if (!QFileInfo::exists(src)) {
+        if (!fallback_.isEmpty() && QFileInfo::exists(fallback_)) {
+            src = fallback_;
+        } else if (const QString def = defaultsConfPath(); QFileInfo::exists(def)) {
+            src = def;
+        }
+    }
+    QFile f(src);
     if (f.open(QIODevice::ReadOnly)) {
         text_ = f.readAll().toStdString();
     }

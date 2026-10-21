@@ -4,6 +4,32 @@ PiBridge's room setup: the boundary SteamVR shows when you come near a wall (Ste
 area rectangle games use for room-scale, the play centre (where games put you and which way is forward), the warning
 distance, and saved rooms ("Door open", "Door closed") to switch between.
 
+## Set up your play space (for users)
+
+Press **ROOM SETUP** on the Dashboard (VR must be running). You can also start it from the **Room** page
+(**OPEN ROOM SETUP IN HEADSET**) or, without taking the headset off, from the PiBridge tab in the SteamVR dashboard
+(see [OVERLAY.md](OVERLAY.md)). The setup opens **in the headset** and you point at the menu with the controller. If PiBridge doesn't recognise your room yet, it first asks you to **look around slowly** once
+so it can find its bearings; if your room is already recognised it skips that.
+
+**Quick setup** — a circle around you, fastest:
+1. Pick **Standing** or **Sitting**. The floor is placed automatically (standing ≈ your height, sitting ≈ a chair).
+2. Pick a zone size — **Small / Medium / Large** (a 1.0 / 1.5 / 2.0 m circle around you).
+3. Press **Finish**. Done.
+
+**Full setup** — draw your own boundary (standing):
+1. **Set the floor.** A grid shows where PiBridge thinks your floor is; it reads "the floor is N below your face". Nudge
+   it **up / down with the thumbstick** until the grid sits on your real floor, then press **Next**.
+2. **Draw the edge.** Hold the **trigger** and sweep the controller along the floor to trace the edge of your space.
+   The trigger only draws — nothing is saved until you choose to. Too small a loop is rejected with a hint; just draw
+   again.
+3. Press **Save**. Done.
+
+The floor, the centre (where you stand), the forward direction (where you look) and the boundary go straight into
+**SteamVR's play area / chaperone** — nothing is stored on the Monado side. It comes back every time you start VR. You
+can manage saved rooms and the floor plan later on the app's **Room** page.
+
+---
+
 It is a C++ port of **[ZoneTweak](https://github.com/killdano/ZoneTweak)** by killdano (MIT, Copyright (c) 2026
 killdano; the licence is in [NOTICE](../NOTICE)), an in-headset editor for Pimax's safety zone on Windows. PiBridge keeps
 its data model and its editing behaviour and points it at SteamVR's chaperone file on Linux. Every ported file says

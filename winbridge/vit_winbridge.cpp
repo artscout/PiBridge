@@ -1,22 +1,22 @@
-// libpibridge_vit_winbridge.so: VIT-трекер для Monado, за которым стоит настоящий head-SLAM Pimax
-// (pimax_slam.pi.dll под Wine, процесс winbridge.exe, протокол proto.h по TCP localhost).
+// libpibridge_vit_winbridge.so: a VIT tracker for Monado backed by the real Pimax head SLAM
+// (pimax_slam.pi.dll under Wine, the winbridge.exe process, proto.h over TCP localhost).
 //
-// Monado: PIMAX_SLAM=1 VIT_SYSTEM_LIBRARY_PATH=<путь>/libpibridge_vit_winbridge.so
-// Драйвер Pimax не меняется: это просто другая VIT-библиотека вместо libbasalt.so.
+// Monado: PIMAX_SLAM=1 VIT_SYSTEM_LIBRARY_PATH=<path>/libpibridge_vit_winbridge.so
+// The Pimax driver is unchanged: this is just a different VIT library in place of libbasalt.so.
 //
-// Потоки: push_imu/push_img вызываются из потоков Monado и только кладут данные в очередь;
-// один рабочий поток владеет сокетом и ведёт lockstep-обмен (IMU -> POSE, CAM -> ACK).
-// Если winbridge недоступен, данные отбрасываются и поток переподключается раз в секунду:
-// Monado остаётся в 3DoF, VR не останавливается.
+// Threads: push_imu/push_img are called from Monado threads and only enqueue data;
+// one worker thread owns the socket and runs the lockstep exchange (IMU -> POSE, CAM -> ACK).
+// If winbridge is unavailable, data is dropped and the thread reconnects once a second:
+// Monado stays in 3DoF, VR does not stop.
 //
-// Окружение: PIBRIDGE_WINBRIDGE_PORT (48291), PIBRIDGE_SHUTTER_NS (10000000; VIT не передаёт выдержку,
-// а SLAM Pimax отбрасывает кадры с нулевой выдержкой; на время кадра значение не влияет, проверено 0.1/10/20 мс),
-// PIBRIDGE_VIT_POSE_RATE (cam | imu, по умолчанию cam: одна поза на кадр, как у Basalt; на частоте IMU слой вывода
-// драйвера дрожит в движении 1.0 мм против 0.36 и чаще щёлкает поправками, pibridge-slam headreplay на записи).
+// Environment: PIBRIDGE_WINBRIDGE_PORT (48291), PIBRIDGE_SHUTTER_NS (10000000; VIT does not pass the exposure,
+// and Pimax SLAM drops frames with zero exposure; the value does not affect frame timing, verified at 0.1/10/20 ms),
+// PIBRIDGE_VIT_POSE_RATE (cam | imu, default cam: one pose per frame, like Basalt; at IMU rate the driver's output
+// layer jitters 1.0 mm in motion vs 0.36 and snaps corrections more often, pibridge-slam headreplay on a recording).
 //
-// Сборка: g++ -O2 -std=c++20 -fPIC -shared vit_winbridge.cpp -o libpibridge_vit_winbridge.so -pthread
+// Build: g++ -O2 -std=c++20 -fPIC -shared vit_winbridge.cpp -o libpibridge_vit_winbridge.so -pthread
 
-#define VIT_INTERFACE_IMPLEMENTATION  // открывает прототипы функций (мы — реализация VIT)
+#define VIT_INTERFACE_IMPLEMENTATION  // exposes the function prototypes (we are the VIT implementation)
 #include "vit/vit_interface.h"
 #include "proto.h"
 #include "pibridge_winbridge_ext.h"
@@ -41,8 +41,8 @@
 namespace {
 
 constexpr uint32_t kW = 640, kH = 480;
-constexpr size_t kMaxQueue = 4096;   // ~4 с IMU; дальше старое выбрасывается
-constexpr uint32_t kMaxFrames = 6;   // наборов кадров в очереди (1.2 МБ каждый); лишние новые отбрасываются
+constexpr size_t kMaxQueue = 4096;   // ~4 s of IMU; beyond that the oldest is dropped
+constexpr uint32_t kMaxFrames = 6;   // frame sets queued (1.2 MB each); extra new ones are dropped
 
 struct Item {
     enum Kind { Imu, Cam, Led, CtrlImu } kind = Imu;
@@ -71,7 +71,7 @@ struct vit_tracker {
     std::deque<Item> q;
     std::deque<vit_pose_data_t> poses;
 
-    // сбор пары кадров с одной меткой времени
+    // collect a pair of frames with the same timestamp
     int64_t pend_ts = -1;
     uint32_t pend_mask = 0;
     std::vector<uint8_t> pend_px;
@@ -83,20 +83,20 @@ struct vit_tracker {
     uint32_t frames_queued = 0;
     long frames_dropped = 0;
 
-    // контроллеры (pibridge_winbridge_ext.h): последняя поза каждой руки
+    // controllers (pibridge_winbridge_ext.h): the latest pose of each hand
     pibridge_wb_ctrl_pose ctrl[2] = {};
     bool ctrl_tracked[2] = {false, false};
 
-    // Движок ведёт трекинг в системе сохранённой карты, её начало в десятках метров (позы головы ~95 м от 0).
-    // Basalt стартует у нуля; убираем это постоянное смещение на первой позе, чтобы голова, карта комнаты (roommap
-    // позирует кейфреймы сырой SLAM-позой) и якорь жили у начала координат и не теряли точность float вдали от нуля.
-    // Держится всю жизнь трекера (переподключение/reset -> та же карта -> тот же офсет). Позиции контроллеров в
-    // драйвере относительны голове, их не трогаем.
+    // The engine tracks in the saved map's frame, whose origin is tens of meters away (head poses ~95 m from 0).
+    // Basalt starts at zero; we remove this constant offset on the first pose so that the head, the room map (roommap
+    // poses keyframes with the raw SLAM pose) and the anchor live near the origin and do not lose float precision far from zero.
+    // Held for the tracker's whole life (reconnect/reset -> same map -> same offset). Controller positions in
+    // the driver are relative to the head, we leave them alone.
     bool have_origin = false;
     float origin[3] = {0, 0, 0};
 };
 
-// Трекер, к которому обращается расширение драйвера (Monado создаёт один).
+// The tracker the driver extension talks to (Monado creates one).
 static std::atomic<vit_tracker*> g_tracker{nullptr};
 
 namespace {
@@ -125,13 +125,13 @@ int connect_bridge(int port) {
     return s;
 }
 
-// Позу из буфера SLAM Pimax (quat x,y,z,w; pos; angVel; linVel) -> VIT.
-// Порядок кватерниона (x,y,z,w) подтверждён: покой с a=(0,0,g) дал (~0,~0,~0,1).
+// A pose from the Pimax SLAM buffer (quat x,y,z,w; pos; angVel; linVel) -> VIT.
+// Quaternion order (x,y,z,w) confirmed: at rest with a=(0,0,g) it gave (~0,~0,~0,1).
 bool to_vit(const PosePayload& p, vit_pose_data_t& o) {
     const float* v = p.pose;
     float n = v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3];
     bool tracked = (v[4] != 0.0f || v[5] != 0.0f || v[6] != 0.0f) && n > 0.98f && n < 1.02f;
-    if (!tracked) return false;  // до локализации SLAM даёт только ориентацию
+    if (!tracked) return false;  // before localization SLAM gives orientation only
     o.timestamp = (int64_t)p.ts;
     o.px = v[4]; o.py = v[5]; o.pz = v[6];
     o.ox = v[0]; o.oy = v[1]; o.oz = v[2]; o.ow = v[3];
@@ -139,10 +139,10 @@ bool to_vit(const PosePayload& p, vit_pose_data_t& o) {
     return true;
 }
 
-// Читатель ответов одного соединения. Сервер отвечает на каждое сообщение по порядку, поэтому вид ответа
-// известен из очереди отправленного (inflight).
+// Reply reader for one connection. The server answers every message in order, so the reply kind
+// is known from the queue of what was sent (inflight).
 void read_replies(vit_tracker* t, int s, std::deque<Item::Kind>* inflight, std::atomic<bool>* alive) {
-    bool want_pose = false;  // после ответа на кадр отдать первую позу с позицией (одна поза на кадр)
+    bool want_pose = false;  // after a frame's reply, emit the first pose with a position (one pose per frame)
     for (;;) {
         MsgHeader h{};
         if (!recv_all(s, &h, sizeof(h))) break;
@@ -197,13 +197,13 @@ void read_replies(vit_tracker* t, int s, std::deque<Item::Kind>* inflight, std::
     t->cv.notify_all();
 }
 
-// Конвейер: этот поток только отправляет (не ждёт ответа на каждое сообщение: круг через Wine дольше
-// миллисекунды, а IMU головы и двух рук идут в сумме несколько кГц), ответы читает read_replies.
+// Pipeline: this thread only sends (it does not wait for a reply to each message: a round trip through Wine takes longer
+// than a millisecond, while the head and two hands' IMUs total several kHz); read_replies reads the replies.
 void run(vit_tracker* t) {
     while (!t->quit) {
         const int s = connect_bridge(t->port);
         if (s < 0) {
-            {   // недоступен: выбросить накопленное, подождать
+            {   // unavailable: drop what accumulated, wait
                 std::lock_guard<std::mutex> lk(t->m);
                 t->dropped += (long)t->q.size();
                 t->q.clear();
@@ -258,7 +258,7 @@ void run(vit_tracker* t) {
             if (!ok) break;
         }
         if (!t->quit) fprintf(stderr, "pibridge-vit: winbridge connection lost, reconnecting\n");
-        ::shutdown(s, SHUT_RDWR);  // будит читателя
+        ::shutdown(s, SHUT_RDWR);  // wakes the reader
         reader.join();
         ::close(s);
         std::lock_guard<std::mutex> lk(t->m);
@@ -270,7 +270,7 @@ void enqueue(vit_tracker* t, Item&& it) {
     {
         std::lock_guard<std::mutex> lk(t->m);
         if (it.frame()) {
-            if (t->frames_queued >= kMaxFrames) {  // мост отстаёт: этот набор кадров пропадает
+            if (t->frames_queued >= kMaxFrames) {  // the bridge is lagging: this frame set is dropped
                 ++t->frames_dropped;
                 return;
             }
@@ -325,7 +325,7 @@ vit_result_t vit_tracker_has_image_format(const vit_tracker_t*, vit_image_format
 }
 
 vit_result_t vit_tracker_get_supported_extensions(const vit_tracker_t*, vit_tracker_extension_set_t* out) {
-    // Калибровку принимаем и игнорируем: SLAM Pimax берёт свою из device_calibration_<SN>.xml.
+    // We accept and ignore calibration: Pimax SLAM takes its own from device_calibration_<SN>.xml.
     *out = {true, true, false, false};
     return VIT_SUCCESS;
 }
@@ -393,7 +393,7 @@ vit_result_t vit_tracker_push_img_sample(vit_tracker_t* t, const vit_img_sample_
     bool full = false;
     {
         std::lock_guard<std::mutex> lk(t->m);
-        if (s->timestamp != t->pend_ts) {  // новый момент: незаконченная пара пропадает
+        if (s->timestamp != t->pend_ts) {  // new timestamp: an unfinished pair is dropped
             t->pend_ts = s->timestamp;
             t->pend_mask = 0;
         }
@@ -446,7 +446,7 @@ vit_result_t vit_pose_get_features(const vit_pose_t*, uint32_t, vit_pose_feature
     return VIT_ERROR_NOT_SUPPORTED;
 }
 
-// ---- расширение для драйвера Pimax: контроллеры (pibridge_winbridge_ext.h) ----
+// ---- extension for the Pimax driver: controllers (pibridge_winbridge_ext.h) ----
 
 __attribute__((visibility("default"))) int pibridge_wb_ext_version(void) { return PIBRIDGE_WB_EXT_VERSION; }
 

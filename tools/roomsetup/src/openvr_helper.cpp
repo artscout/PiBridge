@@ -13,8 +13,10 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace pibridge::roomsetup {
 
@@ -137,7 +139,8 @@ int vrReloadMain() {
     return 0;
 }
 
-int vrStandingMain(std::optional<double> eyeHeight, std::optional<double> radius, bool seated) {
+int vrStandingMain(std::optional<double> eyeHeight, std::optional<double> radius, bool seated,
+                   const std::string& perimeterFile) {
     if (!seated && !eyeHeight) {
         std::fprintf(stderr, "pibridge-roomsetup: --vr-standing needs --eye-height M (standing); seated needs none\n");
         return 1;
@@ -188,9 +191,30 @@ int vrStandingMain(std::optional<double> eyeHeight, std::optional<double> radius
     } else {
         setup->SetWorkingStandingZeroPoseToRawTrackingPose(&m);
     }
-    // Quick room setup: a circle of `radius` m around the play centre as the boundary (the PVRGuardian "quick setup"
-    // = a circle around you; the full setup traces the room). The perimeter is in the standing frame, origin = centre.
-    if (radius && *radius >= 0.3 && *radius <= 5.0) {
+    // The chaperone perimeter in the standing frame (origin = centre, -Z = forward), which equals the room setup's
+    // setup frame, so the traced boundary's setup-frame points go in straight (full setup). --perimeter FILE gives
+    // that polygon ("x z" per line); --radius gives a circle around the centre (the quick-setup play circle). The
+    // perimeter file wins when both are present. Seated has no floor boundary.
+    const char* perimKind = nullptr;
+    if (!seated && !perimeterFile.empty()) {
+        std::vector<vr::HmdVector2_t> poly;
+        std::ifstream f(perimeterFile);
+        std::string line;
+        while (std::getline(f, line)) {
+            double x = 0, z = 0;
+            if (std::sscanf(line.c_str(), "%lf %lf", &x, &z) == 2) {
+                poly.push_back(vr::HmdVector2_t{{static_cast<float>(x), static_cast<float>(z)}});
+            }
+        }
+        if (poly.size() >= 3) {
+            setup->SetWorkingPerimeter(poly.data(), static_cast<uint32_t>(poly.size()));
+            std::printf("room boundary: %zu-point perimeter from %s\n", poly.size(), perimeterFile.c_str());
+            perimKind = ", boundary set";
+        } else {
+            std::fprintf(stderr, "pibridge-roomsetup: --perimeter %s has fewer than 3 points, keeping the old boundary\n",
+                         perimeterFile.c_str());
+        }
+    } else if (!seated && radius && *radius >= 0.3 && *radius <= 5.0) {
         constexpr int kN = 32;
         std::array<vr::HmdVector2_t, kN> ring{};
         for (int i = 0; i < kN; i++) {
@@ -200,13 +224,14 @@ int vrStandingMain(std::optional<double> eyeHeight, std::optional<double> radius
         }
         setup->SetWorkingPerimeter(ring.data(), kN);
         std::printf("quick room: a %.2f m circle around the centre as the boundary\n", *radius);
+        perimKind = ", circle boundary set";
     }
     if (!setup->CommitWorkingCopy(vr::EChaperoneConfigFile_Live)) {
         std::fprintf(stderr, "pibridge-roomsetup: SteamVR refused the chaperone commit\n");
         return 1;
     }
     std::printf("%s zero pose committed: centre where you %s, forward where you looked%s\n", seated ? "seated" : "standing",
-                seated ? "sit" : "stand", radius ? ", circle boundary set" : "");
+                seated ? "sit" : "stand", perimKind ? perimKind : "");
     return 0;
 }
 

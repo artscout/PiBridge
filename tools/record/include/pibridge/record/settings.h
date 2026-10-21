@@ -18,16 +18,22 @@
 namespace pibridge::record {
 
 enum class Eyes { Left, Both };
+// What to record (the Dashboard's selector; distinct from `Source` in run.h, which is how frames are grabbed).
+// LeftEye/RightEye/BothEyes = the game's own stereo render (clean, no SteamVR overlays or lens distortion). The Vulkan
+// capture layer (tools/record-layer) picks the image by this. (SteamVR's composited output is not captured.)
+enum class View { LeftEye, RightEye, BothEyes };
 enum class Quality { Low, Medium, High };
 enum class Codec { H264, Hevc };
 // Which encoder ffmpeg uses: Auto = NVENC when ffmpeg has it, else the CPU (libx264 / libx265, niced).
-enum class EncoderPref { Auto, Nvenc, Cpu };
+enum class EncoderPref { Auto, Nvenc, Vaapi, Cpu };
 
 std::string_view name(Eyes e);
+std::string_view name(View v);
 std::string_view name(Quality q);
 std::string_view name(Codec c);
 std::string_view name(EncoderPref p);
 std::optional<Eyes> parseEyes(std::string_view s);
+std::optional<View> parseView(std::string_view s);
 std::optional<Quality> parseQuality(std::string_view s);
 std::optional<Codec> parseCodec(std::string_view s);
 std::optional<EncoderPref> parseEncoder(std::string_view s);
@@ -38,6 +44,8 @@ inline constexpr std::array<std::uint32_t, 3> kFpsChoices{30, 60, 72};
 
 struct Settings {
     Eyes eyes = Eyes::Left;
+    // What to record (Dashboard selector): the game's left/right/both eye render, or SteamVR's composited output.
+    View view = View::LeftEye;
     std::uint32_t fps = 30;
     Quality quality = Quality::High;
     // 0 = fit max_height; else a fraction (0.1 to 1.0) of the eye's resolution, still capped by max_height.

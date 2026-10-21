@@ -26,7 +26,7 @@ enum pimax_lens_rs_mask_kind {
 uint32_t
 pimax_lens_rs_abi_version(void);
 
-/* Reads lens.conf (PIMAX_LENS_CONF, $XDG_CONFIG_HOME/omarchyvr/lens.conf, ~/.config/omarchyvr/lens.conf), honours
+/* Reads lens.conf (PIMAX_LENS_CONF, $XDG_CONFIG_HOME/pibridge/lens.conf, ~/.config/pibridge/lens.conf), honours
  * PIMAX_LENS_OFF and PIMAX_LENS_DEBUG_GRID=<dir>, logs the active configuration through `log`.
  * aspect = display width / height as the client sees it (3840/3552). Never returns NULL except on OOM. */
 pimax_lens_rs *

@@ -83,7 +83,17 @@ PerformancePage::PerformancePage(QWidget* parent) : QWidget(parent) {
     statusTimer_.setInterval(1000);
     connect(&statusTimer_, &QTimer::timeout, this, &PerformancePage::refreshStatus);
 
-    auto* root = new QVBoxLayout(this);
+    // One scroll area holds the whole page, so the quad views settings and the preview scroll together as one.
+    auto* pageLayout = new QVBoxLayout(this);
+    pageLayout->setContentsMargins(0, 0, 0, 0);
+    auto* pageScroll = new QScrollArea;
+    pageScroll->setWidgetResizable(true);
+    pageScroll->setFrameShape(QFrame::NoFrame);
+    pageLayout->addWidget(pageScroll);
+    auto* holder = new QWidget;
+    holder->setObjectName(QStringLiteral("page"));
+    pageScroll->setWidget(holder);
+    auto* root = new QVBoxLayout(holder);
     root->setContentsMargins(18, 12, 18, 12);
     root->setSpacing(10);
 
@@ -208,18 +218,15 @@ PerformancePage::PerformancePage(QWidget* parent) : QWidget(parent) {
     auto* body = new QHBoxLayout;
     body->setSpacing(18);
     cv->addLayout(body, 1);
-    root->addWidget(card, 1);
+    root->addWidget(card);
+    root->addStretch(1);
 
-    // left: settings in a scroll area
-    auto* scroll = new QScrollArea;
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
+    // left: settings (no inner scroll — the whole page scrolls as one with the preview)
     auto* left = new QWidget;
     auto* lv = new QVBoxLayout(left);
     lv->setContentsMargins(0, 0, 10, 0);
     lv->setSpacing(8);
-    scroll->setWidget(left);
-    body->addWidget(scroll, 3);
+    body->addWidget(left, 3);
 
     {
         auto* ph = new QHBoxLayout;
@@ -353,6 +360,7 @@ PerformancePage::PerformancePage(QWidget* parent) : QWidget(parent) {
     body->addLayout(right, 2);
     right->addWidget(pibridge::ui::capsLabel(QStringLiteral("Quadview preview"), 14));
     preview_ = new qvgui::Preview;
+    preview_->setMinimumHeight(300); // the whole page scrolls now, so the preview needs its own size
     right->addWidget(preview_, 1);
     budget_ = pibridge::ui::dimLabel(QString());
     right->addWidget(budget_);
@@ -363,17 +371,20 @@ PerformancePage::PerformancePage(QWidget* parent) : QWidget(parent) {
     right->addWidget(status_);
     saved_ = pibridge::ui::dimLabel(QString());
     right->addWidget(saved_);
-    // Save / Revert for the quad views settings (buffered, like the CHOVR card above).
-    auto* qvActs = new QHBoxLayout;
-    qvActs->setSpacing(6);
-    qvActs->addStretch(1);
+    right->addStretch(1);
+    // Save / Revert for the quad views settings (buffered), centered at the bottom of the whole card.
     qvSave_ = pibridge::ui::accentButton(QStringLiteral("Save"));
     qvSave_->setToolTip(QStringLiteral("Writes the quad views settings; the layer applies them to a running game within a second."));
     qvRevert_ = pibridge::ui::toolButton(QStringLiteral("Revert"));
     qvRevert_->setToolTip(QStringLiteral("Discards the changes and reloads the saved quad views settings."));
+    auto* qvActs = new QHBoxLayout;
+    qvActs->setSpacing(6);
+    qvActs->addStretch(1);
     qvActs->addWidget(qvSave_);
     qvActs->addWidget(qvRevert_);
-    right->addLayout(qvActs);
+    qvActs->addStretch(1);
+    cv->addWidget(pibridge::ui::rule());
+    cv->addLayout(qvActs);
     connect(qvSave_, &QPushButton::clicked, this, [this] {
         save();
         qvDirty_ = false;

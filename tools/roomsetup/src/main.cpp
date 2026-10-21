@@ -18,6 +18,7 @@
 
 #include "pibridge/roommap/floor.h"
 #include "pibridge/roommap/guide_ipc.h"
+#include "pibridge/roommap/setup.h"
 #include "pibridge/roommap/store.h"
 
 #include <atomic>
@@ -461,6 +462,9 @@ int mapRoom(const Options& o) {
         args.push_back("--map-seconds");
         args.push_back(o.mapSeconds);
     }
+    if (o.quickDirect) {
+        args.push_back("--quick-direct"); // skip the in-VR Full/Quick mode menu, go straight to quick
+    }
     std::vector<char*> argv;
     for (auto& a : args) {
         argv.push_back(a.data());
@@ -572,16 +576,59 @@ int mapRoom(const Options& o) {
     // SteamVR path: write the floor/centre/forward into SteamVR's chaperone from the live head pose (the user has just
     // confirmed forward, so they are standing in the centre looking forward), then ask SteamVR to reload it.
     if (o.chaperone) {
+        std::printf("writing the SteamVR chaperone from the room setup...\n");
+        std::fflush(stdout);
         std::error_code ec2;
         const auto self = std::filesystem::read_symlink("/proc/self/exe", ec2);
         const std::string selfPath = ec2 ? std::string("pibridge-roomsetup") : self.string();
-        if (o.eyeHeight) {
-            const int cs = runTo({selfPath, "--vr-standing", "--eye-height", std::format("{:.3f}", *o.eyeHeight)}, ownLog);
-            std::printf("%s\n", cs == 0 ? "SteamVR chaperone: floor, centre and forward set from where you stood"
-                                        : ("SteamVR chaperone: could not set the standing pose (code " +
-                                           std::to_string(cs) + ", see " + ownLog + ")").c_str());
-        } else {
-            std::printf("SteamVR chaperone: no eye height given, the standing pose was left as it was\n");
+        const auto st = roommap::setup::RoomSetup::load(roommap::store::map_dir(o.room));
+        std::string perimFile;
+        // Seated is the same as standing, only with a seated eye height (~1.30 m) instead of ~1.60: the floor still goes
+        // `drop` below the LIVE head, and the chosen zone is still the play-area boundary. head_m holds the drop the
+        // setup saved (Sit ~1.30, Stand ~1.60; full = the measured floor), falling back to the app's eye height.
+        {
+            std::optional<double> drop;
+            if (st && st->head_m > 0.5 && st->head_m < 3.0) {
+                drop = st->head_m;
+            } else if (o.eyeHeight) {
+                drop = o.eyeHeight;
+            }
+            if (drop) {
+                std::vector<std::string> va{selfPath, "--vr-standing", "--eye-height", std::format("{:.3f}", *drop)};
+                // the saved boundary (traced hull in full, the auto circle in quick) as the chaperone perimeter: its
+                // setup-frame points equal the standing frame, committed with the floor/centre/forward in one Live write.
+                if (st) {
+                    const auto poly = st->boundary_setup();
+                    if (poly.size() >= 3) {
+                        std::string txt = "# pibridge chaperone perimeter (setup frame, x z metres)\n";
+                        for (const auto& p : poly) {
+                            txt += std::format("{:.4f} {:.4f}\n", p[0], p[1]);
+                        }
+                        perimFile =
+                            std::string(rt && *rt ? rt : "/tmp") + "/pibridge-perimeter-" + std::to_string(::getpid());
+                        if (room::writeFileAtomic(perimFile, txt)) {
+                            va.push_back("--perimeter");
+                            va.push_back(perimFile);
+                        } else {
+                            perimFile.clear();
+                        }
+                    }
+                }
+                const bool havePerim = !perimFile.empty();
+                const int cs = runTo(va, ownLog);
+                std::printf("%s\n",
+                            cs == 0 ? (havePerim ? "SteamVR chaperone: floor, centre, forward and the boundary set"
+                                                 : "SteamVR chaperone: floor, centre and forward set")
+                                    : ("SteamVR chaperone: could not set the standing pose (code " + std::to_string(cs) +
+                                       ", see " + ownLog + ")")
+                                          .c_str());
+            } else {
+                std::printf("SteamVR chaperone: no floor height known, the standing pose was left as it was\n");
+            }
+        }
+        if (!perimFile.empty()) {
+            std::error_code ec3;
+            std::filesystem::remove(perimFile, ec3);
         }
         (void)runTo({selfPath, "--vr-reload"}, ownLog);
     }
@@ -605,7 +652,7 @@ int main(int argc, char** argv) {
     switch (o->run) {
     case Run::VrUniverse: return vrUniverseMain();
     case Run::VrReload: return vrReloadMain();
-    case Run::VrStanding: return vrStandingMain(o->eyeHeight, o->radius, o->seated);
+    case Run::VrStanding: return vrStandingMain(o->eyeHeight, o->radius, o->seated, o->perimeterFile);
     case Run::VrZone: return vrZoneMain(*parseZoneArg(o->zoneArg));
     case Run::SelfTest: return runSelfTest(o->snapshotDir);
     case Run::List: return list(*o);

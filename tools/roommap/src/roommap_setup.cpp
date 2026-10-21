@@ -379,16 +379,21 @@ R<std::string> ensure_floor(RingGuide& gd, const std::string& dir, const std::st
 
 R<setup::RoomSetup> finish(RingGuide& gd, const std::string& dir, const std::string& name, setup::SetupMode mode,
                            const std::string& label, setup::P2 centre, double yaw, double head_y,
-                           std::vector<setup::P2> boundary, const store::RelocResult& res, bool apply_offset = true) {
-    const double floor_y = floor::StoredFloor::load(dir).transform([](const floor::StoredFloor& f) { return f.y; })
-                               .value_or(std::numeric_limits<double>::quiet_NaN());
+                           std::vector<setup::P2> boundary, const store::RelocResult& res, bool apply_offset = true,
+                           bool seated = false) {
+    const auto sf = floor::StoredFloor::load(dir);
+    const double floor_y = sf ? sf->y : std::numeric_limits<double>::quiet_NaN();
     setup::RoomSetup st;
     st.label = label;
     st.mode = mode;
+    st.seated = seated;
     st.centre = centre;
     st.yaw = yaw;
     st.boundary = std::move(boundary);
-    st.head_m = head_y - floor_y;
+    // head_m is the HEAD-RELATIVE floor drop (how far the floor is below the face); the chaperone write uses it as
+    // --eye-height. We use the floor's stored drop (head_above_m) directly so a raw room-frame floor y (which carries a
+    // huge absolute SLAM offset) can never leak into the chaperone; fall back to head_y - floor_y only if unset.
+    st.head_m = (sf && sf->head_above_m > 0.1) ? sf->head_above_m : (head_y - floor_y);
     st.when = unix_now();
     if (!setup::inside(st.boundary, st.centre)) {
         const double n = static_cast<double>(st.boundary.size());
@@ -650,7 +655,7 @@ private:
 /// forward where you look when you pull the trigger. The files written are run_steps' (finish).
 R<setup::RoomSetup> run_steps_headset(HeadsetGuide& gd, const std::string& dir, const std::string& name,
                                       const std::string& label, double map_s, const std::string& title,
-                                      bool apply_offset = true) {
+                                      bool apply_offset = true, bool quick_direct = false) {
     const std::uint32_t pid = gd.pid();
     auto map_args = [&](double secs_) {
         return s({"--source", "broker", "--seconds", rf::fixed(secs_, 0).c_str(), "--name", name.c_str()});
@@ -670,55 +675,85 @@ R<setup::RoomSetup> run_steps_headset(HeadsetGuide& gd, const std::string& dir, 
     // the Finish chip on the look-around step ends the walk early (the mapping loop polls this through stop_early)
     const std::function<bool()> stop_cb = [&gd] { return gd.finish_requested(); };
 
-    // --- the mode menu (room-setup rework): the pointer picks Full mapping or Quick setup in the headset ---
-    gd.step("mode");
-    gd.say("Room setup",
-           "Point at a button and pull the trigger. FULL MAPPING: walk the room and trace the boundary. QUICK SETUP: "
-           "look around where you stand and keep the free area found for you.",
-           std::nullopt);
+    // --- the mode menu (room-setup rework): the pointer picks Full mapping or Quick setup in the headset. QUICK ROOM
+    // SETUP launches with --quick-direct, which skips this menu and goes straight to quick. ---
     bool full = false;
-    {
+    if (!quick_direct) {
+        gd.step("mode");
+        gd.say("Room setup",
+               "Point at a button and pull the trigger. FULL MAPPING: walk the room and trace the boundary. QUICK SETUP: "
+               "look around where you stand and keep the free area found for you.",
+               std::nullopt);
         auto a = gd.wait("mode", 600.0);
         if (!a) {
             return std::unexpected(a.error());
         }
         full = !a->nums.empty() && a->nums[0] >= 0.5;
+    } else {
+        std::printf("room setup: quick-direct, skipping the mode menu\n");
     }
     const setup::SetupMode smode = full ? setup::SetupMode::Full : setup::SetupMode::Fast;
     const double walk_s = full ? std::max(map_s, 60.0) : map_s;
     std::printf("room setup mode: %s (map walk %s s)\n", full ? "full" : "quick", rf::fixed(walk_s, 0).c_str());
 
-    gd.step("map");
-    bool have_fix = false;
-    if (cam::path_exists(cam::path_join(dir, "map.bin"))) {
+    // Quick setup asks the posture and the play-area size up front: the posture sets the floor drop below the head
+    // (standing / seated) and the size sets the play-circle radius.
+    setup::Posture posture = setup::Posture::Stand;
+    double quick_radius = setup::ZONE_R_FALLBACK_M;
+    if (!full) {
+        gd.step("posture");
+        gd.say("Posture", "Will you play STANDING or SEATED? Point at a button and pull the trigger.", std::nullopt);
+        if (auto a = gd.wait("posture", 600.0)) {
+            posture = setup::posture_parse(a->nums.empty() ? 0 : static_cast<int>(std::lround(a->nums[0])));
+        } else {
+            return std::unexpected(a.error());
+        }
+        gd.step("size");
+        gd.say("Play area size", "How much space do you have? SMALL ~1 m, MEDIUM ~1.5 m, BIG ~2 m around you.",
+               std::nullopt);
+        if (auto a = gd.wait("size", 600.0)) {
+            quick_radius =
+                setup::zone_radius(setup::zone_size_parse(a->nums.empty() ? 1 : static_cast<int>(std::lround(a->nums[0]))));
+        } else {
+            return std::unexpected(a.error());
+        }
+        std::printf("quick setup: %s, play circle %s m\n", posture == setup::Posture::Sit ? "seated" : "standing",
+                    rf::fixed(quick_radius, 2).c_str());
+    }
+    const bool seated = !full && posture == setup::Posture::Sit;
+
+    // Room binding: recognise this space against a saved map (relocalize); if recognised, skip the look-around so the
+    // user does not have to look around again; otherwise (not recognised, or no saved map) do one look-around to start
+    // tracking and save a map. Applies to both flows.
+    const bool saved_room = cam::path_exists(cam::path_join(dir, "map.bin"));
+    bool recognised = false;
+    if (saved_room) {
+        gd.step("map");
         const auto r = gd.during(title, look, [&] {
-            return cmd_relocalize(s({"--source", "broker", "--seconds", "25", "--name", name.c_str()}));
+            return cmd_relocalize(s({"--source", "broker", "--seconds", "20", "--name", name.c_str()}));
         });
         if (r) {
-            have_fix = true;
-            if (auto m = map_with_feedback(gd, title, "Room recognised. Keep looking around for a few seconds.",
-                                           map_args(12.0), true, fb, &stop_cb);
-                !m) {
-                std::printf("map not updated: %s\n", m.error().c_str());
-            }
+            recognised = true;
+            std::printf("room recognised against the saved map: skipping the look-around\n");
         } else {
             if (auto f = feed_ok(pid); !f) {
                 return std::unexpected(f.error());
             }
-            std::printf("room not recognised (%s): mapping it anew\n", r.error().c_str());
-            gd.say(title, "This room does not match the saved map: making a new one.", std::nullopt);
-            std::this_thread::sleep_for(std::chrono::seconds(2));
+            std::printf("room not recognised (%s): a look-around is needed\n", r.error().c_str());
         }
     }
-    if (!have_fix) {
+    if (!recognised) {
+        gd.step("map");
         backup_map(dir);
         if (auto m = map_with_feedback(gd, title, look, map_args(walk_s), false, fb, &stop_cb); !m) {
             return std::unexpected(m.error());
         }
-        if (auto f = save_fix_from_current(dir, pid, "room setup in the headset (map built in this session)"); !f) {
+        if (auto f = save_fix_from_current(dir, pid, "room setup look-around"); !f) {
             return std::unexpected(f.error());
         }
     }
+
+    // the room fix of this session (its frame for the live head samples); both flows have one after binding
     auto res = store::RelocResult::load(cam::path_join(dir, "last-reloc.toml"));
     if (!res) {
         return std::unexpected(res.error());
@@ -728,196 +763,149 @@ R<setup::RoomSetup> run_steps_headset(HeadsetGuide& gd, const std::string& dir, 
     }
     gd.conv(res->align);
 
-    // the floor detection: set aside any older floor.toml first so this map's floor is used (live 2026-10-19: a floor
-    // of an earlier run was kept). REPEAT re-detects; BACK (from the floor step) maps a little more then re-detects.
-    std::string fstep;
-    auto detect_floor = [&]() {
-        const std::string p = cam::path_join(dir, "floor.toml");
-        if (cam::path_exists(p)) {
-            std::rename(p.c_str(), (p + ".prev").c_str());
-            std::printf("floor: the stored floor set aside (floor.toml.prev); detecting it in this map\n");
+    // the live head in the room frame (centre x z, forward heading, head y); neutral when there is no sample yet
+    const auto head_now = [&]() -> std::tuple<setup::P2, double, double> {
+        if (const auto h = gd.sample().head) {
+            return {setup::P2{h->first[0], h->first[2]}, h->second, h->first[1]};
         }
-        (void)cmd_floor(s({"detect", "--save", "--name", name.c_str(), "--min-below", "1.0"}));
-        reject_table_floor(gd, dir, name);
-        auto f = floor::StoredFloor::load(dir);
-        gd.floor_y(f ? std::optional<double>(f->y) : std::nullopt);
-        fstep = f ? "floor-confirm" : "floor-touch";
-        return f;
+        return {setup::P2{0.0, 0.0}, 0.0, 1.6};
     };
-    const auto say_floor = [&](bool found) {
-        if (gd.eye()) {
-            gd.say("Floor", "Stand up straight and press NEXT: the floor is " + rf::fixed(*gd.eye(), 2) +
-                                " m below your eyes. Nudge it up / down with the thumbstick, or touch the floor with a "
-                                "controller and pull its trigger." + (found ? std::string(" REPEAT detects it again.")
-                                                                            : std::string()),
-                   std::nullopt);
-        } else {
-            gd.say("Floor", found ? "Is the grid on the floor? Nudge it with the thumbstick, then press NEXT. Or touch the "
-                                    "floor with a controller and pull its trigger."
-                                  : "The floor was not seen. Touch the floor with a controller and pull its trigger, then "
-                                    "press NEXT.",
-                   std::nullopt);
+    // store the floor as a head-relative drop (the chaperone uses the drop, never a raw room-frame y)
+    const auto save_floor = [&](double head_y, double drop) -> R<void> {
+        floor::StoredFloor f;
+        f.y = head_y - drop;
+        f.source = floor::FloorSource::Standing;
+        f.head_above_m = drop;
+        f.confidence = 0.9;
+        f.sigma_m = 0.02;
+        f.when = unix_now();
+        if (auto w = f.save(dir); !w) {
+            return std::unexpected("the floor could not be saved: " + w.error());
         }
+        gd.floor_y(f.y);
+        return {};
     };
-    gd.say("Floor", "Finding the floor...", std::nullopt);
-    auto found_floor = detect_floor();
 
-    // --- floor / boundary / forward as a small state machine so BACK returns to the previous step ---
+    if (!full) {
+        // --- QUICK: no floor step at all. The floor is the posture default silently (standing eye height / 1.60,
+        // seated 1.30). One final confirm with a FINISH button, then everything is taken from the LIVE head: centre
+        // under the head, forward where the head looks, play area the chosen S/M/L circle. Seated writes a seated-zero
+        // chaperone with no perimeter (main.cpp). ---
+        const double drop = setup::posture_floor_drop(posture, gd.eye());
+        gd.step("confirm");
+        gd.say("Ready to save", seated ? "Sit where you want the centre and press FINISH."
+                                       : "Stand where you want the centre, look where forward should be, and press FINISH.",
+               std::nullopt);
+        if (const auto h = gd.sample().head) {
+            gd.boundary(setup::circle({h->first[0], h->first[2]}, quick_radius, 32)); // preview the play circle
+        }
+        if (auto a = gd.wait("confirm", 600.0); !a) {
+            return std::unexpected(a.error());
+        }
+        const auto [centre, yaw, head_y] = head_now();
+        if (auto w = save_floor(head_y, drop); !w) {
+            return std::unexpected(w.error());
+        }
+        std::vector<setup::P2> boundary = setup::circle(centre, quick_radius, 32);
+        gd.boundary(boundary);
+        return finish(gd, dir, name, smode, label, centre, yaw, head_y, std::move(boundary), *res, apply_offset, seated);
+    }
+
+    // --- CUSTOM / FULL (always standing): a floor fine-tune step, then draw the border, then finish. ---
     std::vector<setup::P2> boundary;
-    std::vector<setup::P2> proposal;
     setup::P2 centre{};
     double fwd_yaw = 0, fwd_head_y = 0;
-    bool have_forward = false;
     std::string phase = "floor";
     while (phase != "finish") {
         if (phase == "floor") {
-            const bool found = found_floor.has_value();
-            gd.step(fstep);
-            say_floor(found);
-            auto fa = gd.wait(fstep, 300.0);
+            // the floor starts the entered eye height (else 1.60 m) below the head; the headset shows "the floor is N m
+            // below your face" and the thumbstick nudges it +/- 1 cm within 1.00..2.00 m. NEXT answers with the drop.
+            const auto [c0, yaw0, head_y0] = head_now();
+            (void)c0;
+            (void)yaw0;
+            const double drop_default = gd.eye().value_or(setup::FLOOR_DROP_STAND_M);
+            gd.floor_y(head_y0 - drop_default);
+            gd.step("floor-confirm");
+            gd.say("Floor", "The grid shows the floor below your feet. Nudge it up / down with the thumbstick, then press "
+                            "NEXT.",
+                   std::nullopt);
+            auto fa = gd.wait("floor-confirm", 600.0);
             if (!fa) {
                 return std::unexpected(fa.error());
             }
-            if (fa->kind == "back") {
-                gd.step("map");
-                gd.say(title, look, std::nullopt);
-                (void)map_with_feedback(gd, title, look, map_args(12.0), true, fb, &stop_cb);
-                found_floor = detect_floor();
-                continue;
-            }
             if (fa->kind == "repeat") {
-                found_floor = detect_floor();
+                gd.floor_y(head_y0 - drop_default);
                 continue;
             }
-            if (fa->kind == "touch" || fa->kind == "height") {
-                const auto head = gd.sample().head;
-                floor::StoredFloor f;
-                f.y = fa->nums[0];
-                const bool standing = fa->kind == "height";
-                f.source = standing ? floor::FloorSource::Standing : floor::FloorSource::Touch;
-                f.confidence = standing ? 0.9 : 1.0;
-                f.sigma_m = standing ? 0.02 : 0.0;
-                f.head_above_m = standing ? fa->nums[1] : head ? head->first[1] - f.y : 0.0;
-                f.when = unix_now();
-                if (auto w = f.save(dir); !w) {
-                    return std::unexpected("the floor could not be saved: " + w.error());
+            if (fa->kind == "height" && fa->nums.size() == 2) {
+                // nums[0] = floor room y (head - drop), nums[1] = the head-relative drop (clamped in the headset)
+                const auto [cc, yy, hy] = head_now();
+                (void)cc;
+                (void)yy;
+                if (auto w = save_floor(hy, fa->nums[1]); !w) {
+                    return std::unexpected(w.error());
                 }
-                std::printf("floor from %s in the headset: y %s m in the room frame\n",
-                            standing ? ("the head standing upright, eye height " + rf::fixed(fa->nums[1], 2) + " m").c_str()
-                                     : "the controller touch",
-                            rf::fixed(f.y, 3, true).c_str());
-                gd.floor_y(f.y);
-                found_floor = f;
-            } else if (fa->kind == "yes") {
-                if (!found) {
-                    gd.say("Floor", "The floor was not seen yet: touch it with a controller, then press NEXT.", std::nullopt);
-                    continue;
-                }
-            } else {
-                continue; // an answer for another step, or an unexpected one: ask again
+                std::printf("floor set %s m below the face\n", rf::fixed(fa->nums[1], 2).c_str());
+                phase = "boundary";
             }
-            phase = "boundary";
             continue;
         }
-        if (phase == "boundary") {
-            auto fl = floor::StoredFloor::load(dir);
-            if (!fl) {
-                return std::unexpected("no floor: " + fl.error());
+        // phase == "boundary"
+        auto fl = floor::StoredFloor::load(dir);
+        if (!fl) {
+            return std::unexpected("no floor: " + fl.error());
+        }
+        gd.step("boundary");
+        gd.say("Play area", "Hold the trigger and draw the edge of your space on the floor, then press SAVE.",
+               std::nullopt);
+        bool advanced = false;
+        while (!advanced) {
+            auto a = gd.wait("boundary", 600.0);
+            if (!a) {
+                return std::unexpected(a.error());
             }
-            const double floor_y = fl->y;
-            proposal.clear();
-            if (const auto head = gd.sample().head) {
-                const setup::P2 c0{head->first[0], head->first[2]};
-                if (auto m = map::RoomMap::load(dir)) {
-                    const auto [pts, heads] = floor::map_points(*m, 4.5);
-                    (void)heads;
-                    std::vector<std::array<double, 3>> p3(pts.begin(), pts.end());
-                    const auto [obs, ext] = setup::obstacles_from_points(p3, floor_y, c0, head->second);
-                    for (const auto& p : setup::free_area(obs, ext, 2.5)) {
-                        proposal.push_back(setup::to_room(c0, head->second, p));
-                    }
-                }
+            if (a->kind == "back") {
+                phase = "floor";
+                break;
             }
-            gd.boundary(proposal);
-            gd.step("boundary");
-            gd.say("Play area",
-                   (!full && proposal.size() >= 3)
-                       ? "The yellow line is the free floor around you. Press SAVE to keep it, or hold the trigger and "
-                         "draw the edge on the floor with the controller, then SAVE."
-                       : "Hold the trigger and draw the edge of your space on the floor with the controller, then press "
-                         "SAVE.",
-                   std::nullopt);
-            bool advanced = false;
-            while (!advanced) {
-                auto a = gd.wait("boundary", 300.0);
-                if (!a) {
-                    return std::unexpected(a.error());
+            if (a->kind == "repeat") {
+                gd.boundary({});
+                gd.say("Play area", "Hold the trigger and draw the edge of your space on the floor, then press SAVE.",
+                       std::nullopt);
+                continue;
+            }
+            if (a->kind == "path") {
+                std::vector<setup::P2> path;
+                for (std::size_t i = 0; i + 1 < a->nums.size(); i += 2) {
+                    path.push_back({a->nums[i], a->nums[i + 1]});
                 }
-                if (a->kind == "back") {
-                    phase = "floor";
-                    break;
-                }
-                if (a->kind == "repeat") {
-                    gd.boundary(proposal);
-                    gd.say("Play area", "Hold the trigger and draw the edge of your space on the floor, then press SAVE.",
-                           std::nullopt);
-                    continue;
-                }
-                if (a->kind == "yes" && proposal.size() >= 3) {
-                    boundary = proposal;
-                    phase = "forward";
+                // tidy the stroke (clamp to <= 5 m from the centre, drop near-duplicate points, cap the count), then
+                // accept it only if the convex hull encloses a usable play area (>= 1.5 m^2).
+                const auto [c, yaw, head_y] = head_now();
+                const auto prepared = setup::prepare_boundary(path, c);
+                auto b = setup::clean_boundary(prepared, setup::MIN_POINT_SPACING_M);
+                if (b && setup::zone_area_ok(*b)) {
+                    boundary = *b;
+                    gd.boundary(boundary);
+                    centre = c;        // centre / forward from the live head, no separate forward step
+                    fwd_yaw = yaw;
+                    fwd_head_y = head_y;
+                    phase = "finish";
                     advanced = true;
                     break;
                 }
-                if (a->kind == "path") {
-                    std::vector<setup::P2> path;
-                    for (std::size_t i = 0; i + 1 < a->nums.size(); i += 2) {
-                        path.push_back({a->nums[i], a->nums[i + 1]});
-                    }
-                    auto b = setup::clean_boundary(path, 0.05);
-                    if (b) {
-                        boundary = *b;
-                        gd.boundary(boundary);
-                        phase = "forward";
-                        advanced = true;
-                        break;
-                    }
-                    gd.say("Play area", b.error() + ". Hold the trigger and draw it again, then press SAVE.", std::nullopt);
-                    continue;
-                }
-                gd.say("Play area", "Hold the trigger and draw the edge of your space on the floor, then press SAVE.",
-                       std::nullopt);
+                const std::string why = !b ? b.error()
+                                           : ("the area is too small, it needs at least " +
+                                              rf::fixed(setup::MIN_ZONE_AREA_M2, 1) + " m^2");
+                gd.say("Play area", why + ". Hold the trigger and draw a bigger loop, then press SAVE.", std::nullopt);
+                continue;
             }
-            continue;
-        }
-        // phase == "forward"
-        gd.step("forward");
-        gd.say("Forward", "Stand in the middle of your play space, look where forward should be and press NEXT (or pull the "
-                          "trigger).",
-               std::nullopt);
-        auto fw = gd.wait("forward", 300.0);
-        if (!fw) {
-            return std::unexpected(fw.error());
-        }
-        if (fw->kind == "back") {
-            phase = "boundary";
-            continue;
-        }
-        if (fw->kind == "repeat") {
-            continue;
-        }
-        if (fw->kind == "forward") {
-            centre = setup::P2{fw->nums[0], fw->nums[1]};
-            fwd_yaw = fw->nums[2];
-            fwd_head_y = fw->nums[3];
-            have_forward = true;
-            phase = "finish";
+            gd.say("Play area", "Hold the trigger and draw the edge of your space on the floor, then press SAVE.",
+                   std::nullopt);
         }
     }
-    if (!have_forward) {
-        return std::unexpected(std::string("forward direction not set"));
-    }
-    return finish(gd, dir, name, smode, label, centre, fwd_yaw, fwd_head_y, std::move(boundary), *res, apply_offset);
+    return finish(gd, dir, name, smode, label, centre, fwd_yaw, fwd_head_y, std::move(boundary), *res, apply_offset,
+                  seated);
 }
 
 R<void> cmd_setup_run(setup::SetupMode mode, Args v) {
@@ -939,6 +927,8 @@ R<void> cmd_setup_run(setup::SetupMode mode, Args v) {
     // SteamVR path: save the setup but do NOT write the Monado world offset (pibridge-roomsetup --vr-standing puts the
     // floor/centre/forward into SteamVR's chaperone instead). Also skips the ">20 m offset" guard of the offset write.
     const bool no_offset = flag(v, "--no-offset");
+    // QUICK ROOM SETUP launches with --quick-direct: the headset flow skips the Full/Quick mode menu and goes to quick.
+    const bool quick_direct = flag(v, "--quick-direct");
     auto guide_o = opt(v, "--guide");
     if (!guide_o) {
         return std::unexpected(guide_o.error());
@@ -973,9 +963,14 @@ R<void> cmd_setup_run(setup::SetupMode mode, Args v) {
     if (tag_holds(*pid)) {
         return std::unexpected("the AprilTag placed the world in this session: press Clear offset on the Room page first");
     }
+    // The room setup is SteamVR-chaperone-only: finish() writes no Monado world offset. The (now vestigial) offset
+    // lease must therefore NOT be able to block a user-initiated setup. Take it when it is free, but if a leftover or
+    // background holder (e.g. the relocalizer, or a stale pid) has it, just carry on — the setup still finishes to the
+    // SteamVR chaperone, and it never writes the offset, so holding the lease is not required.
     if (auto l = take_lease(*pid, anchor::Role::Setup); !l) {
-        write_status(status_path(), "failed", name, *pid, "Room setup stopped: " + l.error());
-        return l;
+        std::printf("note: could not take the room offset lease (%s); continuing anyway (the setup writes no Monado "
+                    "offset, only the SteamVR chaperone)\n",
+                    l.error().c_str());
     }
     if (*guide_o) {
         // PiBridge: the in-headset room setup (pibridge-roomsetup --map) shows the steps and answers them
@@ -984,7 +979,7 @@ R<void> cmd_setup_run(setup::SetupMode mode, Args v) {
         std::filesystem::create_directories(gdir, ec);
         std::filesystem::remove(gdir + "/" + guide::ANSWER_FILE, ec);
         HeadsetGuide hg(dir, *pid, gdir, ::getppid(), eye);
-        auto r = run_steps_headset(hg, dir, name, label, *map_s, "Room setup", !no_offset);
+        auto r = run_steps_headset(hg, dir, name, label, *map_s, "Room setup", !no_offset, quick_direct);
         if (r) {
             hg.step("done");
             hg.say("Room setup done",

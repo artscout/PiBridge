@@ -473,9 +473,9 @@ static int cmd_synth(const char *work)
 		char xdg[4096];
 		snprintf(xdg, sizeof xdg, "%s/xdg", work);
 		mkdir(xdg, 0755);
-		snprintf(p, sizeof p, "%s/xdg/omarchyvr", work);
+		snprintf(p, sizeof p, "%s/xdg/pibridge", work);
 		mkdir(p, 0755);
-		snprintf(p, sizeof p, "%s/xdg/omarchyvr/lens.conf", work);
+		snprintf(p, sizeof p, "%s/xdg/pibridge/lens.conf", work);
 		write_text(p, "fov = 40 41 42 43\n");
 		clear_env();
 		setenv("HOME", home, 1);

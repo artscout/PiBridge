@@ -153,7 +153,13 @@ std::string Status::summary() const {
                            audio.empty() ? std::string("none") : audio, dropped_tap, dropped_ring, duplicated);
     }
     if (state == "starting") {
-        return source == "mirror" ? "starting (waiting for SteamVR's mirror)" : "starting (waiting for Monado's recorder tap)";
+        if (source == "mirror") {
+            return "starting (waiting for SteamVR's mirror)";
+        }
+        if (source == "layer") {
+            return "starting (waiting for the Vulkan capture layer)";
+        }
+        return "starting (waiting for Monado's recorder tap)";
     }
     if (state == "finalizing") {
         return "finishing " + file;

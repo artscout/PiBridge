@@ -21,6 +21,7 @@ add_library(pibridge_app_core STATIC
     src/core/monado_build.cpp src/core/monado_build.h src/core/anchor_offset.cpp src/core/anchor_offset.h src/core/roommap_link.cpp src/core/roommap_link.h src/core/steamvr_drivers.cpp src/core/steamvr_drivers.h
     src/core/device_info.cpp src/core/device_info.h src/core/sound_test.cpp src/core/sound_test.h
     src/core/vr_backgrounds.cpp src/core/vr_backgrounds.h src/core/vr_panel.cpp src/core/vr_panel.h
+    src/core/overlay_control.cpp src/core/overlay_control.h
     src/core/video_record.cpp src/core/video_record.h
     src/core/controllers.cpp src/core/controllers.h
     src/qv/settings.cpp src/qv/fovmath.cpp)
@@ -62,7 +63,7 @@ target_link_libraries(pibridge-app PRIVATE pibridge_app_core Qt6::Widgets)
 install(TARGETS pibridge-app RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES ${PROJECT_SOURCE_DIR}/docs/app.md ${PROJECT_SOURCE_DIR}/docs/INSTALL.md ${PROJECT_SOURCE_DIR}/docs/TRACKING.md
     ${PROJECT_SOURCE_DIR}/docs/DEVELOPMENT.md ${PROJECT_SOURCE_DIR}/docs/ROOM-SETUP.md ${PROJECT_SOURCE_DIR}/docs/home.md
-    ${PROJECT_SOURCE_DIR}/docs/record.md
+    ${PROJECT_SOURCE_DIR}/docs/record.md ${PROJECT_SOURCE_DIR}/docs/OVERLAY.md
     DESTINATION ${CMAKE_INSTALL_DOCDIR} OPTIONAL)
 # The desktop entry names the installed binary by its full path (~/.local/bin is not on every session's PATH).
 set(PIBRIDGE_APP_EXEC "${CMAKE_INSTALL_FULL_BINDIR}/pibridge")
@@ -83,6 +84,12 @@ if(PIBRIDGE_BUILD_TESTS)
     add_executable(pibridge_app_tests tests/test_app_core.cpp)
     target_link_libraries(pibridge_app_tests PRIVATE pibridge_app_core)
     add_test(NAME pibridge_app_tests COMMAND pibridge_app_tests)
+    # The SteamVR dashboard panel: the status words, the chip, finding the binary, and the persisted switch (fake mode:
+    # no process is started).
+    add_executable(pibridge_overlay_control_tests tests/test_overlay_control.cpp)
+    target_link_libraries(pibridge_overlay_control_tests PRIVATE pibridge_app_core)
+    add_test(NAME pibridge_overlay_control_tests COMMAND pibridge_overlay_control_tests)
+    set_tests_properties(pibridge_overlay_control_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     # The Apps page's logic: the VDF/ACF reader, the Steam library, apps.toml, the launcher, SteamVR readiness.
     add_executable(pibridge_apps_tests tests/test_apps.cpp)
     target_link_libraries(pibridge_apps_tests PRIVATE pibridge_app_core)

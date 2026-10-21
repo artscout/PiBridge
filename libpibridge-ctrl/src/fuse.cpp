@@ -437,7 +437,7 @@ std::string calib_path() {
         return *p;
     }
     const std::string h = io::env_os("HOME").value_or("");
-    return io::path_join(h, ".config/omarchyvr/ctrl-imu.json");
+    return io::path_join(h, ".config/pibridge/ctrl-imu.json");
 }
 
 std::vector<double> nums(std::string_view s) {

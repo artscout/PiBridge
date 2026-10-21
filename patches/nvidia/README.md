@@ -15,7 +15,8 @@ The two GPU generations need different patches: Blackwell (RTX 50) has no 2Heads
 | GPU generation | Headset | Driver | Patches | Status |
 |---|---|---|---|---|
 | RTX 50 (Blackwell) | Crystal Super | 595.99.02 | `blackwell/595.99.02/0001-nvidia-dp-fec-reread.patch` | **tested**: RTX 5090 + Crystal Super Micro-OLED, Ubuntu 26.04, kernel 7.0, 2026-10-18 (with the EDID override, see below) |
-| RTX 50 (Blackwell) | Crystal Super | 610.57.04, 615.71.09, 615.78.08 | the same file | applies unchanged (`git apply --check`); not built, not tested |
+| RTX 50 (Blackwell) | Crystal Super | **615.71.09+** | **none needed** | **tested 2026-10-21**: stock Ubuntu `linux-modules-nvidia-615-open` (615.71.09, Canonical-signed) drives the Crystal Super with a picture — the FEC/DSC fix is upstream, so no patch. Install the packaged `-open` module and remove any older hand-built override |
+| RTX 50 (Blackwell) | Crystal Super | 610.57.04, 615.78.08 | the same file | applies unchanged (`git apply --check`); not built, not tested (615.71.09 already works without it) |
 | RTX 50 (Blackwell) | Dream Air | any | none known | not tried |
 | RTX 20/30/40 | Dream Air | 610.57.04 | `pre-blackwell/610.57.04/0001`-`0003` | **tested** by omarchyvr (its `tested-versions.txt`; RTX 40). The original header of `0002` was written before that hardware run and still says "not verified" |
 | RTX 20/30/40 | Dream Air | 615.78.08 | `pre-blackwell/615.78.08/0001`-`0003` | ported by omarchyvr, compile-checked, **untested** on hardware |

@@ -228,15 +228,15 @@ std::vector<std::string> DeviceCalib::default_candidates() {
         c.push_back(*v);
     }
     if (auto h = env_os("HOME")) {
-        // PiBridge's own config folders first, but only when the file is there: the list (and the "not found" text)
-        // stays the Rust one otherwise.
-        for (const char* own : {".config/pibridge/headset-calibration.xml", ".config/pimax-linux/headset-calibration.xml"}) {
-            const std::string p = path_join(*h, own);
+        // PiBridge's own config folder is the default; the earlier names (pimax-linux, omarchyvr) are read only when
+        // the file is there (docs/CONVENTIONS.md).
+        c.push_back(path_join(*h, ".config/pibridge/headset-calibration.xml"));
+        for (const char* legacy : {".config/pimax-linux/headset-calibration.xml", ".config/omarchyvr/headset-calibration.xml"}) {
+            const std::string p = path_join(*h, legacy);
             if (is_file(p)) {
                 c.push_back(p);
             }
         }
-        c.push_back(path_join(*h, ".config/omarchyvr/headset-calibration.xml"));
         // the repo the way omarchyvr_config::paths::repo_dir finds it: $PIMAX_REPO, the installed data copy, else
         // ~/omarchyvr
         std::string repo;

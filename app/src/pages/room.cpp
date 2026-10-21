@@ -584,7 +584,11 @@ QString RoomPage::roommapTool() const { return findTool_ ? findTool_(QStringLite
 
 QString RoomPage::toolPath() const { return findTool_ ? findTool_(QStringLiteral("pibridge-roomsetup")) : QString(); }
 
-void RoomPage::mapRoom() {
+void RoomPage::launchSetup() { mapRoom(false); }
+
+void RoomPage::launchQuickSetup() { mapRoom(true); }
+
+void RoomPage::mapRoom(bool quick) {
     const RingFeed feed = fake_ ? RingFeed{} : readRingFeed();
     const RoomGate g = mapRoomHeadsetGate(insideOut(), roommapTool(), toolPath(), feed, mapRunning_);
     if (!g.ok) {
@@ -597,9 +601,13 @@ void RoomPage::mapRoom() {
     say(QStringLiteral("Setting up the playspace \"%1\": put the headset on. You see your room through the cameras with "
                        "the steps: stand in the middle, look around, then stand still looking forward.").arg(name));
     updateView();
-    const bool steamvr = conf_ && ioSettings(*conf_).apps == IoApps::SteamVr;
+    // The inside-out session room setup runs in is always SteamVR + Monado (io_session.h: io_apps no longer chooses the
+    // runtime; "monado" still gets the SteamVR start on the Tracking page). The room setup is SteamVR-chaperone-only, so
+    // always ask pibridge-roomsetup to write the floor/centre/forward into SteamVR's chaperone (--chaperone). Gating this
+    // on io_apps was a leftover of the old runtime choice and silently skipped the chaperone when io_apps=monado.
+    constexpr bool chaperone = true;
     runner_.run(toolPath(), roomMapHeadsetArgs(name, roommapTool(), AnchorFiles::defaults().ring,
-                                               eyeHeightOf(bodyH_->text(), eyeH_->text()), steamvr),
+                                               eyeHeightOf(bodyH_->text(), eyeH_->text()), chaperone, quick),
                 [this, name, pid = feed.pid](int code, const QString& output) {
         mapRunning_ = false;
         QFile f(roomStatusPath());

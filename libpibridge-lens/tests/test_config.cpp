@@ -202,10 +202,10 @@ TEST(implausible_values_are_rejected_and_leave_the_setting_alone) {
 
 TEST(path_resolution_and_off_switch) {
     CHECK(config_path(env_of({{"PIMAX_LENS_CONF", "/x/y.conf"}, {"HOME", "/h"}})) == "/x/y.conf");
-    CHECK(config_path(env_of({{"XDG_CONFIG_HOME", "/xdg"}, {"HOME", "/h"}})) == "/xdg/omarchyvr/lens.conf");
-    CHECK(config_path(env_of({{"HOME", "/h"}})) == "/h/.config/omarchyvr/lens.conf");
-    CHECK(config_path(env_of({})) == "./.config/omarchyvr/lens.conf");
-    CHECK(config_path(env_of({{"PIMAX_LENS_CONF", ""}, {"HOME", "/h"}})) == "/h/.config/omarchyvr/lens.conf");
+    CHECK(config_path(env_of({{"XDG_CONFIG_HOME", "/xdg"}, {"HOME", "/h"}})) == "/xdg/pibridge/lens.conf");
+    CHECK(config_path(env_of({{"HOME", "/h"}})) == "/h/.config/pibridge/lens.conf");
+    CHECK(config_path(env_of({})) == "./.config/pibridge/lens.conf");
+    CHECK(config_path(env_of({{"PIMAX_LENS_CONF", ""}, {"HOME", "/h"}})) == "/h/.config/pibridge/lens.conf");
     CHECK(forced_off(env_of({{"PIMAX_LENS_OFF", "1"}})));
     CHECK(forced_off(env_of({{"PIMAX_LENS_OFF", "yes"}})));
     CHECK(!forced_off(env_of({{"PIMAX_LENS_OFF", "0"}})));

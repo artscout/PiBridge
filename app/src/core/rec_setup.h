@@ -34,6 +34,10 @@ inline constexpr char kWinbridge[] = "rec_winbridge";        // winbridge.exe (t
 inline constexpr char kVitBridge[] = "rec_vit_winbridge";    // libpibridge_vit_winbridge.so (Monado's VIT library for it)
 inline constexpr char kSlamConfig[] = "rec_slam_config";
 inline constexpr char kLens[] = "rec_lens_conf";
+// The lens profile the Pimax (Monado) driver renders through: "default" = crystal-chovr.conf (CHOVR's camera-calibrated
+// default, FOV 98x88), "pimax" = crystal-pimax.conf (geometry captured from the Pimax compositor, FOV 98.2x87.1). Picks
+// which shipped lens file is used; an explicit rec_lens_conf path still wins.
+inline constexpr char kLensProfile[] = "lens_profile";
 inline constexpr char kCalib[] = "rec_cam_calib";
 inline constexpr char kConnector[] = "rec_connector";
 inline constexpr char kCamDevice[] = "rec_cam_device";
@@ -45,6 +49,7 @@ inline constexpr char kEnv[] = "rec_env";
 // Where the lookups look. defaults() = the real system.
 struct RecEnv {
     QString home;        // ~
+    QString prefix;      // the install prefix (core/paths.h installPrefix()): engine/data looked up under it first
     QString configDir;   // $XDG_CONFIG_HOME/pibridge
     QString dataHome;    // $XDG_DATA_HOME (~/.local/share)
     QString stateHome;   // $XDG_STATE_HOME (~/.local/state)
@@ -97,6 +102,11 @@ struct RecSetup {
     QString roomName;             // io_room, default "home" (core/roommap_link.h)
     bool roomSaved = false;       // that room has a saved map: the session starts pibridge-roommap auto
     int refreshHz = 90;           // refresh_hz (PIMAX_FPS)
+    // Eye tracking (eye_tracking in pibridge.conf, the dashboard's Quick-settings toggle). In an inside-out session the
+    // Pimax driver owns the eye chip directly (PIMAX_EYE=1): pibridge-eyed releases it for the duration (the inside-out
+    // pause marker, common/pibridge_pause.h), so there is no USB contention.
+    bool eyeTracking = false;
+    QString eyeCalib;             // the per-eye calibration file (PIMAX_EYE_CALIBRATION), $XDG_CONFIG_HOME/pibridge/eye-calibration.toml
     QString sessionSlamConfig;    // PiBridge's generated Basalt config, set at the start ("" = slamConfig as it is)
     int sessionSlamCams = 0;      // cameras in that config's calibration (0 = not made or not known)
     QString slamTool;             // pibridge-slam (tools/slam; "" when not found): the four-camera calibration

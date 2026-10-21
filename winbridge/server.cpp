@@ -1,18 +1,18 @@
-// pibridge winbridge-сервер: держит под Wine настоящие трекинговые движки Pimax Play — head-SLAM
-// (pimax_slam.pi.dll) и LED-трекинг контроллеров (LedObjectPoseEstimator.dll) — и обслуживает одного
-// Linux-клиента (libpibridge_vit_winbridge.so в Monado) по TCP localhost (proto.h).
-// Сборка: x86_64-w64-mingw32-g++ -O2 -static server.cpp -lws2_32 -o winbridge.exe
-// Запуск: WINEDEBUG=-all wine winbridge.exe [port]
+// pibridge winbridge server: hosts the real Pimax Play tracking engines under Wine -- head SLAM
+// (pimax_slam.pi.dll) and controller LED tracking (LedObjectPoseEstimator.dll) -- and serves one
+// Linux client (libpibridge_vit_winbridge.so in Monado) over TCP localhost (proto.h).
+// Build: x86_64-w64-mingw32-g++ -O2 -static server.cpp -lws2_32 -o winbridge.exe
+// Run: WINEDEBUG=-all wine winbridge.exe [port]
 //
-// Всё как у pi_server (frida pass1-3, re-dll/README.md):
-//   голова:      HeadsetInitialImpl -> SetTrackingMode(1) -> SetDeviceEnable(1); PutCameraImage(4 кадра),
-//                PutHmdImuData -> поза в выходном буфере;
-//   контроллеры: ControllerInitialImpl -> SetDeviceEnable(1) -> AddObject(рука, 15 LED, ImuToDevice, ...)
-//                из slam\H1\<серийник>\controller_params.json; PutCameraImage(4 LED-кадра, поза головы, NULL),
-//                PutControllerImuData -> поза в выходном буфере.
-// LED-движок живёт в осях (x, z, -y) мира SLAM (поворот мира Rx(-90°), тело то же; проверено по одной позе
-// головы, пойманной в pass1 и pass3 в двух видах). Сервер переводит туда позу головы и обратно позы контроллеров.
-// Kit: $PIBRIDGE_WINDATA или <домашняя папка Wine>\.local\share\pibridge\windata (dlls\ + slam\).
+// Everything as in pi_server (frida pass1-3, re-dll/README.md):
+//   head:        HeadsetInitialImpl -> SetTrackingMode(1) -> SetDeviceEnable(1); PutCameraImage(4 frames),
+//                PutHmdImuData -> pose in the output buffer;
+//   controllers: ControllerInitialImpl -> SetDeviceEnable(1) -> AddObject(hand, 15 LED, ImuToDevice, ...)
+//                from slam\H1\<serial>\controller_params.json; PutCameraImage(4 LED frames, head pose, NULL),
+//                PutControllerImuData -> pose in the output buffer.
+// The LED engine lives in axes (x, z, -y) of the SLAM world (world rotation Rx(-90 deg), body unchanged; verified on one
+// head pose caught in pass1 and pass3 in two forms). The server converts the head pose into that frame and controller poses back.
+// Kit: $PIBRIDGE_WINDATA or <Wine home folder>\.local\share\pibridge\windata (dlls\ + slam\).
 
 #include <winsock2.h>
 #include <windows.h>
@@ -28,27 +28,27 @@ typedef int (*SetByteFn)(int);
 typedef int (*PutCamFn)(void*, void*, void*, void*, float);
 typedef int (*PutImuFn)(void*, void*);
 
-// Головной кадр: {u64 ts; u32 выдержка_нс; u32 усиление; u32 idx; w; h; stride; px} (0 выдержки = кадр отброшен).
+// Head frame: {u64 ts; u32 exposure_ns; u32 gain; u32 idx; w; h; stride; px} (0 exposure = frame dropped).
 struct CamFrame {
     uint64_t ts;
-    uint64_t shutter_gain;  // выдержка | усиление << 32
+    uint64_t shutter_gain;  // exposure | gain << 32
     uint32_t idx, width, height, stride;
     uint8_t* pixels;
 };
-static_assert(sizeof(CamFrame) == 40, "CamFrame должен быть 40 байт");
+static_assert(sizeof(CamFrame) == 40, "CamFrame must be 40 bytes");
 struct ImuSample { uint64_t ts; float accel[3]; float gyro[3]; float pad[8]; };
 
-// LED-кадр: {u64 ts; u32 выдержка_нс; u32 idx; w; h; stride; pad; px}.
+// LED frame: {u64 ts; u32 exposure_ns; u32 idx; w; h; stride; pad; px}.
 struct LedFrame {
     uint64_t ts;
     uint32_t shutter_ns, idx;
     uint32_t width, height, stride, pad;
     uint8_t* pixels;
 };
-static_assert(sizeof(LedFrame) == 40, "LedFrame должен быть 40 байт");
+static_assert(sizeof(LedFrame) == 40, "LedFrame must be 40 bytes");
 struct HeadPoseForLed { float q[4]; float p[3]; float pad[9]; };
 struct LedRec { int32_t id; float pos[3]; float normal[3]; };
-struct MsvcString { char buf[16]; uint64_t size; uint64_t cap; };  // std::string MSVC x64, короткая строка
+struct MsvcString { char buf[16]; uint64_t size; uint64_t cap; };  // std::string MSVC x64, short string
 typedef int (*CtrlAddFn)(int, int, const LedRec*, const float*, int, int, int, const MsvcString*);
 typedef int (*CtrlPutCamFn)(void*, void*, void*, void*, const HeadPoseForLed*, void*);
 typedef int (*CtrlPutImuFn)(int, void*, float*, float*);
@@ -58,11 +58,11 @@ static PutImuFn g_putImu;
 static CtrlPutCamFn g_ctrlCam;
 static CtrlPutImuFn g_ctrlImu;
 static bool g_ctrlOn = false;
-static float g_devFromImu[2][4] = {{0, 0, 0, 1}, {0, 0, 0, 1}};  // ImuToDevice каждой руки (quat x,y,z,w)
-static float g_head[13] = {0, 0, 0, 1};  // последняя поза головы (мир SLAM)
-static bool g_headSeen = false;          // от головы пришёл хотя бы один IMU (иначе мир = шлем)
+static float g_devFromImu[2][4] = {{0, 0, 0, 1}, {0, 0, 0, 1}};  // ImuToDevice of each hand (quat x,y,z,w)
+static float g_head[13] = {0, 0, 0, 1};  // latest head pose (SLAM world)
+static bool g_headSeen = false;          // at least one IMU from the head arrived (otherwise world = headset)
 
-// ---- оси LED-движка: v_led = (x, z, -y), q_led = Q * q_slam, Q = Rx(-90°) ----
+// ---- LED engine axes: v_led = (x, z, -y), q_led = Q * q_slam, Q = Rx(-90 deg) ----
 static const float kQ[4] = {-0.70710678f, 0.0f, 0.0f, 0.70710678f};
 static void qmul(const float a[4], const float b[4], float o[4]) {
     o[0] = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1];
@@ -91,8 +91,8 @@ static bool send_msg(SOCKET s, uint32_t type, const void* payload, uint32_t len)
 static char g_dlls[MAX_PATH], g_slam[MAX_PATH], g_calib[MAX_PATH];
 
 static bool find_kit() {
-    // $PIBRIDGE_WINDATA (Windows-путь; так запускает PiBridge), иначе домашняя папка из $WINEHOMEDIR
-    // ("\??\Z:\home\<user>": Wine не передаёт HOME в Windows-процесс) + \.local\share\pibridge\windata
+    // $PIBRIDGE_WINDATA (Windows path; this is how PiBridge launches it), otherwise the home folder from $WINEHOMEDIR
+    // ("\??\Z:\home\<user>": Wine does not pass HOME to the Windows process) + \.local\share\pibridge\windata
     const char* kit = getenv("PIBRIDGE_WINDATA");
     const char* wh = getenv("WINEHOMEDIR");
     char base[MAX_PATH];
@@ -102,21 +102,21 @@ static bool find_kit() {
         if (strncmp(wh, "\\??\\", 4) == 0) wh += 4;
         snprintf(base, sizeof(base), "%s\\.local\\share\\pibridge\\windata", wh);
     } else {
-        fprintf(stderr, "нет PIBRIDGE_WINDATA и WINEHOMEDIR\n");
+        fprintf(stderr, "no PIBRIDGE_WINDATA and WINEHOMEDIR\n");
         return false;
     }
     for (char* p = base; *p; ++p) if (*p == '/') *p = '\\';
     snprintf(g_dlls, sizeof(g_dlls), "%s\\dlls", base);
     snprintf(g_slam, sizeof(g_slam), "%s\\slam", base);
-    // калибровка конкретного шлема: device_calibration_<серийник>.xml, скопированная из Pimax Play
+    // calibration for the specific headset: device_calibration_<serial>.xml, copied from Pimax Play
     char pat[MAX_PATH];
     snprintf(pat, sizeof(pat), "%s\\device_calibration_*.xml", g_slam);
     WIN32_FIND_DATAA fd;
     HANDLE fh = FindFirstFileA(pat, &fd);
-    if (fh == INVALID_HANDLE_VALUE) { fprintf(stderr, "нет %s\n", pat); return false; }
+    if (fh == INVALID_HANDLE_VALUE) { fprintf(stderr, "no %s\n", pat); return false; }
     FindClose(fh);
     snprintf(g_calib, sizeof(g_calib), "%s\\%s", g_slam, fd.cFileName);
-    printf("калибровка: %s\n", fd.cFileName);
+    printf("calibration: %s\n", fd.cFileName);
     SetDllDirectoryA(g_dlls);
     return true;
 }
@@ -133,7 +133,7 @@ static bool init_slam() {
     g_putCam = (PutCamFn)GetProcAddress(h, "HeadsetPutCameraImage");
     g_putImu = (PutImuFn)GetProcAddress(h, "HeadsetPutHmdImuData");
     if (!initial || !setMode || !enable || !g_putCam || !g_putImu) {
-        fprintf(stderr, "не все экспорты SLAM найдены\n"); return false;
+        fprintf(stderr, "not all SLAM exports found\n"); return false;
     }
     int r = initial(g_calib, g_slam, vocab, nullptr, nullptr);
     int m = setMode(1);
@@ -142,7 +142,7 @@ static bool init_slam() {
     return r == 0 && m == 0 && e == 0;
 }
 
-// ---- контроллеры ----
+// ---- controllers ----
 static bool numbers_after(const char* s, const char* key, double* out, int count) {
     const char* p = strstr(s, key);
     if (!p || !(p = strchr(p, '['))) return false;
@@ -157,7 +157,7 @@ static bool numbers_after(const char* s, const char* key, double* out, int count
     return true;
 }
 
-// controller_params.json: рука, светодиоды {pos, normal}, ImuToDevice (4x4 row-major) -> quat(x,y,z,w) + сдвиг
+// controller_params.json: hand, LEDs {pos, normal}, ImuToDevice (4x4 row-major) -> quat(x,y,z,w) + translation
 struct CtrlModel { int hand = -1; int n = 0; LedRec leds[32]; float imu7[8] = {0}; };
 static bool load_ctrl_model(const char* path, CtrlModel& m) {
     FILE* f = fopen(path, "rb");
@@ -195,26 +195,26 @@ static bool load_ctrl_model(const char* path, CtrlModel& m) {
     return m.hand >= 0 && m.n > 0;
 }
 
-// Контроллеры необязательны: без них голова работает как прежде.
+// Controllers are optional: without them the head works as before.
 static void init_ctrl() {
     char dll[MAX_PATH], db[MAX_PATH];
     snprintf(dll, sizeof(dll), "%s\\LedObjectPoseEstimator.dll", g_dlls);
     snprintf(db, sizeof(db), "%s\\pimax_database.bin", g_slam);
     HMODULE h = LoadLibraryA(dll);
-    if (!h) { fprintf(stderr, "контроллеры выключены: LoadLibrary %s -> %lu\n", dll, GetLastError()); return; }
+    if (!h) { fprintf(stderr, "controllers off: LoadLibrary %s -> %lu\n", dll, GetLastError()); return; }
     auto initial = (InitialFn)GetProcAddress(h, "ControllerInitialImpl");
     auto enable = (SetByteFn)GetProcAddress(h, "ControllerSetDeviceEnable");
     auto add = (CtrlAddFn)GetProcAddress(h, "ControllerAddObject");
     g_ctrlCam = (CtrlPutCamFn)GetProcAddress(h, "ControllerPutCameraImage");
     g_ctrlImu = (CtrlPutImuFn)GetProcAddress(h, "ControllerPutControllerImuData");
     if (!initial || !enable || !add || !g_ctrlCam || !g_ctrlImu) {
-        fprintf(stderr, "контроллеры выключены: не все экспорты LED-движка найдены\n"); return;
+        fprintf(stderr, "controllers off: not all LED engine exports found\n"); return;
     }
     const int r = initial(g_calib, g_slam, db, nullptr, nullptr);
     const int e = enable(1);
-    printf("контроллеры: Initial=%d SetDeviceEnable(1)=%d\n", r, e);
+    printf("controllers: Initial=%d SetDeviceEnable(1)=%d\n", r, e);
     if (r != 0 || e != 0) return;
-    // модели: slam\H1\<серийник контроллера>\controller_params.json (из ProgramData\Pimax\slam\H1)
+    // models: slam\H1\<controller serial>\controller_params.json (from ProgramData\Pimax\slam\H1)
     char pat[MAX_PATH];
     snprintf(pat, sizeof(pat), "%s\\H1\\*", g_slam);
     WIN32_FIND_DATAA fd;
@@ -228,7 +228,7 @@ static void init_ctrl() {
             CtrlModel m;
             if (load_ctrl_model(path, m) && !have[m.hand]) {
                 const int a = add(m.hand, m.n, m.leds, m.imu7, 2, 0, 0x34, &sub);
-                printf("контроллер %s: %d светодиодов, AddObject=%d\n", m.hand ? "правый" : "левый", m.n, a);
+                printf("controller %s: %d LEDs, AddObject=%d\n", m.hand ? "right" : "left", m.n, a);
                 have[m.hand] = (a == 0);
                 memcpy(g_devFromImu[m.hand], m.imu7, sizeof(g_devFromImu[m.hand]));
             }
@@ -236,7 +236,7 @@ static void init_ctrl() {
         if (!FindNextFileA(fh, &fd)) { FindClose(fh); break; }
     }
     g_ctrlOn = have[0] || have[1];
-    if (!g_ctrlOn) fprintf(stderr, "контроллеры выключены: нет моделей в %s\\H1\n", g_slam);
+    if (!g_ctrlOn) fprintf(stderr, "controllers off: no models in %s\\H1\n", g_slam);
 }
 
 int main(int argc, char** argv) {
@@ -257,7 +257,7 @@ int main(int argc, char** argv) {
     if (bind(ls, (sockaddr*)&a, sizeof(a)) != 0 || listen(ls, 1) != 0) {
         fprintf(stderr, "bind/listen 127.0.0.1:%d -> %d\n", port, WSAGetLastError()); return 1;
     }
-    printf("winbridge слушает 127.0.0.1:%d\n", port);
+    printf("winbridge listening on 127.0.0.1:%d\n", port);
 
     static uint8_t frames[4][640 * 480], leds[4][640 * 480], black[640 * 480];
     static float ctrlScratch[2][64];
@@ -265,7 +265,7 @@ int main(int argc, char** argv) {
         SOCKET c = accept(ls, nullptr, nullptr);
         if (c == INVALID_SOCKET) continue;
         setsockopt(c, IPPROTO_TCP, TCP_NODELAY, (const char*)&one, sizeof(one));
-        printf("клиент подключился\n");
+        printf("client connected\n");
         long imuN = 0, camN = 0, ledN = 0, cimuN[2] = {0, 0}, ctrackN[2] = {0, 0};
         MsgHeader h;
         while (recv_all(c, &h, sizeof(h))) {
@@ -289,12 +289,12 @@ int main(int argc, char** argv) {
                 CamHeader ch;
                 if (!recv_all(c, &ch, sizeof(ch))) break;
                 const uint32_t n = ch.ncam > 4 ? 4 : ch.ncam;
-                if (ch.w != 640 || ch.h != 480 || n == 0) { fprintf(stderr, "плохой кадр %ux%u x%u\n", ch.w, ch.h, ch.ncam); break; }
+                if (ch.w != 640 || ch.h != 480 || n == 0) { fprintf(stderr, "bad frame %ux%u x%u\n", ch.w, ch.h, ch.ncam); break; }
                 bool ok = true;
                 for (uint32_t i = 0; i < ch.ncam && ok; ++i) ok = recv_all(c, i < 4 ? frames[i] : frames[3], (int)(ch.w * ch.h));
                 if (!ok) break;
-                // SLAM ждёт все 4 камеры (как от pi_server). Недостающая камера (старая запись на 2 камеры)
-                // получает чёрный кадр: без точек он ничего не даёт, а чужая картинка дала бы ложную геометрию.
+                // SLAM expects all 4 cameras (as from pi_server). A missing camera (old 2-camera recording)
+                // gets a black frame: with no points it contributes nothing, while another camera's image would give false geometry.
                 CamFrame cam[4];
                 for (int i = 0; i < 4; ++i)
                     cam[i] = CamFrame{ch.ts, ch.shutter_ns, (uint32_t)i, ch.w, ch.h, ch.w, (uint32_t)i < n ? frames[i] : black};
@@ -305,7 +305,7 @@ int main(int argc, char** argv) {
                 LedHeader lh;
                 if (!recv_all(c, &lh, sizeof(lh))) break;
                 const uint32_t n = lh.ncam > 4 ? 4 : lh.ncam;
-                if (lh.w != 640 || lh.h != 480 || n == 0) { fprintf(stderr, "плохой LED-кадр %ux%u x%u\n", lh.w, lh.h, lh.ncam); break; }
+                if (lh.w != 640 || lh.h != 480 || n == 0) { fprintf(stderr, "bad LED frame %ux%u x%u\n", lh.w, lh.h, lh.ncam); break; }
                 bool ok = true;
                 for (uint32_t i = 0; i < lh.ncam && ok; ++i) ok = recv_all(c, i < 4 ? leds[i] : leds[3], (int)(lh.w * lh.h));
                 if (!ok) break;
@@ -314,8 +314,8 @@ int main(int argc, char** argv) {
                     for (int i = 0; i < 4; ++i)
                         lf[i] = LedFrame{lh.ts, lh.shutter_ns ? lh.shutter_ns : 40000u, (uint32_t)i, lh.w, lh.h, lh.w, 0,
                                          (uint32_t)i < n ? leds[i] : black};
-                    // поза головы на момент кадра (последняя от SLAM) в осях LED-движка; без данных головы —
-                    // единичная (позы контроллеров тогда относительно шлема)
+                    // head pose at the frame time (latest from SLAM) in LED engine axes; without head data --
+                    // identity (controller poses are then relative to the headset)
                     HeadPoseForLed hp{};
                     hp.q[3] = 1.0f;
                     if (g_headSeen) {
@@ -341,14 +341,14 @@ int main(int argc, char** argv) {
                     float out[64] = {0};
                     g_ctrlImu((int)in.hand, &s, out, ctrlScratch[in.hand]);
                     if (out[4] != 0.0f || out[5] != 0.0f || out[6] != 0.0f) {
-                        // из осей LED-движка в мир SLAM: q = Q^-1 * q_led, векторы (x, -z, y)
+                        // from LED engine axes into the SLAM world: q = Q^-1 * q_led, vectors (x, -z, y)
                         const float qinv[4] = {-kQ[0], -kQ[1], -kQ[2], kQ[3]};
                         qmul(qinv, out, p.pose);
                         from_led(out + 4, p.pose + 4);
                         from_led(out + 7, p.pose + 7);
                         from_led(out + 10, p.pose + 10);
                         p.tracked = 1;
-                        // поза головы, с которой LED-движок посчитал контроллер (без данных головы: единичная)
+                        // head pose from which the LED engine computed the controller (without head data: identity)
                         if (g_headSeen) {
                             memcpy(p.head, g_head, 7 * sizeof(float));
                         } else {
@@ -361,11 +361,11 @@ int main(int argc, char** argv) {
                 }
                 if (!send_msg(c, MSG_CPOSE, &p, sizeof(p))) break;
             } else {
-                fprintf(stderr, "неизвестное сообщение type=%u len=%u\n", h.type, h.len);
+                fprintf(stderr, "unknown message type=%u len=%u\n", h.type, h.len);
                 break;
             }
         }
-        printf("клиент отключился: imu=%ld cam=%ld led=%ld; контроллеры imu %ld/%ld, с позой %ld/%ld\n", imuN, camN,
+        printf("client disconnected: imu=%ld cam=%ld led=%ld; controllers imu %ld/%ld, with pose %ld/%ld\n", imuN, camN,
                ledN, cimuN[0], cimuN[1], ctrackN[0], ctrackN[1]);
         closesocket(c);
     }

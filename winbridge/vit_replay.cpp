@@ -1,11 +1,11 @@
-// Офлайн-стенд VIT-библиотеки: грузит .so через dlopen, как Monado (t_vit_loader: все 21 символ,
-// мажорная версия 2), гонит replay.bin через VIT-API и пишет позы в CSV.
-// Проверка системы координат: ускорение (в покое ~ +g вверх), повёрнутое позой IMU в мир,
-// должно дать ~(0,0,+9.8), если мир Z-up, как ждёт t_tracker_slam (gravity_correction 0,0,-g).
-// Сборка: g++ -O2 -std=c++20 vit_replay.cpp -o vit-replay -ldl
-// Запуск: vit-replay ./libpibridge_vit_winbridge.so replay.bin poses.csv [speed]
-//         vit-replay ./libpibridge_vit_winbridge.so --ctrl ctrl.bin OUT_PREFIX   (контроллеры через расширение
-//         pibridge_winbridge_ext.h, как их будет звать драйвер: LED-кадры + IMU рук, позы рук в OUT_PREFIX-*.csv)
+// Offline test bench for the VIT library: loads the .so via dlopen, like Monado (t_vit_loader: all 21 symbols,
+// major version 2), runs replay.bin through the VIT API and writes poses to CSV.
+// Coordinate-system check: acceleration (at rest ~ +g up), rotated into the world by the IMU pose,
+// should give ~(0,0,+9.8) if the world is Z-up, as t_tracker_slam expects (gravity_correction 0,0,-g).
+// Build: g++ -O2 -std=c++20 vit_replay.cpp -o vit-replay -ldl
+// Run: vit-replay ./libpibridge_vit_winbridge.so replay.bin poses.csv [speed]
+//         vit-replay ./libpibridge_vit_winbridge.so --ctrl ctrl.bin OUT_PREFIX   (controllers via the extension
+//         pibridge_winbridge_ext.h, as the driver will call them: LED frames + hand IMU, hand poses in OUT_PREFIX-*.csv)
 
 #include "vit/vit_interface.h"
 #include "pibridge_winbridge_ext.h"
@@ -42,18 +42,18 @@ static void rotate(const float q[4], const float v[3], double o[3]) {
     o[2] = v[2] + w * tz + (x * ty - y * tx);
 }
 
-// Контроллеры через расширение: запись ctrl_prep ("CREP": LED-кадры + IMU обеих рук) в темпе записи.
+// Controllers via the extension: a ctrl_prep recording ("CREP": LED frames + both hands' IMU) at recording pace.
 static int run_ctrl(const Vit& v, void* h, const char* path, const char* prefix) {
     auto ver = (pibridge_wb_ext_version_fn)dlsym(h, "pibridge_wb_ext_version");
     auto led = (pibridge_wb_push_led_fn)dlsym(h, "pibridge_wb_push_led");
     auto imu = (pibridge_wb_push_ctrl_imu_fn)dlsym(h, "pibridge_wb_push_ctrl_imu");
     auto pose = (pibridge_wb_ctrl_pose_fn)dlsym(h, "pibridge_wb_ctrl_pose");
-    if (!ver || !led || !imu || !pose || ver() != PIBRIDGE_WB_EXT_VERSION) { fprintf(stderr, "нет расширения\n"); return 1; }
-    printf("расширение pibridge_wb v%d на месте\n", ver());
+    if (!ver || !led || !imu || !pose || ver() != PIBRIDGE_WB_EXT_VERSION) { fprintf(stderr, "no extension\n"); return 1; }
+    printf("extension pibridge_wb v%d present\n", ver());
     vit_config_t cfg{nullptr, 4, 1, false};
     vit_tracker_t* t = nullptr;
     if (v.tracker_create(&cfg, &t) != VIT_SUCCESS || v.tracker_start(t) != VIT_SUCCESS) return 1;
-    std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // подключение к winbridge
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // connect to winbridge
     FILE* f = fopen(path, "rb");
     char magic[4]; uint32_t fv;
     if (!f || fread(magic, 1, 4, f) != 4 || fread(&fv, 4, 1, f) != 1 || memcmp(magic, "CREP", 4)) return 2;
@@ -87,7 +87,7 @@ static int run_ctrl(const Vit& v, void* h, const char* path, const char* prefix)
             imu(hand, (int64_t)ts, a, g);
             ++nImu;
         }
-        for (uint32_t k = 0; k < 2; ++k) {  // как драйвер: опрашивать последнюю позу
+        for (uint32_t k = 0; k < 2; ++k) {  // like the driver: poll the latest pose
             pibridge_wb_ctrl_pose p;
             if (pose(k, &p) == 1 && p.ts_ns != last[k]) {
                 last[k] = p.ts_ns;
@@ -101,7 +101,7 @@ static int run_ctrl(const Vit& v, void* h, const char* path, const char* prefix)
     v.tracker_stop(t);
     v.tracker_destroy(t);
     fclose(f); fclose(csv[0]); fclose(csv[1]);
-    printf("ctrl: LED-кадров %ld, IMU %ld; поз с оптикой: левый %ld, правый %ld\n", nLed, nImu, nPose[0], nPose[1]);
+    printf("ctrl: LED frames %ld, IMU %ld; poses with optics: left %ld, right %ld\n", nLed, nImu, nPose[0], nPose[1]);
     return nPose[0] + nPose[1] > 0 ? 0 : 3;
 }
 
@@ -112,13 +112,13 @@ int main(int argc, char** argv) {
     if (!h) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 1; }
     Vit v{};
     int missing = 0;
-#define LOAD(n) v.n = (PFN_vit_##n)dlsym(h, "vit_" #n); if (!v.n) { fprintf(stderr, "нет vit_" #n "\n"); ++missing; }
+#define LOAD(n) v.n = (PFN_vit_##n)dlsym(h, "vit_" #n); if (!v.n) { fprintf(stderr, "missing vit_" #n "\n"); ++missing; }
     SYMS(LOAD)
 #undef LOAD
     if (missing) return 1;
     uint32_t ma, mi, pa;
     v.api_get_version(&ma, &mi, &pa);
-    printf("VIT %u.%u.%u, все 21 символ на месте\n", ma, mi, pa);
+    printf("VIT %u.%u.%u, all 21 symbols present\n", ma, mi, pa);
     if (ma != VIT_HEADER_VERSION_MAJOR) return 1;
     if (strcmp(argv[2], "--ctrl") == 0) return run_ctrl(v, h, argv[3], argc > 4 ? argv[4] : "ctrlpose");
 
@@ -186,13 +186,13 @@ int main(int argc, char** argv) {
             drain();
         }
     }
-    std::this_thread::sleep_for(std::chrono::seconds(2));  // дать рабочему потоку дослать очередь
+    std::this_thread::sleep_for(std::chrono::seconds(2));  // let the worker thread flush the queue
     drain();
     v.tracker_stop(t);
     v.tracker_destroy(t);
     fclose(f); fclose(csv);
-    printf("vit-replay: imu=%ld кадров=%ld поз=%ld\n", nImu, nImg, nPose);
-    if (gn) printf("ускорение в мире (среднее) = (%.2f, %.2f, %.2f) м/с²  [Z-up ждём ~(0,0,+9.8)]\n",
+    printf("vit-replay: imu=%ld frames=%ld poses=%ld\n", nImu, nImg, nPose);
+    if (gn) printf("acceleration in world (mean) = (%.2f, %.2f, %.2f) m/s^2  [Z-up expect ~(0,0,+9.8)]\n",
                    gsum[0] / gn, gsum[1] / gn, gsum[2] / gn);
     return nPose > 0 ? 0 : 3;
 }

@@ -4,6 +4,8 @@
 // killdano; see NOTICE).
 #include "xrapp.h"
 
+#include "rendermodel.h"
+
 #include "pibridge/room/draw.h"
 #include "pibridge/room/scene.h"
 #include "pibridge/room/vmath.h"
@@ -381,7 +383,23 @@ std::expected<void, std::string> runMapXr(MapFlow& flow, const MapLink& link, co
             }
         }
     };
-    loop.build = [&](Batch& b, double t) { flow.build(b, t); };
+    // the real SteamVR controller render models, drawn over the box proxy when they load (room setup). The OpenVR
+    // background client and the models degrade to no-op if SteamVR / the models are unavailable: then build() keeps
+    // its box proxy. The grey the models are flat-shaded with.
+    ControllerModels models;
+    const room::Rgba kCtrlGrey{0.78F, 0.80F, 0.84F, 1.0F};
+    loop.build = [&](Batch& b, double t) {
+        models.poll();
+        for (int h = 0; h < 2; h++) {
+            flow.setModelShown(h, flow.handModelValid(h) && models.ready(h));
+        }
+        flow.build(b, t); // draws the lasers + the box proxy for any hand whose model is not shown
+        for (int h = 0; h < 2; h++) {
+            if (flow.handModelValid(h) && models.ready(h)) {
+                models.draw(b, h, flow.handModelPose(h), kCtrlGrey);
+            }
+        }
+    };
     loop.quit = [&] { return flow.finished(steady()); };
     loop.status = [&] {
         const auto l = flow.lines();
@@ -487,6 +505,8 @@ std::expected<void, std::string> runLoop(xrkit::Session& x, Actions& c, const Lo
             room::HandInput& h = in.hands[i];
             const XrPath sub = x.hands[i].path;
             h.valid = locate(x.hands[i].grip, x.stage, t, h.grip);
+            h.gripPose = h.grip;       // keep the handle pose before the aim pose overwrites h.grip (controller model)
+            h.gripPoseValid = h.valid;
             bool aimTracked = false;
             h.aimValid = locate(x.hands[i].aim, x.stage, t, h.aim, aimTracked);
             // The controller frame the editor draws and points with is the aim pose: its -Z is the pointing ray on every

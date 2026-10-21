@@ -365,6 +365,24 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
     left->addWidget(head);
     left->addStretch(1);
 
+    // ---- display (lens profile)
+    auto* display = new pibridge::ui::Card(QStringLiteral("Display"));
+    lens_ = new QComboBox;
+    lens_->addItem(QStringLiteral("Default (CHOVR)"), QStringLiteral("default"));
+    lens_->addItem(QStringLiteral("Like Pimax"), QStringLiteral("pimax"));
+    lens_->addItem(QStringLiteral("Pimax native"), QStringLiteral("native"));
+    connect(lens_, &QComboBox::activated, this,
+            [this](int i) { save(reckey::kLensProfile, lens_->itemData(i).toString()); });
+    display->body()->addWidget(new OptionRow(
+        QStringLiteral("Lens profile"),
+        QStringLiteral("The distortion and field of view the headset renders through. Default: CustomHeadsetOpenVR's "
+                       "camera-calibrated profile (FOV 98x88). Like Pimax: sboys3's radial fit of the Pimax geometry "
+                       "(FOV 98.2x87.1, optical centre towards the nose and up). Pimax native: the raw distortion mesh "
+                       "from the Pimax compositor (true anisotropic lens, ~98x93 — a wider vertical field). Only "
+                       "affects inside-out (the Monado driver); in Lighthouse the CustomHeadsetOpenVR driver draws."),
+        lens_));
+    right->addWidget(display);
+
     // ---- cameras
     auto* cams = new pibridge::ui::Card(QStringLiteral("Cameras"));
     camAe_ = seg({QStringLiteral("On"), QStringLiteral("Dry run"), QStringLiteral("Off")}, iokey::kCamAe,
@@ -572,6 +590,9 @@ void TrackingPage::load() {
     smooth_->setCheckedQuiet(io_.smooth);
     anchor_->setCheckedQuiet(io_.anchor);
     anchorGlide_->setCheckedQuiet(io_.anchorGlide);
+    const QString lensProfile = conf_.value(reckey::kLensProfile, QString()).trimmed();
+    const int lensIdx = lens_->findData(lensProfile.isEmpty() ? QStringLiteral("default") : lensProfile);
+    lens_->setCurrentIndex(lensIdx < 0 ? 0 : lensIdx);
     camAe_->setCurrent(io_.camAe == CamAe::On ? 0 : (io_.camAe == CamAe::Dry ? 1 : 2));
     camModel_->setCurrent(io_.camAeCrystal ? 0 : 1);
     camLaw_->setCheckedQuiet(io_.camAeNewLaw);

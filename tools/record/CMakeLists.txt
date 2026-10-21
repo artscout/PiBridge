@@ -5,9 +5,20 @@
 
 find_package(Threads REQUIRED)
 add_library(pibridge_record STATIC src/settings.cpp src/shm.cpp src/status.cpp src/proc.cpp src/encode.cpp src/run.cpp
-            src/cli.cpp src/mirror.cpp)
+            src/cli.cpp src/mirror.cpp src/capture_client.cpp)
 target_include_directories(pibridge_record PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(pibridge_record PUBLIC pibridge_common Threads::Threads)
+
+# The Vulkan capture-layer client (src/capture_client.cpp, `--source layer`). Built with Vulkan when present; without
+# it, runLayer() still compiles and fails cleanly (so the one build always has the symbol — DoD: one whole build).
+find_package(Vulkan QUIET)
+if(Vulkan_FOUND)
+    target_link_libraries(pibridge_record PUBLIC Vulkan::Vulkan)
+    target_compile_definitions(pibridge_record PRIVATE PIBRIDGE_HAVE_VULKAN=1)
+    message(STATUS "pibridge-record: Vulkan found: --source layer (video capture) is built")
+else()
+    message(STATUS "pibridge-record: Vulkan not found: --source layer fails cleanly at run time")
+endif()
 
 add_executable(pibridge-record src/main.cpp)
 target_link_libraries(pibridge-record PRIVATE pibridge_record)

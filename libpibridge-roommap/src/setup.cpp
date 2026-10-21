@@ -74,7 +74,8 @@ std::string RoomSetup::to_toml() const {
     }
     return "# omarchyvr-roommap room setup (docs/ROOM-SETUP.md): room frame of the map (y up); setup frame = centre on the "
            "floor, -Z forward\nlabel = \"" +
-           lab + "\"\nmode = \"" + mode_name(mode) + "\"\ncentre = [" + rf::fixed(centre[0], 4) + ", " +
+           lab + "\"\nmode = \"" + mode_name(mode) + "\"\nseated = " + (seated ? "true" : "false") + "\ncentre = [" +
+           rf::fixed(centre[0], 4) + ", " +
            rf::fixed(centre[1], 4) + "]\nyaw_deg = " + rf::fixed(rf::to_degrees(yaw), 4) + "\nplay_area = [" +
            rf::fixed(play_area[0], 3) + ", " + rf::fixed(play_area[1], 3) + "]\nhead_m = " + rf::fixed(head_m, 4) +
            "\nwhen = " + std::to_string(when) + "\nboundary = [" + pts + "]\n";
@@ -121,6 +122,8 @@ std::expected<RoomSetup, std::string> RoomSetup::parse(std::string_view s) {
                 return std::unexpected("mode " + std::string(v));
             }
             r.mode = *m;
+        } else if (k == "seated") {
+            r.seated = rf::trim(v) == "true";
         } else if (k == "centre") {
             const auto n = nums(v);
             if (n.size() == 2) {
@@ -203,6 +206,71 @@ Alignment final_offset(const Alignment& room_from_slam, double floor_dy, const R
         return store::compose(setup->setup_from_room(), a);
     }
     return a;
+}
+
+// --- the room-setup decision math (see setup.h for the tuned values) ---
+
+double posture_floor_drop(Posture p, std::optional<double> stand_eye) {
+    if (p == Posture::Sit) {
+        return FLOOR_DROP_SIT_M;
+    }
+    return stand_eye.value_or(FLOOR_DROP_STAND_M);
+}
+
+double zone_radius(ZoneSize z) {
+    switch (z) {
+    case ZoneSize::Small: return ZONE_R_SMALL_M;
+    case ZoneSize::Medium: return ZONE_R_MEDIUM_M;
+    case ZoneSize::Big: return ZONE_R_BIG_M;
+    }
+    return ZONE_R_FALLBACK_M;
+}
+
+Posture posture_parse(int code) { return code == 0 ? Posture::Stand : Posture::Sit; }
+
+ZoneSize zone_size_parse(int code) {
+    return code == 0 ? ZoneSize::Small : code == 1 ? ZoneSize::Medium : ZoneSize::Big;
+}
+
+std::vector<P2> circle(P2 centre, double r, int n) {
+    constexpr double two_pi = 6.283185307179586;
+    if (n < 3) {
+        n = 3;
+    }
+    std::vector<P2> v;
+    v.reserve(static_cast<std::size_t>(n));
+    for (int i = 0; i < n; i++) {
+        const double a = two_pi * i / n;
+        v.push_back({centre[0] + r * std::cos(a), centre[1] + r * std::sin(a)});
+    }
+    return v;
+}
+
+double hull_area(const std::vector<P2>& poly) { return std::fabs(area(convex_hull(poly))); }
+
+bool zone_area_ok(const std::vector<P2>& poly) { return hull_area(poly) >= MIN_ZONE_AREA_M2; }
+
+std::vector<P2> prepare_boundary(const std::vector<P2>& trace, P2 centre) {
+    std::vector<P2> out;
+    out.reserve(std::min(trace.size(), MAX_BOUNDARY_POINTS));
+    for (const P2& raw : trace) {
+        // clamp the point to within MAX_POINT_RADIUS_M of the centre (a long overshoot is pulled back on its own ray)
+        P2 p = raw;
+        const double dx = p[0] - centre[0], dz = p[1] - centre[1];
+        if (const double d = std::hypot(dx, dz); d > MAX_POINT_RADIUS_M) {
+            const double k = MAX_POINT_RADIUS_M / d;
+            p = {centre[0] + dx * k, centre[1] + dz * k};
+        }
+        // keep the point only if it is at least MIN_POINT_SPACING_M from the last kept one
+        if (!out.empty() && std::hypot(p[0] - out.back()[0], p[1] - out.back()[1]) < MIN_POINT_SPACING_M) {
+            continue;
+        }
+        out.push_back(p);
+        if (out.size() >= MAX_BOUNDARY_POINTS) {
+            break;
+        }
+    }
+    return out;
 }
 
 double area(const std::vector<P2>& p) {

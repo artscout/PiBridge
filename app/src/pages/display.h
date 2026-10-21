@@ -7,10 +7,13 @@
 
 #include <QWidget>
 
+#include "../core/actions.h"
+#include "../core/conf.h"
 #include "../core/state.h"
 
 namespace pibridge::ui {
 class SliderRow;
+class Segmented;
 } // namespace pibridge::ui
 
 class QLabel;
@@ -20,7 +23,7 @@ namespace pibridge::app {
 class DisplayPage : public QWidget {
     Q_OBJECT
 public:
-    explicit DisplayPage(StateSource& source, QWidget* parent = nullptr);
+    DisplayPage(StateSource& source, Conf& conf, Actions& actions, QWidget* parent = nullptr);
 
 protected:
     void showEvent(QShowEvent*) override;
@@ -31,8 +34,11 @@ private:
     void refreshInfo();
 
     StateSource& source_;
+    Conf& conf_;
+    Actions& actions_;
     QLabel* info_ = nullptr;
     QLabel* note_ = nullptr;
+    pibridge::ui::Segmented* refresh_ = nullptr; // panel refresh rate (refresh_hz), applied live via Actions
     pibridge::ui::SliderRow* brightness_ = nullptr;
     pibridge::ui::SliderRow* contrast_ = nullptr;
     pibridge::ui::SliderRow* blackLevel_ = nullptr;

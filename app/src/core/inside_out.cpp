@@ -392,6 +392,16 @@ IoSessionEnv buildIoEnv(const IoSettings& io, const RecSetup& s, int refreshHz, 
             d << QStringLiteral("PIMAX_SLAM_SMOOTH=0");
         }
     }
+    // eye tracking (pimax_eyeglue.c PIMAX_EYE): the driver opens the Tobii eye chip directly over usbfs and publishes
+    // the gaze pose (XRT_INPUT_GENERIC_EYE_GAZE_POSE) into SteamVR. pibridge-eyed lets go of the chip while the
+    // inside-out session runs (the pause marker, common/pibridge_pause.h), so there is no USB contention. The per-eye
+    // calibration file (drift correction) is the app's, matching the capi's default path.
+    if (s.eyeTracking) {
+        d << QStringLiteral("PIMAX_EYE=1");
+        if (!s.eyeCalib.isEmpty()) {
+            d << QStringLiteral("PIMAX_EYE_CALIBRATION=") + s.eyeCalib;
+        }
+    }
     // the room anchor hook (Monado's offset file and head ring): the switch, or the room map (core/roommap_link.h).
     // With the room-map tool there, every inside-out session has the hook, so "Map the room" works in the session that
     // runs and a saved room is put in place at the start; without an offset file the hook changes nothing (Monado

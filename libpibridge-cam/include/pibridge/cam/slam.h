@@ -7,7 +7,7 @@
 //   calibration's "body" frame (OpenXR head axes, x right, y up, z back), i.e. the raw IMU axes after the driver's
 //   PIMAX_AXIS_MODE=1 mapping (x and z negated). Camera axes are OpenCV (x right, y down, z forward).
 // * ImuNoise: IMU noise model. The factory file has IMUNoise all 0.0, so we use conservative defaults or a file
-//   measured from a still recording (`omarchyvr-slam imu-noise`, ~/.config/omarchyvr/slam-imu.json).
+//   measured from a still recording (`omarchyvr-slam imu-noise`, ~/.config/pibridge/slam-imu.json).
 // * basalt_calib_json: the calibration in Basalt's cereal JSON format (camera_type kb4), for offline runs
 //   (basalt_vio, `monado-cli slambatch` with a SLAM_CONFIG) and for every recording.
 // * Supervisor: decides when the tracker's poses are trustworthy (acquire after N consistent frames, lose on jumps /
@@ -103,7 +103,7 @@ struct ImuNoise {
     /// Where the numbers came from ("defaults" or a file path).
     std::string source = "defaults";
 
-    /// Default file search: $PIMAX_SLAM_IMU, then ~/.config/omarchyvr/slam-imu.json.
+    /// Default file search: $PIMAX_SLAM_IMU, then ~/.config/pibridge/slam-imu.json.
     static std::optional<std::string> default_path();
     /// Parse the JSON written by to_json (missing keys keep the defaults; a scalar applies to all three axes).
     static std::expected<ImuNoise, std::string> parse(std::string_view text);

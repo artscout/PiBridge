@@ -89,14 +89,24 @@ std::uint64_t Pacer::copies(std::uint64_t ts) {
     return c;
 }
 
-std::string_view name(Source s) { return s == Source::Mirror ? "mirror" : "tap"; }
+std::string_view name(Source s) {
+    switch (s) {
+    case Source::Mirror: return "mirror";
+    case Source::Layer: return "layer";
+    case Source::Tap: break;
+    }
+    return "tap";
+}
 
 std::optional<Source> parseSource(std::string_view s) {
     if (s == "tap" || s == "monado") {
         return Source::Tap;
     }
-    if (s == "mirror" || s == "steamvr") {
+    if (s == "mirror") {
         return Source::Mirror;
+    }
+    if (s == "layer" || s == "vk" || s == "vulkan" || s == "steamvr") {
+        return Source::Layer;
     }
     return std::nullopt;
 }
@@ -218,6 +228,9 @@ struct MirrorChild {
 } // namespace
 
 int run(const Settings& s, const Roots& r, Source source) {
+    if (source == Source::Layer) {
+        return runLayer(s, r); // the Vulkan capture layer path (capture_client.cpp), its own encoder loop
+    }
     beNice();
     struct sigaction sa{};
     sa.sa_handler = onSignal;

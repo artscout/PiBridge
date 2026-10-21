@@ -109,6 +109,25 @@ Then start **PiBridge** from the application menu (or `pibridge`). With the defa
 SteamVR starts they wake the headset, switch its panel on at 90 Hz, make it the default sound device and start the
 eye tracker; when SteamVR closes they give everything back and the headset goes to standby (green LED).
 
+### 4.1 The SteamVR dashboard panel (installed with the app)
+
+`pibridge-overlay` is a small tab in the SteamVR dashboard with two buttons — **ROOM SETUP** and **QUICK ROOM SETUP**
+— so you can start room setup from inside VR without taking the headset off. It is built and installed together with the
+app by `cmake --install` (the binary goes to `~/.local/bin/pibridge-overlay`, its manifest to
+`~/.local/share/pibridge/pibridge.vrmanifest`); there is nothing extra to build.
+
+You turn it on from the app, not from a terminal: the **SteamVR dashboard** switch in the **Dashboard → Quick settings**
+(right under Passthrough). On, the app runs the tab as a background helper and the PiBridge tab appears in the SteamVR
+dashboard the next time you open it; off, the app stops it. The choice is saved (`steamvr_dashboard` in
+`pibridge.conf`), so a restart keeps it.
+
+**No manual registration is needed.** The running helper creates the dashboard tab itself; the auto-launch
+registration that would let SteamVR start it on its own is deliberately left off (leaving the app as the single owner
+of the panel). Full detail is in [OVERLAY.md](OVERLAY.md).
+
+> This panel is new and has not been verified in a headset yet (see [OVERLAY.md](OVERLAY.md)). Until then, you can also
+> start room setup from the Dashboard or the Room page.
+
 ## 5. Pimax Crystal Super (Lighthouse faceplate)
 
 Who does what in this setup:
@@ -119,7 +138,7 @@ Who does what in this setup:
 | The headset display in SteamVR (render size, lens distortion, IPD) | CustomHeadsetOpenVR (sboys3) with our patches (5.3) |
 | Wake, keepalive, panel on, sound switch | `pibridge-keepalived` |
 | Eye tracking for OpenXR apps (`XR_EXT_eye_gaze_interaction`) | `pibridge-eyed` -> `/dev/shm/omarchyvr-eye-gaze` -> CustomHeadsetOpenVR |
-| 7104x3840 at 90 Hz over DSC on RTX 50 | the NVIDIA patch and the EDID override (5.2) |
+| 7104x3840 at 90 Hz over DSC on RTX 50 | driver 615.71.09+ works as-is; only older branches (595.x) need the NVIDIA patch + EDID override (5.2) |
 | Headset speakers and microphone | USB audio, with the WirePlumber rule (5.4) |
 
 The files are in `patches/` of the source tree; `patches/README.md` says where each comes from and its licence.
@@ -129,10 +148,18 @@ Switch the Lighthouse faceplate on (its switch). The Valve devices (`28de:2300`,
 their own; pair the controllers in SteamVR as usual.
 
 ### 5.2 NVIDIA driver (RTX 50 / Blackwell; root)
-Without this patch the driver lists no mode for the headset ("DP Bandwidth check failed"). Why, and what the patch
-changes: `patches/nvidia/README.md`. The install script is written for Ubuntu/Debian (initramfs-tools). On an RTX
-20/30/40 the Crystal Super would need the 2Heads1OR patches in `patches/nvidia/pre-blackwell/` instead (untested; the
-table in `patches/nvidia/README.md` says which version has which patch).
+> **Driver 615.71.09 and newer (RTX 5090): no patch needed.** The Blackwell DSC/display fixes are upstream, so the
+> stock open module drives the Crystal Super on its own. On Ubuntu just install the packaged open module
+> (`sudo apt install linux-modules-nvidia-615-open-generic nvidia-dkms-615-open` or the `-open` metapackage) — it is
+> Canonical-signed, so it loads under Secure Boot with no MOK step. If you had the hand-built patched module from an
+> older branch, remove that override first (e.g. `sudo mv /lib/modules/$(uname -r)/updates/omarchyvr-nvidia
+> ~/nvidia-override.bak && sudo depmod -a`) so the packaged 615 module takes over, then reboot. The hand-patched steps
+> below are only for **older driver branches (e.g. 595.x)** that lack the upstream fix.
+
+Without the patch on an older branch the driver lists no mode for the headset ("DP Bandwidth check failed"). Why, and
+what the patch changes: `patches/nvidia/README.md`. The install script is written for Ubuntu/Debian (initramfs-tools).
+On an RTX 20/30/40 the Crystal Super would need the 2Heads1OR patches in `patches/nvidia/pre-blackwell/` instead
+(untested; the table in `patches/nvidia/README.md` says which version has which patch).
 
 1. Find your driver version and get the matching open module source:
    ```
@@ -261,10 +288,33 @@ list for the Crystal Super, so that a new headset needs no Windows session at al
 
 ## 7. Quad views (foveated rendering for Vulkan games)
 
-The quad views OpenXR layer is a separate project:
-[linux-vulkan-quadviews-openxr-layer](https://github.com/artscout/linux-vulkan-quadviews-openxr-layer). Install it as
-its README says; then the app's **Performance** page switches it on and off and sets its resolutions, gaze area and
-per-game profiles (`~/.config/qv-vulkan/settings.conf`). With eye tracking running, the focus area follows your eyes.
+Foveated rendering ("quad views") draws the middle of your view at full detail and the edges at lower detail, which
+saves a lot of GPU work; with eye tracking running the sharp area follows your eyes. PiBridge's **Performance** page is
+the control panel for it: the on/off switch, the presets, the resolutions, the gaze area and the per-game profiles
+(written to `~/.config/qv-vulkan/settings.conf`). The rendering itself is done by an OpenXR layer,
+[linux-vulkan-quadviews-openxr-layer](https://github.com/artscout/linux-vulkan-quadviews-openxr-layer) (`qv-vulkan`).
+
+Install the layer into the **same prefix** as PiBridge so everything lands together under `~/.local`:
+```
+git clone https://github.com/artscout/linux-vulkan-quadviews-openxr-layer.git
+cd linux-vulkan-quadviews-openxr-layer
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/.local
+cmake --build build
+cmake --install build
+```
+That installs the layer to `~/.local/lib/qv-vulkan/` and its OpenXR manifest to
+`~/.local/share/openxr/1/api_layers/implicit.d/` — the same manifest PiBridge's Performance page renames to switch the
+layer on and off. It needs the Vulkan and OpenXR headers, `glslangValidator`, and (for the layer's own stand-alone
+settings app, which PiBridge replaces) Qt 6 Widgets.
+
+Once the layer is installed, you do **not** use its own settings app: the PiBridge **Performance** page drives it.
+The on/off switch there is disabled until the layer is installed, and the **Device** page's Rendering card shows
+whether it is on, off or not installed.
+
+> **Planned: one install for the whole stack.** The layer is built from its own repository today; PiBridge only
+> configures it. Bundling the layer into PiBridge's own build and install (so a single `cmake --install` lays down the
+> app, the services, the dashboard panel *and* the foveated-rendering layer together) is **not wired up yet** — this
+> is a TODO. For now, follow the two installs above.
 
 ### 7.1 Pimax's own tracking engines (inside-out, optional)
 

@@ -22,10 +22,14 @@ public:
     explicit SoundTestPanel(bool fake, QWidget* parent = nullptr);
     ~SoundTestPanel() override;
 
+    // The tests play/record on the headset, so they only work once SteamVR runs; the Dashboard gates them.
+    void setVrRunning(bool on);
+
 private:
     void update();
 
     bool fake_;
+    bool vrRunning_ = false;
     std::unique_ptr<Runner> runner_;
     std::unique_ptr<AudioCapture> capture_;
     std::unique_ptr<SoundTest> test_; // after what it uses

@@ -42,7 +42,9 @@ RecordCardModel recordCardModel(const RecordInputs& in) {
                            .arg(st.fps)
                            .arg(q(st.quality), q(st.encoder),
                                 st.audio.empty() ? QStringLiteral(", no sound") : QStringLiteral(", with sound"),
-                                st.source == "mirror" ? QStringLiteral(", from SteamVR's mirror") : QString());
+                                st.source == "mirror"  ? QStringLiteral(", from SteamVR's mirror")
+                                : st.source == "layer" ? QStringLiteral(", via the capture layer")
+                                                       : QString());
             const std::uint64_t dropped = st.dropped_tap + st.dropped_ring;
             if (dropped > 0) {
                 m.detail += QStringLiteral(" %1 frames skipped by the recorder (VR itself never waits for it).").arg(dropped);
@@ -57,8 +59,9 @@ RecordCardModel recordCardModel(const RecordInputs& in) {
             m.chip = QStringLiteral("STARTING");
             m.chipKind = ChipKind::Warn;
             m.headline = QStringLiteral("Starting the recorder");
-            m.detail = st.source == "mirror" ? QStringLiteral("Waiting for SteamVR's mirror image.")
-                                             : QStringLiteral("Waiting for Monado's recorder tap.");
+            m.detail = st.source == "mirror"  ? QStringLiteral("Waiting for SteamVR's mirror image.")
+                       : st.source == "layer" ? QStringLiteral("Waiting for the Vulkan capture layer's first frame.")
+                                              : QStringLiteral("Waiting for Monado's recorder tap.");
         }
         return m;
     }
@@ -68,8 +71,8 @@ RecordCardModel recordCardModel(const RecordInputs& in) {
         m.chip = QStringLiteral("READY");
         m.chipKind = ChipKind::Info;
         m.headline = QStringLiteral("Ready to record (SteamVR)");
-        m.detail = QStringLiteral("Records SteamVR's mirror image (what the headset shows, before the lens distortion) "
-                                  "into ~/Videos/pimax. VR keeps running if the recorder fails.");
+        m.detail = QStringLiteral("Records the headset image via PiBridge's Vulkan capture layer (the chosen eye or the "
+                                  "compositor's output) into ~/Videos/pimax. VR keeps running if the recorder fails.");
         m.canStart = true;
     } else if (in.directRunning || in.monadoRunning) {
         m.chip = QStringLiteral("READY");

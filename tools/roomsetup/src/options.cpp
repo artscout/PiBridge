@@ -62,6 +62,8 @@ std::expected<Options, std::string> parseArgs(const std::vector<std::string>& ar
             o.run = Run::VrStanding;
         } else if (a == "--chaperone") {
             o.chaperone = true;
+        } else if (a == "--quick-direct") {
+            o.quickDirect = true;
         } else if (a == "--seated") {
             o.seated = true;
         } else if (a == "--recenter") {
@@ -92,6 +94,12 @@ std::expected<Options, std::string> parseArgs(const std::vector<std::string>& ar
                 return std::unexpected(std::string("--radius is the quick play-circle radius, 0.3-5.0 m"));
             }
             o.radius = d;
+        } else if (a == "--perimeter") {
+            v = value(i);
+            if (!v) {
+                return std::unexpected(v.error());
+            }
+            o.perimeterFile = *v;
         } else if (a == "--room" || a == "--roommap" || a == "--camera" || a == "--guide-dir" || a == "--map-seconds" || a == "--log-dir") {
             v = value(i);
             if (!v) {
@@ -154,7 +162,8 @@ std::expected<Options, std::string> parseArgs(const std::vector<std::string>& ar
     if (o.run == Run::FloorHeight && !o.eyeHeight) {
         return std::unexpected(std::string("--floor-height needs --eye-height M"));
     }
-    if (o.run == Run::VrStanding && !o.eyeHeight) {
+    if (o.run == Run::VrStanding && !o.seated && !o.eyeHeight) {
+        // Seated sets a seated-zero pose at the head (no floor drop), so it needs no --eye-height; standing does.
         return std::unexpected(std::string("--vr-standing needs --eye-height M (the floor goes that far below your eyes)"));
     }
     if (o.run == Run::Map || o.run == Run::FloorHeight) {

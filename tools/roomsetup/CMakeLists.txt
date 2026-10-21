@@ -16,7 +16,8 @@ set(PIBRIDGE_ROOMSETUP_OPENVR_INCLUDE ${PROJECT_SOURCE_DIR}/app/third_party/open
 set(PIBRIDGE_ROOMSETUP_SOURCES src/main.cpp src/openvr_helper.cpp)
 # the OpenXR + Vulkan plumbing and the scene shaders are shared with pibridge-home (tools/xrkit)
 if(PIBRIDGE_XRKIT)
-    add_executable(pibridge-roomsetup ${PIBRIDGE_ROOMSETUP_SOURCES} src/xrapp.cpp)
+    # src/rendermodel.cpp loads the SteamVR controller render models (OpenVR, dlopen'd); it needs the OpenVR header
+    add_executable(pibridge-roomsetup ${PIBRIDGE_ROOMSETUP_SOURCES} src/xrapp.cpp src/rendermodel.cpp)
     target_compile_definitions(pibridge-roomsetup PRIVATE PIBRIDGE_ROOMSETUP_XR=1)
     target_link_libraries(pibridge-roomsetup PRIVATE pibridge_xrkit)
 else()

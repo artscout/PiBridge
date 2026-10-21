@@ -117,7 +117,7 @@ std::vector<Warning> parse_into(LensConfig& cfg, std::string_view text, std::str
 /// Defaults plus the text of a lens.conf (warnings name "lens.conf").
 std::pair<LensConfig, std::vector<Warning>> parse(std::string_view text, float aspect);
 
-/// `PIMAX_LENS_CONF`, else `$XDG_CONFIG_HOME/omarchyvr/lens.conf`, else `$HOME/.config/omarchyvr/lens.conf`
+/// `PIMAX_LENS_CONF`, else `$XDG_CONFIG_HOME/pibridge/lens.conf`, else `$HOME/.config/pibridge/lens.conf`
 /// (`./.config/...` without HOME).
 std::string config_path(const Env& env);
 /// `PIMAX_CANT_DEG=<deg>`: nullopt if unset/blank; `ok` false with the raw text if unparsable or out of range.

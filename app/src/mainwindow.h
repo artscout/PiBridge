@@ -8,6 +8,7 @@
 #include "core/actions.h"
 #include "core/conf.h"
 #include "core/io_session.h"
+#include "core/overlay_control.h"
 #include <memory>
 #include "core/state.h"
 
@@ -47,6 +48,8 @@ private:
     // the one tracking session (START TRACKING), shared by the Dashboard, the Tracking page and the Apps page
     std::unique_ptr<IoSessionControl> io_;
     std::unique_ptr<IoSessionControl> direct_;
+    // the SteamVR dashboard launcher (core/overlay_control.h): a leaf; its clicks launch room setup
+    std::unique_ptr<OverlayControl> overlay_;
     QStackedWidget* stack_ = nullptr;
     std::vector<QPushButton*> nav_;
     QLabel* sbSteam_ = nullptr;

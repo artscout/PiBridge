@@ -8,7 +8,7 @@
 //     pibridge-roommap-guide 1
 //     pid N                         pibridge-roommap's pid
 //     seq N                         +1 at every rewrite
-//     step mode|wear|light|map|floor-confirm|floor-touch|boundary|forward|done|failed
+//     step mode|posture|size|wear|light|map|floor-confirm|boundary|confirm|done|failed
 //     title TEXT / text TEXT        the prompt (one line each)
 //     progress F                    0..1 (optional)
 //     keyframes N / points N        mapping feedback (views mapped, stereo points in view)
@@ -23,7 +23,8 @@
 //     step STEP                     the step answered (an answer for another step is ignored)
 //     answer yes | touch Y | height Y EYE | path X Z X Z ... | forward CX CZ YAW HEADY | cancel   (room frame;
 //            height: the floor Y from the head standing upright minus the user's eye height EYE)
-//            | mode M (1 = full, 0 = quick) | back | repeat | next   (the panel's mode menu and step buttons)
+//            | mode M (1 = full, 0 = quick) | posture P (0 = stand, 1 = sit) | size Z (0/1/2 = small/medium/big)
+//            | back | repeat | next   (the panel's mode / posture / size menus and step buttons)
 #pragma once
 
 #include <array>

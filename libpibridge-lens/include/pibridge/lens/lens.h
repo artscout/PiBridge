@@ -45,7 +45,7 @@ std::vector<std::string> eye_log_lines(const LensConfig& cfg, std::size_t e);
 std::string_view reference_lens_conf();
 
 /// Load the configuration like the driver does: defaults, then the file from `PIMAX_LENS_CONF` /
-/// `$XDG_CONFIG_HOME/omarchyvr/lens.conf` / `~/.config/omarchyvr/lens.conf`, then `PIMAX_LENS_OFF`. Without
+/// `$XDG_CONFIG_HOME/pibridge/lens.conf` / `~/.config/pibridge/lens.conf`, then `PIMAX_LENS_OFF`. Without
 /// `PIMAX_LENS_CONF` and without the user's file, the shipped Dream Air profile is used (`PIMAX_NO_REFERENCE=1`
 /// keeps the code defaults).
 Loaded load(float aspect, const Env& env);

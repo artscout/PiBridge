@@ -52,6 +52,10 @@ const room::Rgba kDraw{1.0F, 0.85F, 0.2F, 1.0F};
 constexpr double kWallH = 2.0;        // the boundary walls (m)
 constexpr double kTouchBelowHead = 0.9;
 constexpr double kTouchNearGrid = 0.3;
+// the standing floor-drop fine-tune range (mirror of setup::FLOOR_DROP_MIN_M / MAX_M): the floor is 1.0 .. 2.0 m below
+// the face
+constexpr double kFloorDropMin = 1.00;
+constexpr double kFloorDropMax = 2.00;
 const room::Rgba kText{0.92F, 0.96F, 1.0F, 1.0F};
 // the micro-window card (room-setup rework): a framed body, a header strip, bordered button chips
 const room::Rgba kCard{0.04F, 0.06F, 0.10F, 0.82F};
@@ -63,6 +67,9 @@ const room::Rgba kChipEdge{0.6F, 0.9F, 1.0F, 0.95F};
 // the boundary ribbon and the zone fill grid drawn on the floor inside the traced area
 const room::Rgba kRibbon{1.0F, 0.85F, 0.2F, 0.95F};
 const room::Rgba kZoneGrid{0.35F, 0.9F, 1.0F, 0.6F};
+// the controller laser and box proxy (so the user can see where the pointer goes)
+const room::Rgba kBeam{0.35F, 0.95F, 1.0F, 0.95F};
+const room::Rgba kBox{0.7F, 0.9F, 1.0F, 0.95F};
 constexpr double kPanelHalfW = 0.5; // the card half width (metres), matches the text columns
 constexpr double kLineH = 0.06;     // one text line's height on the panel
 
@@ -201,7 +208,13 @@ std::optional<room::Vec3> MapFlow::toStage(room::Vec3 p) const {
     return link_.toStage({raw[0], raw[1], raw[2]});
 }
 
-double MapFlow::floorStage() const { return floorStage_.value_or(headY_ - 1.6) + floorAdjust_; }
+double MapFlow::floorStage() const {
+    // on the standing floor step the grid follows the head-relative drop the user is tuning with the stick
+    if (isFloorStep(step_) && floorDrop_ && headValid_) {
+        return head_.pos().y - *floorDrop_;
+    }
+    return floorStage_.value_or(headY_ - 1.6) + floorAdjust_;
+}
 
 std::optional<room::Vec3> MapFlow::floorHit(const room::HandInput& h) const {
     if (!h.valid) {
@@ -290,9 +303,9 @@ void MapFlow::placePanel(const room::FrameInput& in, bool force) {
 }
 
 bool MapFlow::backAvailable() const {
-    // within the post-map sequence BACK goes to the previous step (floor goes back into mapping; boundary -> floor;
-    // forward -> boundary). The mode menu and the live mapping have nothing to go back to.
-    return isFloorStep(step_) || step_ == "boundary" || step_ == "forward";
+    // only the custom boundary step has a previous step to return to (the floor step); everything else is either the
+    // first interactive step or a terminal confirm.
+    return step_ == "boundary";
 }
 
 void MapFlow::layoutButtons() {
@@ -300,22 +313,23 @@ void MapFlow::layoutButtons() {
     std::vector<std::pair<std::string, std::string>> defs; // label, action
     if (step_ == "mode") {
         defs = {{"FULL MAPPING", "mode-full"}, {"QUICK SETUP", "mode-quick"}};
+    } else if (step_ == "posture") {
+        defs = {{"STAND", "posture-stand"}, {"SIT", "posture-sit"}};
+    } else if (step_ == "size") {
+        defs = {{"SMALL", "size-s"}, {"MEDIUM", "size-m"}, {"BIG", "size-b"}};
     } else if (step_ == "map") {
-        defs = {{"FINISH", "next"}}; // end the look-around now (pibridge-roommap stops the walk early)
+        defs = {{"DONE LOOKING", "next"}}; // only ends the look-around; it does not finish the setup
+    } else if (step_ == "confirm") {
+        defs = {{"FINISH", "next"}}; // quick: the one primary button that completes the setup
     } else if (isFloorStep(step_)) {
-        if (backAvailable()) {
-            defs.push_back({"BACK", "back"});
-        }
-        defs.push_back({"REPEAT", "repeat"});
-        defs.push_back({"NEXT", "next"});
+        defs.push_back({"REPEAT", "repeat"}); // reset the floor to the default drop
+        defs.push_back({"NEXT", "next"});     // confirm the floor, go to the boundary
     } else if (step_ == "boundary") {
-        defs.push_back({"BACK", "back"});
-        defs.push_back({"REPEAT", "repeat"});
-        defs.push_back({"SAVE", "save"}); // no NEXT: the boundary is the last thing drawn before forward
-    } else if (step_ == "forward") {
-        defs.push_back({"BACK", "back"});
-        defs.push_back({"REPEAT", "repeat"});
-        defs.push_back({"NEXT", "next"});
+        if (backAvailable()) {
+            defs.push_back({"BACK", "back"}); // back to the floor step
+        }
+        defs.push_back({"REPEAT", "repeat"}); // clear the stroke and draw again
+        defs.push_back({"SAVE", "save"});     // accept the drawn boundary and finish
     }
     if (defs.empty()) {
         return;
@@ -323,7 +337,7 @@ void MapFlow::layoutButtons() {
     // a centred row of chips just below the last text line (lines() is the same here and in build() this frame)
     const double nlines = static_cast<double>(lines().size());
     const double rowV = 0.06 - kLineH * nlines - 0.03;
-    const bool wide = step_ == "mode";
+    const bool wide = step_ == "mode" || step_ == "posture";
     const double hw = wide ? 0.21 : 0.13, hh = wide ? 0.05 : 0.032, gap = 0.035;
     const double total = static_cast<double>(defs.size()) * 2 * hw + static_cast<double>(defs.size() - 1) * gap;
     double u = -total / 2 + hw;
@@ -363,6 +377,7 @@ int MapFlow::buttonAt(const room::Vec3& uv) const {
 }
 
 void MapFlow::pressButton(const std::string& action, double now) {
+    (void)now; // no button handler needs the time any more (the floor uses the stick-tuned drop)
     if (action == "mode-full") {
         mode_ = "full";
         answer("mode", {1.0});
@@ -371,6 +386,26 @@ void MapFlow::pressButton(const std::string& action, double now) {
     if (action == "mode-quick") {
         mode_ = "quick";
         answer("mode", {0.0});
+        return;
+    }
+    if (action == "posture-stand") {
+        answer("posture", {0.0});
+        return;
+    }
+    if (action == "posture-sit") {
+        answer("posture", {1.0});
+        return;
+    }
+    if (action == "size-s") {
+        answer("size", {0.0});
+        return;
+    }
+    if (action == "size-m") {
+        answer("size", {1.0});
+        return;
+    }
+    if (action == "size-b") {
+        answer("size", {2.0});
         return;
     }
     if (action == "back") {
@@ -383,7 +418,7 @@ void MapFlow::pressButton(const std::string& action, double now) {
             pathLen_ = 0;
         }
         if (isFloorStep(step_)) {
-            floorAdjust_ = 0; // drop the nudge
+            floorDrop_.reset(); // reset the floor to the posture / eye default on the next frame
         }
         answer("repeat", {});
         return;
@@ -392,36 +427,21 @@ void MapFlow::pressButton(const std::string& action, double now) {
         answer("next", {}); // pibridge-roommap ends the walk early
         return;
     }
-    if (step_ == "forward" && action == "next") {
-        if (headValid_ && st_ && st_->conv && link_.valid()) {
-            const auto p = toRoom(head_.pos());
-            if (p) {
-                const double fh = wrapPi(headingOf(head_) - link_.yaw() + st_->conv->yaw);
-                error_.clear();
-                answer("forward", {p->x, p->z, fh, p->y});
-            }
-        } else {
-            error_ = "WAITING FOR THE HEAD TRACKING. LOOK AROUND A LITTLE.";
-        }
+    if (step_ == "confirm" && action == "next") {
+        answer("next", {}); // quick: the final FINISH; pibridge-roommap then writes everything from the live head
         return;
     }
     if (isFloorStep(step_) && action == "next") {
-        // save the floor as currently shown (including the stick nudge): a known floor as a touch, else the standing
-        // height. floorAdjust_ is in stage metres but the yaw-only frames keep y, so it adds straight to the room y.
-        if (st_ && st_->floor) {
-            error_.clear();
-            answer("touch", {*st_->floor + floorAdjust_});
-        } else if (eye_) {
-            if (const auto fy = standingFloor(now)) {
-                if (const auto r = toRoom({head_.pos().x, *fy + floorAdjust_, head_.pos().z})) {
-                    error_.clear();
-                    answer("height", {r->y, *eye_});
-                }
+        // save the floor as the HEAD-RELATIVE drop the user tuned with the stick: answer height {room y, drop}. The
+        // drop (not a raw room y) is what the chaperone uses, so the floor is always "N below the face".
+        if (headValid_ && floorDrop_) {
+            const double fy = head_.pos().y - *floorDrop_; // the floor plane in the stage
+            if (const auto r = toRoom({head_.pos().x, fy, head_.pos().z})) {
+                error_.clear();
+                answer("height", {r->y, *floorDrop_});
             } else {
-                error_ = "STAND STILL AND UPRIGHT, OR TOUCH THE FLOOR, THEN PRESS NEXT.";
+                error_ = "WAITING FOR THE HEAD TRACKING. LOOK AROUND A LITTLE.";
             }
-        } else {
-            error_ = "TOUCH THE FLOOR WITH A CONTROLLER FIRST, THEN PRESS NEXT.";
         }
         return;
     }
@@ -477,6 +497,12 @@ std::optional<double> MapFlow::standingFloor(double now) const {
 
 void MapFlow::frame(const room::FrameInput& in, double now, const std::optional<guide::State>& st, const StageLink& link) {
     headValid_ = in.headValid;
+    for (std::size_t i = 0; i < 2; i++) {
+        handValid_[i] = in.hands[i].valid;
+        handGrip_[i] = in.hands[i].grip;          // the aim pose (pointing ray) for the laser
+        handModelValid_[i] = in.hands[i].gripPoseValid;
+        handModelPose_[i] = in.hands[i].gripPose;  // the handle pose for the render model
+    }
     if (in.headValid) {
         head_ = in.head;
         headY_ = in.head.pos().y;
@@ -504,6 +530,16 @@ void MapFlow::frame(const room::FrameInput& in, double now, const std::optional<
         stepSince_ = now;
         floorAdjust_ = 0; // the floor nudge is per floor step
         lastNudge_ = 0;
+        floorDrop_.reset();
+    }
+    // The backend reached the end (done) or failed: end the frontend here so the XR loop exits and the process returns,
+    // which lets pibridge-roomsetup write the SteamVR chaperone. Previously we only ended when the backend *process*
+    // exited, so a lingering backend left the frontend (and the chaperone write) hanging on the final step.
+    if (!endedAt_ && (step_ == "done" || step_ == "failed")) {
+        endedAt_ = now;
+        if (step_ == "failed" && endText_.empty()) {
+            endText_ = st_ ? st_->text : std::string();
+        }
     }
     if (st_ && st_->floor) {
         if (const auto p = toStage({0, *st_->floor, 0})) {
@@ -539,46 +575,20 @@ void MapFlow::frame(const room::FrameInput& in, double now, const std::optional<
             }
         }
     }
-    const bool linked = st_ && st_->conv && link_.valid();
-    const auto needLink = [&] {
-        if (!linked) {
-            error_ = "WAITING FOR THE HEAD TRACKING. LOOK AROUND A LITTLE.";
-            return false;
-        }
-        return true;
-    };
-    const auto touch = [&](const room::HandInput& h) {
-        // Use the controller's pose even when the cameras do not see it right now: a controller lying on the floor is
-        // usually out of view, but its last pose is kept and is what we want (fix 2026-10-20: it used to fall back to
-        // the head height here, so the floor was set from the headset, not the controller).
-        if (!h.valid) {
-            error_ = "NO CONTROLLER SEEN YET. PUT A CONTROLLER ON THE FLOOR IN VIEW ONCE, THEN PULL THE TRIGGER.";
-            return;
-        }
-        if (!needLink()) {
-            return;
-        }
-        if (const auto r = toRoom(h.grip.pos())) {
-            error_.clear();
-            answer("touch", {r->y});
-        }
-    };
-    const auto standing = [&] {
-        const auto fy = standingFloor(now);
-        if (!fy) {
-            error_ = "STAND STILL AND UPRIGHT, LOOK STRAIGHT AHEAD, THEN PULL THE TRIGGER.";
-            return;
-        }
-        if (!needLink()) {
-            return;
-        }
-        if (const auto r = toRoom({head_.pos().x, *fy + floorAdjust_, head_.pos().z})) {
-            error_.clear();
-            answer("height", {r->y, *eye_});
-        }
-    };
-    // the floor-grid nudge with the thumbstick (room-setup rework): stick up raises, down lowers the floor 1 cm a step
+    // The custom/full standing FLOOR step: the floor is a head-relative drop ("the floor is N m below your face"),
+    // started at the default the backend published (the entered eye height, else 1.60 m) and fine-tuned with the
+    // thumbstick +/- 1 cm, clamped to [kFloorDropMin, kFloorDropMax]. Stick up raises the floor (smaller drop), down
+    // lowers it. No controller-lowering, no "touch the floor" action. Quick has no floor step.
     if (isFloorStep(step_)) {
+        if (!floorDrop_) {
+            double d = eye_.value_or(1.60);
+            if (headValid_ && st_ && st_->floor) {
+                if (const auto fs = toStage({0, *st_->floor, 0})) {
+                    d = head_.pos().y - fs->y; // the published default floor, as a drop below the head
+                }
+            }
+            floorDrop_ = std::clamp(d, kFloorDropMin, kFloorDropMax);
+        }
         double sy = 0;
         for (const auto& h : in.hands) {
             if (std::fabs(static_cast<double>(h.stickY)) > std::fabs(sy)) {
@@ -586,7 +596,7 @@ void MapFlow::frame(const room::FrameInput& in, double now, const std::optional<
             }
         }
         if (std::fabs(sy) > 0.5 && now - lastNudge_ > 0.12) {
-            floorAdjust_ = std::clamp(floorAdjust_ + (sy > 0 ? 0.01 : -0.01), -0.5, 0.5);
+            floorDrop_ = std::clamp(*floorDrop_ + (sy > 0 ? -0.01 : 0.01), kFloorDropMin, kFloorDropMax);
             lastNudge_ = now;
         }
     }
@@ -594,11 +604,15 @@ void MapFlow::frame(const room::FrameInput& in, double now, const std::optional<
     layoutButtons();
     hover_ = -1;
     int hoverHand = -1;
+    panelHitWorld_[0].reset();
+    panelHitWorld_[1].reset();
     for (std::size_t i = 0; i < 2; i++) {
         if (const auto uv = panelLocalHit(in.hands[i])) {
             if (const int b = buttonAt(*uv); b >= 0) {
                 hover_ = b;
                 hoverHand = static_cast<int>(i);
+                // the hit point back in the stage (on the panel plane) for the laser's end
+                panelHitWorld_[i] = at_ + right_ * uv->x + up_ * uv->y;
             }
         }
     }
@@ -614,44 +628,9 @@ void MapFlow::frame(const room::FrameInput& in, double now, const std::optional<
         if (btnPressed[i]) {
             continue; // the trigger went to a panel button, not the floor / boundary / forward
         }
-        const room::HandInput& h = in.hands[i];
         const bool trig = pressed(btn[i], prev_[i], room::bit::Trigger);
-        if (eye_ && isFloorStep(step_)) {
-            // the floor from your height first; A: the grid is right; a controller on the floor: a touch
-            const double y = h.grip.pos().y;
-            // a controller clearly below the head (or near the grid) means "floor from the controller", even if the
-            // cameras are not seeing it this instant (h.valid keeps its last pose); do not require h.tracked here
-            const bool low = h.valid &&
-                             ((headValid_ && headY_ - y >= kTouchBelowHead) ||
-                              (floorStage_ && std::fabs(y - *floorStage_) < kTouchNearGrid));
-            if (trig && step_ != "floor-height" && low) {
-                touch(h);
-            } else if (trig) {
-                standing();
-            } else if (step_ == "floor-confirm" && pressed(btn[i], prev_[i], room::bit::Grip) && needLink()) {
-                error_.clear();
-                answer("yes", {});
-            }
-            continue;
-        }
-        if (step_ == "floor-confirm" && trig && h.valid) {
-            const double y = h.grip.pos().y;
-            const double below = headY_ - y;
-            // a controller low down, or near the grid: it is on the floor (a touch), else a yes
-            if (!h.tracked || (headValid_ && below >= kTouchBelowHead) ||
-                (floorStage_ && std::fabs(y - *floorStage_) < kTouchNearGrid)) {
-                touch(h);
-            } else if (needLink()) {
-                error_.clear();
-                answer("yes", {});
-            }
-        } else if (step_ == "floor-touch" && trig && h.valid) {
-            if (!recenterFloorPlausible(headValid_, headY_, h.grip.pos().y)) {
-                error_ = "THAT IS NOT THE FLOOR. TOUCH THE FLOOR AND PULL THE TRIGGER.";
-            } else {
-                touch(h);
-            }
-        } else if (step_ == "boundary") {
+        // the floor step is driven by the stick + the NEXT chip (above / in pressButton), not by the controllers
+        if (step_ == "boundary") {
             if (trig && drawHand_ < 0) {
                 drawHand_ = static_cast<int>(i);
                 drawStart_ = now;
@@ -668,55 +647,19 @@ void MapFlow::frame(const room::FrameInput& in, double now, const std::optional<
                 }
             }
             if (drawHand_ == static_cast<int>(i) && !down(btn[i], room::bit::Trigger)) {
+                // Stroke finished. The trigger used for drawing (ray on the floor, not a menu chip) NEVER submits or
+                // advances: the drawn stroke stays as the pending boundary and the user must press the SAVE chip to
+                // accept it. Just give a hint here.
                 drawHand_ = -1;
-                if (now - drawStart_ < 0.6 && pathLen_ < 0.5) {
-                    if (st_ && st_->boundary.size() >= 3) {
-                        if (needLink()) {
-                            path_.clear();
-                            answer("yes", {});
-                        }
-                    } else {
-                        error_ = "HOLD THE TRIGGER AND DRAW THE EDGE ON THE FLOOR.";
-                    }
-                } else if (pathLen_ < 2.0) {
-                    error_ = "THAT WAS TOO SHORT. HOLD THE TRIGGER AND DRAW ALL THE WAY AROUND.";
-                } else if (needLink()) {
-                    std::vector<double> xz;
-                    for (const auto& p : path_) {
-                        if (const auto r = toRoom(p)) {
-                            xz.push_back(r->x);
-                            xz.push_back(r->z);
-                        }
-                    }
-                    error_.clear();
-                    answer("path", std::move(xz));
+                if (pathLen_ >= 2.0) {
+                    error_ = "PRESS SAVE TO KEEP THIS BOUNDARY, OR DRAW AGAIN.";
+                } else if (!path_.empty()) {
+                    error_ = "THAT WAS TOO SHORT. DRAW ALL THE WAY AROUND, THEN PRESS SAVE.";
                 }
             }
-        } else if (step_ == "forward" && trig) {
-            still_.reset();
-            if (needLink() && headValid_) {
-                const auto p = toRoom(head_.pos());
-                // forward in the room: the stage heading through the link's and the room fix's yaw
-                const double fh = wrapPi(headingOf(head_) - link_.yaw() + st_->conv->yaw);
-                error_.clear();
-                answer("forward", {p->x, p->z, fh, p->y});
-            }
         }
     }
-    // forward also by holding still for 3 s (as pibridge-roommap's own step)
-    if (step_ == "forward" && headValid_ && linked) {
-        if (still_ && std::hypot(head_.pos().x - still_->second.pos().x, head_.pos().z - still_->second.pos().z) < 0.03 &&
-            std::fabs(wrapPi(headingOf(head_) - headingOf(still_->second))) < 3 * kDeg) {
-            if (now - still_->first >= 3.0 && now - stepSince_ > 2.0) {
-                const auto p = toRoom(head_.pos());
-                const double fh = wrapPi(headingOf(head_) - link_.yaw() + st_->conv->yaw);
-                answer("forward", {p->x, p->z, fh, p->y});
-                still_.reset();
-            }
-        } else {
-            still_ = std::pair{now, head_};
-        }
-    }
+    // (the old "forward" step is gone: in the custom flow the centre and forward are taken from the live head at SAVE)
     done();
 }
 
@@ -735,7 +678,7 @@ void MapFlow::childEnded(int code, const std::string& lastLine, double now) {
 }
 
 bool MapFlow::finished(double now) const {
-    return endedAt_ && now - *endedAt_ > (cancelled_ ? 1.5 : 5.0);
+    return endedAt_ && now - *endedAt_ > (cancelled_ ? 1.5 : 2.0);
 }
 
 std::vector<std::string> MapFlow::lines() const {
@@ -763,8 +706,8 @@ std::vector<std::string> MapFlow::lines() const {
             l.push_back(h);
         }
     }
-    if (eye_ && isFloorStep(step_) && !endedAt_) {
-        l.push_back(std::format("YOUR EYE HEIGHT {:.2f} M", *eye_));
+    if (isFloorStep(step_) && floorDrop_ && !endedAt_) {
+        l.push_back(std::format("FLOOR IS {:.2f} M BELOW YOUR FACE", *floorDrop_));
     }
     if (!error_.empty()) {
         add(error_);
@@ -905,6 +848,50 @@ void MapFlow::build(room::Batch& b, double now) const {
         b.tri(tip, o + f * 0.95 + r * 0.14, o + f * 0.95 - r * 0.14, kDraw);
         b.line(o - r * 0.15, o + r * 0.15, kDraw);
         b.line(o - f * 0.15, o + f * 0.15, kDraw);
+    }
+
+    // the controller laser (always) plus a shape: the real SteamVR render model is drawn by the XR side (rendermodel.h)
+    // when loaded, which sets modelShown_ so build() skips the box proxy for that hand; otherwise the box proxy (ported
+    // from the editor's drawTools, libpibridge-room scene.cpp) stands in. The beam ends at the hovered chip, else the
+    // floor point, else ~3 m out.
+    for (std::size_t i = 0; i < 2; i++) {
+        if (!handValid_[i]) {
+            continue;
+        }
+        const room::Mat34& m = handGrip_[i];
+        const room::Vec3 o = m.pos();
+        const room::Vec3 dir = (m.axis(2) * -1.0).norm();
+        // the box along the controller's axes (only when the real model is not being drawn for this hand)
+        if (!modelShown_[i]) {
+            const room::Vec3 ax = m.axis(0) * 0.02, ay = m.axis(1) * 0.015, az = m.axis(2) * 0.06;
+            for (const room::Vec3 sgn : {ax, ax * -1.0}) {
+                b.line(o + sgn + ay - az, o + sgn + ay + az, kBox);
+                b.line(o + sgn - ay - az, o + sgn - ay + az, kBox);
+            }
+            b.line(o - ax + ay - az, o + ax + ay - az, kBox);
+            b.line(o - ax - ay - az, o + ax - ay - az, kBox);
+        }
+        // the laser to where it points
+        room::Vec3 end = o + dir * 3.0;
+        if (panelHitWorld_[i]) {
+            end = *panelHitWorld_[i];
+        } else if (hits_[i]) {
+            end = *hits_[i];
+        }
+        b.line(o, end, kBeam);
+        // a small reticle facing along the beam at the hit
+        room::Vec3 ra = dir.cross({0, 1, 0});
+        if (ra.length() < 1e-4) {
+            ra = dir.cross({1, 0, 0});
+        }
+        ra = ra.norm();
+        const room::Vec3 rb = dir.cross(ra).norm();
+        const double rr = 0.03;
+        for (int sgi = 0; sgi < 16; sgi++) {
+            const double a0 = sgi * kPi / 8, a1 = (sgi + 1) * kPi / 8;
+            b.line(end + ra * (rr * std::cos(a0)) + rb * (rr * std::sin(a0)),
+                   end + ra * (rr * std::cos(a1)) + rb * (rr * std::sin(a1)), kBeam);
+        }
     }
 
     // the micro-window card: framed body, a header strip over the title, the text, then the button chips

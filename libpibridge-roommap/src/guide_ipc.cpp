@@ -237,12 +237,13 @@ std::expected<Answer, std::string> parse_answer(std::string_view text) {
         return std::unexpected(std::string("guide answer without an answer"));
     }
     const std::size_t n = a.nums.size();
-    // the room-setup rework adds the panel's control chips: mode (1 num: 1 = full, 0 = quick), and back / repeat / next
-    // (0 nums) for the step buttons.
+    // the room-setup rework adds the panel's control chips: mode (1 num: 1 = full, 0 = quick), posture (1 num:
+    // 0 = stand, 1 = sit), size (1 num: 0/1/2 = small/medium/big), and back / repeat / next (0 nums).
     const bool ok = (a.kind == "yes" && n == 0) || (a.kind == "cancel" && n == 0) || (a.kind == "touch" && n == 1) ||
                     (a.kind == "height" && n == 2) || (a.kind == "forward" && n == 4) ||
                     (a.kind == "path" && n >= 6 && n % 2 == 0) || (a.kind == "mode" && n == 1) ||
-                    (a.kind == "back" && n == 0) || (a.kind == "repeat" && n == 0) || (a.kind == "next" && n == 0);
+                    (a.kind == "posture" && n == 1) || (a.kind == "size" && n == 1) || (a.kind == "back" && n == 0) ||
+                    (a.kind == "repeat" && n == 0) || (a.kind == "next" && n == 0);
     if (!ok) {
         return std::unexpected(std::format("answer \"{}\" with {} numbers", a.kind, n));
     }

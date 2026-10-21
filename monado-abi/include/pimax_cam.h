@@ -148,7 +148,7 @@ pimax_cam_record_start(pimax_cam *cam, const char *path, uint32_t zlib_level);
 int64_t
 pimax_cam_record_stop(pimax_cam *cam);
 
-/* path NULL = $PIMAX_CAM_CALIB, $PIMAX_CALIB, ~/.config/omarchyvr/headset-calibration.xml,
+/* path NULL = $PIMAX_CAM_CALIB, $PIMAX_CALIB, ~/.config/pibridge/headset-calibration.xml,
  * <repo>/analysis/headset-calibration.xml (repo = $PIMAX_REPO,
  * ~/.local/share/omarchyvr/data or ~/omarchyvr). used_path may be NULL. */
 int
@@ -180,7 +180,7 @@ typedef struct pimax_cam_slam_imu
 	char source[256]; /* "defaults" or the file used */
 } pimax_cam_slam_imu;
 
-/* path NULL = $PIMAX_SLAM_IMU or ~/.config/omarchyvr/slam-imu.json if present. 1 = file, 0 = defaults, -1 = bad file
+/* path NULL = $PIMAX_SLAM_IMU or ~/.config/pibridge/slam-imu.json if present. 1 = file, 0 = defaults, -1 = bad file
  * (defaults written). */
 int
 pimax_cam_slam_imu_load(const char *path, pimax_cam_slam_imu *out);

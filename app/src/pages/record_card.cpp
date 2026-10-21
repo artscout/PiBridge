@@ -72,17 +72,21 @@ RecordCard::RecordCard(StateSource& source, IoSessionControl& direct, QWidget* p
     auto* g = new QGridLayout;
     g->setHorizontalSpacing(12);
     g->setVerticalSpacing(6);
-    eyes_ = new pibridge::ui::Segmented({QStringLiteral("One eye"), QStringLiteral("Both eyes")});
-    eyes_->setToolTip(QStringLiteral("One eye (the left, before the lens distortion) or both side by side."));
+    // What to record (pibridge::record::View): the game's own left/right/both eye render (clean, no SteamVR overlays or
+    // lens distortion).
+    const QString sourceTip = QStringLiteral(
+        "What to record: Left eye, Right eye, or Both eyes side by side -- the game's own render (clean, no SteamVR "
+        "overlays or lens distortion).");
+    eyes_ = new pibridge::ui::Segmented(
+        {QStringLiteral("Left eye"), QStringLiteral("Right eye"), QStringLiteral("Both eyes")});
+    eyes_->setToolTip(sourceTip);
     fps_ = new pibridge::ui::Segmented({QStringLiteral("30"), QStringLiteral("60"), QStringLiteral("72")});
     fps_->setToolTip(QStringLiteral("Frames per second of the video."));
     quality_ = new pibridge::ui::Segmented({QStringLiteral("Low"), QStringLiteral("Medium"), QStringLiteral("High")});
     quality_->setToolTip(QStringLiteral("Bigger files look better. The GPU encoder (NVENC) is used when ffmpeg has it."));
     // System sound is always recorded now; the only audio choice is whether to add the microphone.
     mic_ = new pibridge::ui::Toggle;
-    g->addWidget(capsHelp(QStringLiteral("Eyes"),
-                          QStringLiteral("One eye (the left, before the lens distortion) or both side by side.")),
-                 0, 0);
+    g->addWidget(capsHelp(QStringLiteral("Source"), sourceTip), 0, 0);
     g->addWidget(eyes_, 0, 1, Qt::AlignLeft);
     g->addWidget(capsHelp(QStringLiteral("FPS"), QStringLiteral("Frames per second of the video.")), 0, 2);
     g->addWidget(fps_, 0, 3, Qt::AlignLeft);
@@ -118,8 +122,10 @@ RecordCard::RecordCard(StateSource& source, IoSessionControl& direct, QWidget* p
     row->addLayout(right);
     body()->addLayout(row);
 
-    connect(eyes_, &pibridge::ui::Segmented::activated, this,
-            [this](int i) { change("eyes", i == 1 ? QStringLiteral("both") : QStringLiteral("left")); });
+    connect(eyes_, &pibridge::ui::Segmented::activated, this, [this](int i) {
+        const char* v = i == 1 ? "right" : i == 2 ? "both" : "left";
+        change("view", QString::fromLatin1(v));
+    });
     connect(fps_, &pibridge::ui::Segmented::activated, this,
             [this](int i) { change("fps", QString::number(rec::kFpsChoices[static_cast<std::size_t>(i)])); });
     connect(quality_, &pibridge::ui::Segmented::activated, this, [this](int i) {
@@ -128,41 +134,8 @@ RecordCard::RecordCard(StateSource& source, IoSessionControl& direct, QWidget* p
     });
     connect(mic_, &QAbstractButton::toggled, this,
             [this](bool on) { change("mic", on ? QStringLiteral("on") : QStringLiteral("off")); });
-    connect(record_, &QPushButton::clicked, this, [this] {
-        if (source_.fake()) {
-            emit message(QStringLiteral("Fake mode: nothing was recorded."), false);
-            return;
-        }
-        if (tool().isEmpty()) {
-            emit message(QStringLiteral("pibridge-record is not installed."), true);
-            return;
-        }
-        busy_ = true;
-        record_->setEnabled(false);
-        emit message(QStringLiteral("Starting the recording..."), false);
-        startRecording(*runner_, tool(), [this](int code, const QString& out) {
-            busy_ = false;
-            emit message(code == 0 ? QStringLiteral("Recording.") : out.trimmed().section(QLatin1Char('\n'), -1)
-                                                                        .remove(QStringLiteral("pibridge-record: ")),
-                         code != 0);
-            refresh();
-        });
-    });
-    connect(stop_, &QPushButton::clicked, this, [this] {
-        if (source_.fake()) {
-            emit message(QStringLiteral("Fake mode: nothing was stopped."), false);
-            return;
-        }
-        busy_ = true;
-        stop_->setEnabled(false);
-        emit message(QStringLiteral("Finishing the file..."), false);
-        stopRecording(*runner_, tool(), [this](int code, const QString& out) {
-            busy_ = false;
-            const QString line = out.trimmed().section(QLatin1Char('\n'), -1).remove(QStringLiteral("pibridge-record: "));
-            emit message(code == 0 ? QStringLiteral("Saved. %1").arg(line) : line, code != 0);
-            refresh();
-        });
-    });
+    connect(record_, &QPushButton::clicked, this, [this] { doStart(); });
+    connect(stop_, &QPushButton::clicked, this, [this] { doStop(); });
     connect(folder_, &QPushButton::clicked, this, [this] {
         if (lastFolder_.isEmpty() || source_.fake()) {
             return;
@@ -204,7 +177,7 @@ void RecordCard::applySettings() {
         (void)s.set("audio", "on");
         (void)saveRecordSettings(s);
     }
-    eyes_->setCurrent(s.eyes == rec::Eyes::Both ? 1 : 0);
+    eyes_->setCurrent(s.view == rec::View::RightEye ? 1 : s.view == rec::View::BothEyes ? 2 : 0);
     fps_->setCurrent(s.fps == 72 ? 2 : s.fps == 60 ? 1 : 0);
     quality_->setCurrent(s.quality == rec::Quality::Low ? 0 : s.quality == rec::Quality::Medium ? 1 : 2);
     mic_->setCheckedQuiet(s.mic);
@@ -244,10 +217,62 @@ void RecordCard::apply(const RecordCardModel& m) {
                                         : QStringLiteral("Last file: %1").arg(QFileInfo(m.lastFile).fileName()));
     last_->setToolTip(m.lastFile);
     folder_->setVisible(!m.lastFolder.isEmpty());
+    canStart_ = m.canStart;
+    canStop_ = m.canStop;
     record_->setEnabled(m.canStart && !busy_);
     stop_->setEnabled(m.canStop && !busy_);
     record_->setVisible(!m.canStop);
     stop_->setVisible(m.canStop);
+}
+
+void RecordCard::doStart() {
+    if (source_.fake()) {
+        emit message(QStringLiteral("Fake mode: nothing was recorded."), false);
+        return;
+    }
+    if (tool().isEmpty()) {
+        emit message(QStringLiteral("pibridge-record is not installed."), true);
+        return;
+    }
+    busy_ = true;
+    record_->setEnabled(false);
+    emit message(QStringLiteral("Starting the recording..."), false);
+    startRecording(*runner_, tool(), [this](int code, const QString& out) {
+        busy_ = false;
+        emit message(code == 0 ? QStringLiteral("Recording.")
+                               : out.trimmed().section(QLatin1Char('\n'), -1).remove(QStringLiteral("pibridge-record: ")),
+                     code != 0);
+        refresh();
+    });
+}
+
+void RecordCard::doStop() {
+    if (source_.fake()) {
+        emit message(QStringLiteral("Fake mode: nothing was stopped."), false);
+        return;
+    }
+    busy_ = true;
+    stop_->setEnabled(false);
+    emit message(QStringLiteral("Finishing the file..."), false);
+    stopRecording(*runner_, tool(), [this](int code, const QString& out) {
+        busy_ = false;
+        const QString line = out.trimmed().section(QLatin1Char('\n'), -1).remove(QStringLiteral("pibridge-record: "));
+        emit message(code == 0 ? QStringLiteral("Saved. %1").arg(line) : line, code != 0);
+        refresh();
+    });
+}
+
+void RecordCard::recordFromVr(bool start) {
+    if (busy_) {
+        return;
+    }
+    if (start) {
+        if (canStart_) {
+            doStart();
+        }
+    } else if (canStop_) {
+        doStop();
+    }
 }
 
 void RecordCard::showEvent(QShowEvent* e) {

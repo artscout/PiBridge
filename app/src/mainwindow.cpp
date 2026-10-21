@@ -20,6 +20,7 @@
 #include "pages/apps.h"
 #include "pages/dashboard.h"
 #include "pages/development.h"
+#include "pages/record_card.h"
 #include "pages/device.h"
 #include "pages/display.h"
 #include "pages/logs.h"
@@ -165,8 +166,11 @@ MainWindow::MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder 
                                                                 "first.")
                                                : QString());
     });
+    // The SteamVR dashboard launcher (a leaf): its switch is in the Dashboard's Quick settings; its clicks launch room setup.
+    overlay_ = std::make_unique<OverlayControl>(conf_, source_.fake());
+
     stack_ = new QStackedWidget;
-    auto* dash = new DashboardPage(source_, actions_, conf_, *io_, *direct_);
+    auto* dash = new DashboardPage(source_, actions_, conf_, *io_, *direct_, *overlay_);
     connect(dash, &DashboardPage::openTracking, this, [this] { showPage(Tracking); });
     connect(dash, &DashboardPage::openRoom, this, [this] { showPage(Room); });
     stack_->addWidget(dash);
@@ -186,12 +190,29 @@ MainWindow::MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder 
     };
     connect(io_.get(), &IoSessionControl::changed, dev, block);
     connect(direct_.get(), &IoSessionControl::changed, dev, block);
-    stack_->addWidget(new RoomPage(source_, runner, findTool, &conf_));
+    auto* roomPage = new RoomPage(source_, runner, findTool, &conf_);
+    // The Dashboard's ROOM SETUP button launches the in-headset setup directly, without opening the Room page.
+    connect(dash, &DashboardPage::startRoomSetup, roomPage, &RoomPage::launchSetup);
+    // QUICK ROOM SETUP launches straight into the quick circle setup (skips the in-VR Full/Quick mode menu).
+    connect(dash, &DashboardPage::startQuickRoomSetup, roomPage, &RoomPage::launchQuickSetup);
+    // A click on the SteamVR dashboard launcher does the same, from inside VR (via the overlay request file).
+    connect(overlay_.get(), &OverlayControl::roomSetupRequested, roomPage, [roomPage](bool quick) {
+        if (quick) {
+            roomPage->launchQuickSetup();
+        } else {
+            roomPage->launchSetup();
+        }
+    });
+    // A click on the overlay's record / stop buttons starts or stops a video recording through the Dashboard's card.
+    if (RecordCard* rc = dash->recordCard()) {
+        connect(overlay_.get(), &OverlayControl::recordRequested, rc, &RecordCard::recordFromVr);
+    }
+    stack_->addWidget(roomPage);
     stack_->addWidget(dev);
     stack_->addWidget(new LogsPage(source_.fake()));
     stack_->addWidget(new AboutPage);
     stack_->addWidget(new DevicePage(source_, conf_, *io_, *direct_)); // index = Device
-    stack_->addWidget(new DisplayPage(source_));                       // index = Display
+    stack_->addWidget(new DisplayPage(source_, conf_, actions_));      // index = Display
     stack_->addWidget(new RecordingPage(source_, *direct_, conf_));    // index = Recording
     if (!source_.fake()) {
         // shows this window in the headset (the SteamVR-panel embed; VR home was dropped, user 2026-10-20)

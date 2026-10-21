@@ -135,6 +135,7 @@ the Crystal Super steps, eye tracking, checks, uninstall).
 
 ## More
 
+- [docs/USER-GUIDE.md](docs/USER-GUIDE.md): the overview — one app, one click, and what each page does.
 - [docs/INSTALL.md](docs/INSTALL.md): install, set up, check, uninstall.
 - [docs/CONVENTIONS.md](docs/CONVENTIONS.md): layout of the tree, rules, file formats.
 - [docs/app.md](docs/app.md) and the other `docs/*.md`: one page per part.

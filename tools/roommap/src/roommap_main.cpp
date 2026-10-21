@@ -778,6 +778,12 @@ R<void> write_offset(const std::string& dir, const store::RelocResult& res, std:
         std::printf("note: SteamVR's standing frame is unknown (PiBridge's SteamVR link writes %s): the floor is put at "
                     "SteamVR's raw y = 0\n", floor::steamvr_stage_path().c_str());
     }
+    if (floor::is_vrserver(pid)) {
+        // SteamVR owns the floor through its chaperone standing pose (written head-relative by the room setup). The
+        // anchor offset aligns the room horizontally and in yaw only; moving the world vertically would double-shift
+        // SteamVR's standing floor (floor in the ceiling). Keep the vertical with SteamVR: offset y = 0.
+        al.t[1] = 0.0;
+    }
     std::printf("offset (app_from_slam): %s\n", fmt_align(al).c_str());
     if (g::norm(al.t) > 20.0) {
         return std::unexpected("offset larger than 20 m: wrong map? not written");

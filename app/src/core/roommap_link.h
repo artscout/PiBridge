@@ -48,8 +48,11 @@ QStringList roomSetupFastArgs(const QString& name, std::optional<double> eyeHeig
 // through the headset cameras with the steps over it and runs `pibridge-roommap setup fast --guide` itself.
 // `chaperone` (SteamVR path): pibridge-roomsetup --map --chaperone -> pibridge-roommap saves the setup with --no-offset and
 // pibridge-roomsetup writes the floor/centre/forward into SteamVR's chaperone instead of a Monado world offset.
+// `quickDirect` starts straight in the quick circle setup (posture -> size -> finish), skipping the in-VR Full/Quick
+// mode menu (the Dashboard's QUICK ROOM SETUP button); false keeps the mode menu (the plain ROOM SETUP button).
 QStringList roomMapHeadsetArgs(const QString& name, const QString& roommapTool, const QString& ring,
-                               std::optional<double> eyeHeight = std::nullopt, bool chaperone = false);
+                               std::optional<double> eyeHeight = std::nullopt, bool chaperone = false,
+                               bool quickDirect = false);
 
 // The floor from the user's height (user decision 2026-10-19: the default floor method; the controllers are tracked
 // poorly near the floor and the map takes tables and beds for the floor). The eye height standing upright: the

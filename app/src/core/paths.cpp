@@ -2,6 +2,7 @@
 #include "paths.h"
 
 #include <QDir>
+#include <QFileInfo>
 #include <unistd.h>
 
 namespace pibridge::app {
@@ -15,6 +16,36 @@ QString configBase() {
 
 } // namespace
 
+QString installPrefix() {
+    if (const QByteArray o = qgetenv("PIBRIDGE_PREFIX"); !o.isEmpty()) {
+        return QString::fromLocal8Bit(o);
+    }
+    // relocatable: <prefix>/bin/pibridge -> <prefix>
+    char buf[4096];
+    const ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n > 0) {
+        buf[n] = '\0';
+        QDir d = QFileInfo(QString::fromLocal8Bit(buf, static_cast<int>(n))).absoluteDir(); // <prefix>/bin
+        if (d.dirName() == QLatin1String("bin")) {
+            d.cdUp();
+            return d.absolutePath();
+        }
+    }
+    return QDir::homePath() + QStringLiteral("/.local");
+}
+
+QString dataDir() {
+    return installPrefix() + QStringLiteral("/share/pibridge");
+}
+
+QString libDir() {
+    return installPrefix() + QStringLiteral("/lib/pibridge");
+}
+
+QString defaultsDir() {
+    return installPrefix() + QStringLiteral("/etc/pibridge");
+}
+
 QString configDir() {
     return configBase() + QStringLiteral("/pibridge");
 }
@@ -25,6 +56,10 @@ QString confPath() {
 
 QString legacyConfPath() {
     return configBase() + QStringLiteral("/pimax-linux/pimax-linux.conf");
+}
+
+QString defaultsConfPath() {
+    return defaultsDir() + QStringLiteral("/pibridge.conf");
 }
 
 QStringList eyeFileDirs() {

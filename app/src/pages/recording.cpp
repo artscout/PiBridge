@@ -12,6 +12,7 @@
 
 #include "../core/conf.h"
 #include "../core/paths.h"
+#include "../core/video_record.h"
 #include "../ui/theme.h"
 #include "../ui/widgets.h"
 #include "record_card.h"
@@ -57,6 +58,36 @@ RecordingPage::RecordingPage(StateSource& source, IoSessionControl& direct, Conf
 
     // the full record controls from the Dashboard
     root->addWidget(new RecordCard(source, direct));
+
+    // encoding: codec + per-eye resolution, written to record.toml (pibridge-record reads them)
+    namespace rec = pibridge::record;
+    QString err;
+    const rec::Settings cur = loadRecordSettings(&err);
+    const auto setRec = [](const char* key, const QString& value) {
+        rec::Settings s = loadRecordSettings();
+        if (s.set(key, value.toStdString())) {
+            (void)saveRecordSettings(s);
+        }
+    };
+    auto* encCard = new pibridge::ui::Card(QStringLiteral("Encoding"));
+    encCard->body()->addWidget(pibridge::ui::dimLabel(QStringLiteral(
+        "The video codec and the per-eye resolution of the recording.")));
+    auto* codec = new pibridge::ui::Segmented({QStringLiteral("H.264"), QStringLiteral("H.265")});
+    codec->setCurrent(cur.codec == rec::Codec::Hevc ? 1 : 0);
+    connect(codec, &pibridge::ui::Segmented::activated, this,
+            [setRec](int i) { setRec("codec", i == 1 ? QStringLiteral("hevc") : QStringLiteral("h264")); });
+    encCard->body()->addWidget(pibridge::ui::settingRow(
+        QStringLiteral("Codec"), codec, nullptr, false,
+        QStringLiteral("H.264 plays everywhere; H.265 (HEVC) makes smaller files at the same quality.")));
+    auto* res = new pibridge::ui::Segmented({QStringLiteral("1080p"), QStringLiteral("2K"), QStringLiteral("4K")});
+    res->setCurrent(cur.max_height >= 2160 ? 2 : cur.max_height >= 1440 ? 1 : 0);
+    connect(res, &pibridge::ui::Segmented::activated, this, [setRec](int i) {
+        setRec("max_height", i == 2 ? QStringLiteral("2160") : i == 1 ? QStringLiteral("1440") : QStringLiteral("1080"));
+    });
+    encCard->body()->addWidget(pibridge::ui::settingRow(
+        QStringLiteral("Resolution"), res, nullptr, false,
+        QStringLiteral("Per-eye output height: 1080p, 2K (1440p) or 4K (2160p), capped by what the headset renders.")));
+    root->addWidget(encCard);
 
     // where to save
     auto* saveCard = new pibridge::ui::Card(QStringLiteral("Save location"));

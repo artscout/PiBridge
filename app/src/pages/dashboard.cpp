@@ -23,7 +23,9 @@
 
 #include "../core/apps_runtime.h"
 #include "../core/chovr.h"
+#include "../core/inside_out.h"
 #include "../core/monado_build.h"
+#include "../core/overlay_control.h"
 #include "../core/rec_setup.h"
 #include "../core/steamvr.h"
 #include "../ui/icons.h"
@@ -57,8 +59,8 @@ QString tail(const QString& out) {
 } // namespace
 
 DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, IoSessionControl& io,
-                             IoSessionControl& direct, QWidget* parent)
-    : QWidget(parent), source_(source), actions_(actions), conf_(conf), io_(io), direct_(direct) {
+                             IoSessionControl& direct, OverlayControl& overlay, QWidget* parent)
+    : QWidget(parent), source_(source), actions_(actions), conf_(conf), io_(io), direct_(direct), overlay_(overlay) {
     setObjectName(QStringLiteral("page"));
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(18, 12, 18, 12);
@@ -239,8 +241,17 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     roomBtn_->setCursor(Qt::PointingHandCursor);
     roomBtn_->setIcon(pibridge::ui::lineIcon(pibridge::ui::Icon::Room, pibridge::ui::color::text));
     roomBtn_->setIconSize({18, 18});
+    // QUICK ROOM SETUP: the quick circle setup straight away (posture -> size -> finish), skipping the in-VR mode menu
+    quickRoomBtn_ = pibridge::ui::toolButton(QStringLiteral("QUICK ROOM SETUP"));
+    quickRoomBtn_->setMinimumHeight(40);
+    quickRoomBtn_->setMinimumWidth(150);
+    quickRoomBtn_->setFont(pibridge::ui::labelFont(14, QFont::DemiBold));
+    quickRoomBtn_->setCursor(Qt::PointingHandCursor);
+    quickRoomBtn_->setIcon(pibridge::ui::lineIcon(pibridge::ui::Icon::Room, pibridge::ui::color::text));
+    quickRoomBtn_->setIconSize({18, 18});
     ioRow->addWidget(ioStart_);
     ioRow->addWidget(roomBtn_);
+    ioRow->addWidget(quickRoomBtn_);
     ioRow->addStretch(1);
     hs->body()->addLayout(ioRow);
     vrStatus_ = pibridge::ui::dimLabel(QString()); // "VR running 1h 5m   Resolution: 5376 x 4972"
@@ -277,7 +288,14 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
             messageTimer_.start(120000);
         }
     });
-    connect(roomBtn_, &QPushButton::clicked, this, [this] { emit openRoom(); });
+    connect(roomBtn_, &QPushButton::clicked, this, [this] {
+        say(QStringLiteral("Starting room setup in the headset..."));
+        emit startRoomSetup();
+    });
+    connect(quickRoomBtn_, &QPushButton::clicked, this, [this] {
+        say(QStringLiteral("Starting quick room setup in the headset..."));
+        emit startQuickRoomSetup();
+    });
     grid->addWidget(hs, 0, 0, 1, 2);
     connect(refresh_, &pibridge::ui::Segmented::activated, this, [this](int i) {
         const int hz = i == 0 ? 72 : 90;
@@ -368,6 +386,27 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
         conf_.set("passthrough", on ? "on" : "off");
         say(on ? QStringLiteral("Passthrough on.") : QStringLiteral("Passthrough off."));
     });
+    // SteamVR dashboard panel (pibridge-overlay): a leaf launcher tab with ROOM SETUP / QUICK ROOM SETUP, right under
+    // Passthrough. Clicking from inside VR launches the setup (the overlay writes a request the app watches).
+    dashOverlay_ = new pibridge::ui::Toggle;
+    dashOverlay_->setChecked(overlay_.wanted());
+    const QString dashTip = QStringLiteral("Puts a small PiBridge tab in the SteamVR dashboard with ROOM SETUP and QUICK "
+                                           "ROOM SETUP buttons, clickable with the controller laser. Saved as "
+                                           "steamvr_dashboard in pibridge.conf; a leaf, so if it fails VR keeps running.");
+    dashOverlay_->setToolTip(dashTip);
+    quick->body()->addWidget(
+        pibridge::ui::settingRow(QStringLiteral("SteamVR dashboard"), dashOverlay_, nullptr, false, dashTip));
+    dashOverlayLine_ = pibridge::ui::dimLabel(QString());
+    dashOverlayLine_->setFont(pibridge::ui::bodyFont(12));
+    dashOverlayLine_->setWordWrap(true);
+    quick->body()->addWidget(dashOverlayLine_);
+    connect(dashOverlay_, &QAbstractButton::toggled, this, [this](bool on) {
+        if (!overlay_.setWanted(on)) {
+            say(QStringLiteral("Could not write %1").arg(conf_.path()), true);
+        }
+        updateOverlay();
+    });
+    connect(&overlay_, &OverlayControl::changed, this, &DashboardPage::updateOverlay);
     eyeToggle_ = new pibridge::ui::Toggle;
     const QString eyeTip = QStringLiteral("Eye tracking on or off (eye_tracking in pibridge.conf; starts or stops "
                                           "the pibridge-eyed service).");
@@ -455,7 +494,19 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     // ---- tracking (base stations from SteamVR)
     auto* tracking = new pibridge::ui::Card(QStringLiteral("Tracking"));
     trChip_ = tracking->chip();
-    trChip_->set(QStringLiteral("LIGHTHOUSE"), ChipKind::Info);
+    // The head-tracking mode selector lives in the card header (right of the title, where the mode type is shown), the
+    // same control as the Tracking page: switching saves tracking_mode and refreshes. The selector shows the mode, so
+    // the chip stays hidden.
+    trModeSel_ = new pibridge::ui::Segmented({QStringLiteral("Lighthouse"), QStringLiteral("Inside-out")});
+    trModeSel_->setToolTip(QStringLiteral("Lighthouse: SteamVR base stations (works today). Inside-out: the headset's "
+                                          "own cameras (SLAM, experimental)."));
+    connect(trModeSel_, &pibridge::ui::Segmented::activated, this, [this](int i) {
+        conf_.set(iokey::kMode, i == 1 ? "inside-out" : "lighthouse");
+        io_.refresh();
+        updateMode();
+        applyState();
+    });
+    tracking->header()->addWidget(trModeSel_, 0, Qt::AlignVCenter);
     auto* trHead = new QHBoxLayout;
     trHead->setSpacing(12);
     auto* trIcon = new QLabel;
@@ -500,7 +551,8 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     sound->body()->addWidget(
         pibridge::ui::dimLabel(QStringLiteral("Make the headset the default audio output while it is on.")));
     sound->body()->addWidget(pibridge::ui::rule());
-    sound->body()->addWidget(new SoundTestPanel(source_.fake())); // pages/sound_tests.h
+    soundPanel_ = new SoundTestPanel(source_.fake()); // pages/sound_tests.h
+    sound->body()->addWidget(soundPanel_);
     sound->body()->addStretch(1);
     grid->addWidget(sound, 1, 2);
     connect(audio_, &QAbstractButton::toggled, this, [this](bool on) {
@@ -746,8 +798,9 @@ void DashboardPage::updateMode() {
     updateVrStatus();
     const IoSettings io = ioSettings(conf_);
     const bool inside = io.mode == TrackingMode::InsideOut;
-    trChip_->set(inside ? QStringLiteral("INSIDE-OUT") : QStringLiteral("LIGHTHOUSE"),
-                 inside ? ChipKind::Warn : ChipKind::Info);
+    if (trModeSel_ != nullptr) {
+        trModeSel_->setCurrent(inside ? 1 : 0); // reflect the saved mode (programmatic: does not emit activated)
+    }
     const bool active = io_.active();
     if (direct_.active()) {
         trMode_->setText(QStringLiteral("\"Monado directly\" runs (Development page). %1").arg(direct_.message()));
@@ -828,6 +881,19 @@ void DashboardPage::applyConf() {
     updateMode();
 }
 
+void DashboardPage::updateOverlay() {
+    if (dashOverlay_ == nullptr) {
+        return;
+    }
+    const OverlayStatus s = overlay_.status(source_.state().steamvrRunning);
+    dashOverlay_->setCheckedQuiet(overlay_.wanted());
+    dashOverlayLine_->setText(s.words);
+    dashOverlayLine_->setVisible(!s.words.isEmpty());
+    dashOverlayLine_->setStyleSheet(s.error ? QStringLiteral("color: #ef5a55;")
+                                    : s.run == OverlayRun::WaitingForSteamVr ? QStringLiteral("color: #f2b02e;")
+                                                                             : QString());
+}
+
 void DashboardPage::applyState() {
     updateFixCaps();
     if (isVisible() && !io_.active()) {
@@ -888,6 +954,15 @@ void DashboardPage::applyState() {
     // Serial: from the SteamVR headset during a session; keepalived does not report one yet. "—" when unknown.
     const QString hsSerial = (hmd != nullptr && !hmd->serial.isEmpty()) ? hmd->serial : QString();
     hsSerial_->setText(hsSerial.isEmpty() ? QStringLiteral("—") : hsSerial);
+    // Room setup and the sound tests need a live SteamVR session; grey them out until it runs.
+    roomBtn_->setEnabled(s.steamvrRunning);
+    if (quickRoomBtn_ != nullptr) {
+        quickRoomBtn_->setEnabled(s.steamvrRunning);
+    }
+    if (soundPanel_ != nullptr) {
+        soundPanel_->setVrRunning(s.steamvrRunning);
+    }
+    updateOverlay(); // SteamVR up/down changes the launcher's status words
     const ControllersView cv = monadoMode_ ? monadoControllersView(mndStatus_) : controllersView(s.steamvr, s.steamvrRunning);
     ctrlChip_->set(cv.header);
     const bool connected = monadoMode_ ? mndStatus_.state == MndLinkState::Connected

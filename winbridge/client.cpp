@@ -1,8 +1,8 @@
-// pibridge winbridge-клиент (нативный Linux): гоняет replay.bin (EuRoC -> prep_replay.py)
-// через winbridge-сервер и пишет позы в CSV. Это регресс-тест протокола; дальше вместо
-// replay.bin будет live-поток libpibridge-cam/IMU.
-// Сборка: g++ -O2 -std=c++20 client.cpp -o winbridge-client
-// Запуск: winbridge-client replay.bin poses.csv [speed] [port]
+// pibridge winbridge client (native Linux): runs replay.bin (EuRoC -> prep_replay.py)
+// through the winbridge server and writes poses to CSV. This is a protocol regression test; later, instead of
+// replay.bin there will be a live stream from libpibridge cam/IMU.
+// Build: g++ -O2 -std=c++20 client.cpp -o winbridge-client
+// Run: winbridge-client replay.bin poses.csv [speed] [port]
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -32,14 +32,14 @@ int main(int argc, char** argv) {
     if (argc < 3) { fprintf(stderr, "usage: %s replay.bin poses.csv [speed] [port]\n", argv[0]); return 2; }
     double speed = argc > 3 ? atof(argv[3]) : 1.0;
     int port = argc > 4 ? atoi(argv[4]) : WINBRIDGE_PORT;
-    const uint64_t shutterNs = 10000000;  // выдержка 10 мс (в EuRoC её нет)
+    const uint64_t shutterNs = 10000000;  // exposure 10 ms (EuRoC has none)
 
     FILE* f = fopen(argv[1], "rb");
     FILE* csv = fopen(argv[2], "w");
     if (!f || !csv) { perror("open"); return 2; }
     char magic[4]; uint32_t hdr[4];
     if (fread(magic, 1, 4, f) != 4 || fread(hdr, 4, 4, f) != 4 || memcmp(magic, "FREP", 4) != 0) {
-        fprintf(stderr, "не replay.bin\n"); return 2;
+        fprintf(stderr, "not a replay.bin file\n"); return 2;
     }
     uint32_t W = hdr[1], H = hdr[2], ncam = hdr[3];
 
@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
             if (fread(px, 1, (size_t)ncam * W * H, f) != (size_t)ncam * W * H) break;
             memcpy(camBuf.data(), &ch, sizeof(ch));
             if (!haveT0) { t0 = ch.ts; haveT0 = true; }
-            // темп реального времени: SLAM работает на фоновом потоке сервера
+            // real-time pacing: SLAM runs on the server's background thread
             auto due = wall0 + std::chrono::nanoseconds((long long)((ch.ts - t0) / speed));
             std::this_thread::sleep_until(due);
             MsgHeader h{MSG_CAM, (uint32_t)camBuf.size()};
@@ -88,6 +88,6 @@ int main(int argc, char** argv) {
         }
     }
     close(s); fclose(f); fclose(csv);
-    printf("клиент: imu=%ld cam=%ld, поз с позицией=%ld\n", imuN, camN, posN);
+    printf("client: imu=%ld cam=%ld, poses with position=%ld\n", imuN, camN, posN);
     return posN > 0 ? 0 : 3;
 }

@@ -51,7 +51,7 @@ QStringList roomSetupFastArgs(const QString& name, std::optional<double> eyeHeig
 }
 
 QStringList roomMapHeadsetArgs(const QString& name, const QString& roommapTool, const QString& ring,
-                               std::optional<double> eyeHeight, bool chaperone) {
+                               std::optional<double> eyeHeight, bool chaperone, bool quickDirect) {
     QStringList a{QStringLiteral("--map"), QStringLiteral("--room"), name, QStringLiteral("--roommap"), roommapTool,
                   QStringLiteral("--ring"), ring};
     if (eyeHeight) {
@@ -59,6 +59,9 @@ QStringList roomMapHeadsetArgs(const QString& name, const QString& roommapTool, 
     }
     if (chaperone) {
         a << QStringLiteral("--chaperone");
+    }
+    if (quickDirect) {
+        a << QStringLiteral("--quick-direct"); // skip the in-VR Full/Quick mode menu, go straight to quick
     }
     return a;
 }

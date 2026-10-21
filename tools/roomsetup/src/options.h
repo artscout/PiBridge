@@ -46,11 +46,15 @@ struct Options {
     std::optional<double> eyeHeight;     // --eye-height M: the user's eye height standing upright (1.0..2.3)              // --map-seconds S: pibridge-roommap's mapping time (its default 30)
     std::optional<double> radius;        // --radius M (with --vr-standing): Quick room setup - a circle of this radius
                                          // around the play centre as the SteamVR chaperone boundary (0.3..5.0)
+    std::string perimeterFile;           // --perimeter FILE (with --vr-standing): the traced boundary as the SteamVR
+                                         // chaperone perimeter; "x z" setup-frame points one per line (over --radius)
     bool seated = false;                 // --seated (with --vr-standing): set the seated zero pose (centre at the head
                                          // where you sit) instead of the standing one (centre on the floor)
     bool chaperone = false;              // --chaperone (with --map): SteamVR path - pibridge-roommap saves the setup with
                                          // --no-offset, then this tool writes the floor/centre/forward into SteamVR's
                                          // chaperone (--vr-standing) and reloads it, instead of a Monado world offset
+    bool quickDirect = false;            // --quick-direct (with --map): start straight in the quick circle setup,
+                                         // skipping the in-VR Full/Quick mode menu
 };
 
 std::expected<Options, std::string> parseArgs(const std::vector<std::string>& args);

@@ -94,6 +94,8 @@ struct HandInput {
     std::uint64_t buttons = 0; // 1 << bit::...
     bool tracked = true;       // the runtime tracks the position now (not a held last pose)
     float stickY = 0.0F;       // thumbstick / trackpad Y, +1 up .. -1 down (floor height nudge on the floor step)
+    Mat34 gripPose;            // the handle (grip) pose, kept even when `grip` gets the aim pose: the anchor for
+    bool gripPoseValid = false; // drawing a controller render model (room setup)
 };
 
 struct FrameInput {

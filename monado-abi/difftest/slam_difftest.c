@@ -529,9 +529,9 @@ static int cmd_imu(const char *work)
 	setenv("HOME", home, 1);
 	memset(&m, 0x5a, sizeof m);
 	show_imu("no file", pimax_cam_slam_imu_load(NULL, &m), &m);
-	snprintf(p, sizeof p, "%s/.config/omarchyvr", home);
+	snprintf(p, sizeof p, "%s/.config/pibridge", home);
 	mkdirs(p);
-	snprintf(p, sizeof p, "%s/.config/omarchyvr/slam-imu.json", home);
+	snprintf(p, sizeof p, "%s/.config/pibridge/slam-imu.json", home);
 	write_text(p, "{\n  \"comment\": \"x\",\n  \"imu_update_rate\": 1000.0,\n  \"accel_noise_std\": [0.01, 0.02, 0.03],\n"
 	              "  \"gyro_noise_std\": [0.0001, 0.0002, 0.0003],\n  \"accel_bias_std\": [0.001, 0.001, 0.001],\n"
 	              "  \"gyro_bias_std\": [0.0001, 0.0001, 0.0001]\n}\n");

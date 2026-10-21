@@ -8,7 +8,7 @@
  * Frame: OpenXR head space, metres: x right, y up, -z forward. Eye order is [left, right]. The device-to-head
  * conversion is configurable through PIMAX_EYE_FLIP_X / _FLIP_Y / _FLIP_Z / _OFFSET_MM / _SWAP (see
  * rust/pimax-eye/src/track.rs); other environment: PIMAX_EYE_CAL, PIMAX_EYE_SKIP_AUTH, PIMAX_EYE_LATENCY_MS,
- * PIMAX_EYE_USB, PIMAX_EYE_CALIBRATION (per-eye calibration file, default ~/.config/omarchyvr/eye-calibration.toml;
+ * PIMAX_EYE_USB, PIMAX_EYE_CALIBRATION (per-eye calibration file, default ~/.config/pibridge/eye-calibration.toml;
  * "none" = raw; its frame conversion replaces the FLIP variables), PIMAX_EYE_FILTER (none|one-euro),
  * PIMAX_EYE_USB_RESET=0, PIMAX_EYE_POWER_ON=0. host_ts_ns is CLOCK_MONOTONIC (os_monotonic_get_ns). */
 #ifndef PIMAX_EYE_H
@@ -75,7 +75,7 @@ int pimax_eye_latest(const pimax_eye *h, pimax_eye_sample *out);
  * the newest/oldest sample (no extrapolation: a prediction time in the future gets the newest sample). */
 int pimax_eye_sample_at(const pimax_eye *h, int64_t at_ns, pimax_eye_sample *out);
 
-/* Drift-correction hook (needs a per-eye calibration, ~/.config/omarchyvr/eye-calibration.toml): the wearer was looking
+/* Drift-correction hook (needs a per-eye calibration, ~/.config/pibridge/eye-calibration.toml): the wearer was looking
  * along dir (head space, unit, from the head origin) at host time at_ns, e.g. a confirmed click on a UI element.
  * Each calibrated eye's residual nudges a running per-eye offset (bounded, outliers ignored). Returns the number of
  * eyes that used it (0..2), PIMAX_EYE_BAD_ARG, or PIMAX_EYE_NO_SAMPLE (no calibration / no sample at that time). */

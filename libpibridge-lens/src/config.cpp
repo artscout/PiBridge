@@ -502,10 +502,10 @@ std::string config_path(const Env& env) {
         return *p;
     }
     if (const auto x = env("XDG_CONFIG_HOME"); x && !x->empty()) {
-        return cam::path_join(*x, "omarchyvr/lens.conf");
+        return cam::path_join(*x, "pibridge/lens.conf");
     }
     const std::string home = env("HOME").value_or(".");
-    return cam::path_join(home, ".config/omarchyvr/lens.conf");
+    return cam::path_join(home, ".config/pibridge/lens.conf");
 }
 
 std::optional<CantOverride> cant_override(const Env& env) {

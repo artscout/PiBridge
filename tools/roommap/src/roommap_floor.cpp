@@ -668,6 +668,14 @@ std::pair<g::Pose, double> with_floor(const g::Pose& off, const g::Vec3& floor_s
 
 R<std::pair<Alignment, std::optional<double>>> reloc_offset_hook(const std::string& dir, const Alignment& a,
                                                                  std::uint32_t pid) {
+    // Under SteamVR the floor belongs to SteamVR's chaperone (its standing pose, written head-relative by the room
+    // setup). The anchor offset must not move the world vertically from floor.toml's (raw room-frame) floor_y: that
+    // shift (tens of metres) is double-counted with SteamVR's standing frame and throws the floor into the ceiling, or
+    // blows the offset past the 20 m guard. Keep only the relocalisation's own alignment here; write_offset zeroes the
+    // vertical for vrserver.
+    if (floor::is_vrserver(pid)) {
+        return std::pair{a, std::optional<double>{}};
+    }
     if (auto f = floor::StoredFloor::load(dir)) {
         const double d = floor::floor_shift(f->y, floor::origin_height(pid));
         return std::pair{Alignment{a.yaw, {a.t[0], a.t[1] + d, a.t[2]}}, std::optional<double>{d}};

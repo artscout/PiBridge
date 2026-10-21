@@ -70,6 +70,11 @@ public:
              QWidget* parent = nullptr);
     ~RoomPage() override;
 
+    // Start the in-headset room setup from elsewhere (the Dashboard's ROOM SETUP button), without opening this page.
+    void launchSetup();
+    // Start directly in QUICK mode (the Dashboard's QUICK ROOM SETUP button): skip the in-VR Full/Quick mode menu.
+    void launchQuickSetup();
+
 protected:
     void showEvent(QShowEvent*) override;
 
@@ -87,7 +92,7 @@ private:
     bool steamvrRunning() const;
     bool insideOut() const;
     void createMonadoUniverse();
-    void mapRoom();
+    void mapRoom(bool quick = false);
     QString roommapTool() const;
     QString toolPath() const; // pibridge-roomsetup: the in-headset passthrough view of SETUP PLAYSPACE
 

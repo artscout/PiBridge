@@ -93,6 +93,7 @@ QStringList tool(const RecEnv& env, const QString& name, const QStringList& more
 RecEnv RecEnv::defaults() {
     RecEnv e;
     e.home = QDir::homePath();
+    e.prefix = pibridge::app::installPrefix();
     e.configDir = pibridge::app::configDir();
     e.dataHome = envDir("XDG_DATA_HOME", e.home + QStringLiteral("/.local/share"));
     e.stateHome = envDir("XDG_STATE_HOME", e.home + QStringLiteral("/.local/state"));
@@ -108,13 +109,20 @@ RecEnv RecEnv::defaults() {
 
 RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
     const QString& h = env.home;
+    // The installed layout (core/paths.h): engine/plugins under <prefix>/lib/pibridge, read-only data under
+    // <prefix>/share/pibridge. These come first in every lookup; the ~/gamedev/* dev-tree paths stay last so an
+    // uninstalled development checkout still works.
+    const QString lib = env.prefix + QStringLiteral("/lib/pibridge");
+    const QString data = env.prefix + QStringLiteral("/share/pibridge");
     // omarchyvr's builds, as fallbacks only (like the configurator lookup in core/chovr.cpp)
     const QStringList rust{h + QStringLiteral("/gamedev/omarchyvr/rust/target-clean/release"),
                            h + QStringLiteral("/gamedev/omarchyvr/rust/target/release")};
     RecSetup s;
     s.monado = pick(conf, reckey::kMonado, QStringLiteral("monado-service"), true,
                     tool(env, QStringLiteral("monado-service"),
-                         {h + QStringLiteral("/.local/lib/omarchyvr/monado/bin"),
+                         {lib + QStringLiteral("/monado/bin"),
+                          h + QStringLiteral("/.local/lib/omarchyvr/monado/bin"),
+                          h + QStringLiteral("/gamedev/pibridge-monado-build/src/xrt/targets/service"),
                           h + QStringLiteral("/gamedev/ovr-build/monado/src/xrt/targets/service")}),
                     h, isExec);
     s.cam = pick(conf, reckey::kCam, QStringLiteral("pimax-cam"), true, tool(env, QStringLiteral("pimax-cam"), rust), h,
@@ -122,16 +130,19 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
     s.ctrl = pick(conf, reckey::kCtrl, QStringLiteral("pimax-ctrltrack"), true,
                   tool(env, QStringLiteral("pimax-ctrltrack"), rust), h, isExec);
     s.basalt = pick(conf, reckey::kBasalt, QStringLiteral("Basalt library (libbasalt.so)"), false,
-                    {h + QStringLiteral("/gamedev/ovr-build/basalt/lib/libbasalt.so"),
+                    {lib + QStringLiteral("/libbasalt.so"), h + QStringLiteral("/gamedev/ovr-build/basalt/lib/libbasalt.so"),
                      QStringLiteral("/usr/local/lib/libbasalt.so"), QStringLiteral("/usr/lib/libbasalt.so")},
                     h, isFile);
-    // the Pimax SLAM engine: installed next to the kit, else the build in the source tree
+    // the Pimax SLAM engine (not redistributable: copied from Pimax Play at install): the installed plugin, else the
+    // user's data dir, else the build in the source tree
     s.winbridge = pick(conf, reckey::kWinbridge, QStringLiteral("winbridge.exe"), false,
-                       {env.dataHome + QStringLiteral("/pibridge/winbridge/winbridge.exe"),
+                       {lib + QStringLiteral("/winbridge/winbridge.exe"),
+                        env.dataHome + QStringLiteral("/pibridge/winbridge/winbridge.exe"),
                         h + QStringLiteral("/gamedev/pibridge/winbridge/winbridge.exe")},
                        h, isFile);
     s.vitBridge = pick(conf, reckey::kVitBridge, QStringLiteral("VIT library (libpibridge_vit_winbridge.so)"), false,
-                       {env.dataHome + QStringLiteral("/pibridge/winbridge/libpibridge_vit_winbridge.so"),
+                       {lib + QStringLiteral("/winbridge/libpibridge_vit_winbridge.so"),
+                        env.dataHome + QStringLiteral("/pibridge/winbridge/libpibridge_vit_winbridge.so"),
                         h + QStringLiteral("/gamedev/pibridge/winbridge/libpibridge_vit_winbridge.so")},
                        h, isFile);
     s.wine = env.which ? env.which(QStringLiteral("wine")) : QString();
@@ -154,14 +165,37 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
     }
     s.slamConfig = pick(conf, reckey::kSlamConfig, QStringLiteral("SLAM config (pimax-basalt.toml)"), false,
                         {env.configDir + QStringLiteral("/pimax-basalt.toml"),
+                         data + QStringLiteral("/slam/pimax-basalt.toml"),
                          h + QStringLiteral("/gamedev/ext/slam/pimax-basalt.toml")},
                         h, isFile);
-    s.lens = pick(conf, reckey::kLens, QStringLiteral("lens file"), false,
-                  {env.configDir + QStringLiteral("/lens.conf"), h + QStringLiteral("/gamedev/ext/lens/crystal.conf")}, h,
-                  isFile);
-    // the user's factory calibration first
+    // The lens profile (lens_profile, the Tracking page's selector):
+    //   "native" = crystal-pimax-native.conf (the raw Pimax PVR compositor mesh, true anisotropic distortion, ~98x93),
+    //   "pimax"  = crystal-pimax.conf        (sboys3's radial "like Pimax" fit, FOV 98.2x87.1, centre -3.59/+2.69),
+    //   else       crystal-chovr.conf        (CHOVR's camera-calibrated default, FOV 98x88 = what CHOVR renders).
+    // The chosen profile is tried first, then the others, so a missing file still resolves. An explicit rec_lens_conf
+    // path still wins. crystal.conf (the raw PVR dump, inflated 101x97 port) stays last as a legacy fallback.
+    const QString lensProfile = conf.value(reckey::kLensProfile, QString()).trimmed();
+    QStringList lensNames;
+    if (lensProfile == QLatin1String("native")) {
+        lensNames = {QStringLiteral("crystal-pimax-native.conf"), QStringLiteral("crystal-pimax.conf"),
+                     QStringLiteral("crystal-chovr.conf")};
+    } else if (lensProfile == QLatin1String("pimax")) {
+        lensNames = {QStringLiteral("crystal-pimax.conf"), QStringLiteral("crystal-chovr.conf"),
+                     QStringLiteral("crystal-pimax-native.conf")};
+    } else {
+        lensNames = {QStringLiteral("crystal-chovr.conf"), QStringLiteral("crystal-pimax.conf"),
+                     QStringLiteral("crystal-pimax-native.conf")};
+    }
+    QStringList lensCandidates{env.configDir + QStringLiteral("/lens.conf")};
+    for (const QString& n : lensNames) {
+        lensCandidates << data + QStringLiteral("/lens/") + n << h + QStringLiteral("/gamedev/ext/lens/") + n;
+    }
+    lensCandidates << data + QStringLiteral("/lens/crystal.conf") << h + QStringLiteral("/gamedev/ext/lens/crystal.conf");
+    s.lens = pick(conf, reckey::kLens, QStringLiteral("lens file"), false, lensCandidates, h, isFile);
+    // the user's factory calibration first, then the installed default template
     s.calib = pick(conf, reckey::kCalib, QStringLiteral("camera calibration"), true,
                    {env.configDir + QStringLiteral("/headset-calibration.xml"),
+                    data + QStringLiteral("/calib/crystal-calibration.xml"),
                     h + QStringLiteral("/gamedev/ext/calib/crystal-calibration.xml")},
                    h, isFile);
 
@@ -185,6 +219,8 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
     s.headsetPresent = pimaxHeadsetPresent(env.usbRoot);
     s.io = ioSettings(conf);
     s.refreshHz = conf.refreshHz();
+    s.eyeTracking = conf.eyeTracking();
+    s.eyeCalib = env.configDir + QStringLiteral("/eye-calibration.toml");
     s.sessionsDir = env.stateHome + QStringLiteral("/pibridge/inside-out");
     s.roommap = env.findTool ? env.findTool(QStringLiteral("pibridge-roommap")) : QString();
     s.slamTool = env.findTool ? env.findTool(QStringLiteral("pibridge-slam")) : QString();

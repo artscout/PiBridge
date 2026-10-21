@@ -2,7 +2,7 @@
  * Out of view: short extrapolation, then an arm-model hold relative to the head (yaw + position), rest pose after
  * PIMAX_CTRL_TRACK_LOST_S (default 4 s). Orientation between fixes from the controller gyro once calibrated; the gyro
  * calibration (scale, axes, bias, time offset) is learned online from the optical poses and kept in
- * ~/.config/omarchyvr/ctrl-imu.json. Reacquire blends over 150 ms from the first display request; optical outliers vs the prediction are dropped.
+ * ~/.config/pibridge/ctrl-imu.json. Reacquire blends over 150 ms from the first display request; optical outliers vs the prediction are dropped.
  * Body model: shoulders from the head (position + yaw), reach 0.75 m, hands never closer than 8 cm, a hand at most
  * 0.3 m across the head centre; fixes that violate it are always dropped, predictions are kept inside it.
  * Env: PIMAX_CTRL_TRACK_IMU (0 off, 1 force, unset = when calibrated), PIMAX_CTRL_TRACK_LOST_S,

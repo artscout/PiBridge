@@ -112,6 +112,16 @@ public:
     /// The chosen setup mode once the mode menu is answered ("full" or "quick"); empty before.
     const std::string& mode() const { return mode_; }
 
+    // --- controller render model (room setup): the XR side owns the OpenVR models; it tells build() to skip the box
+    // proxy for a hand when it will draw the real model, and reads each hand's handle (grip) pose to place it. ---
+    void setModelShown(int h, bool on) {
+        if (h >= 0 && h < 2) {
+            modelShown_[static_cast<std::size_t>(h)] = on;
+        }
+    }
+    bool handModelValid(int h) const { return h >= 0 && h < 2 && handModelValid_[static_cast<std::size_t>(h)]; }
+    room::Mat34 handModelPose(int h) const { return handModelPose_[static_cast<std::size_t>(h >= 0 && h < 2 ? h : 0)]; }
+
 private:
     void answer(const std::string& kind, std::vector<double> nums);
     std::optional<room::Vec3> toRoom(room::Vec3 stage) const;
@@ -187,6 +197,19 @@ private:
     // the floor-grid nudge from the thumbstick (metres, folded into floorStage()); reset at every step change
     double floorAdjust_ = 0;
     double lastNudge_ = 0;         // the time of the last stick step (rate-limit)
+    // the custom/full standing floor step: the head-relative drop (metres below the face) the user fine-tunes with the
+    // stick; set once on the floor step, clamped to [FLOOR_DROP_MIN_M, FLOOR_DROP_MAX_M]
+    std::optional<double> floorDrop_;
+    // the controller lasers and box proxies (so the user can see where they point): each hand's grip pose and the
+    // panel-hit world point, kept from frame() for build() to draw every frame
+    std::array<room::Mat34, 2> handGrip_;
+    std::array<bool, 2> handValid_{false, false};
+    std::array<std::optional<room::Vec3>, 2> panelHitWorld_;
+    // the controller render model: the handle (grip) pose per hand, and whether the XR side will draw the real model
+    // for that hand this frame (then build() skips the box proxy but keeps the laser)
+    std::array<room::Mat34, 2> handModelPose_;
+    std::array<bool, 2> handModelValid_{false, false};
+    std::array<bool, 2> modelShown_{false, false};
 };
 
 } // namespace pibridge::roomsetup

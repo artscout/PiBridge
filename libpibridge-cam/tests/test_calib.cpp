@@ -166,8 +166,8 @@ TEST(the_reference_fallback_can_be_switched_off) {
     }));
 }
 
-// PiBridge only (docs/CONVENTIONS.md): ~/.config/pibridge/ and ~/.config/pimax-linux/ come before omarchyvr's folder, but
-// only when the file is there, so the search (and the "not found" text) is the Rust one otherwise.
+// PiBridge only (docs/CONVENTIONS.md): ~/.config/pibridge/ is the default config folder; ~/.config/pimax-linux/ (the
+// earlier name) and ~/.config/omarchyvr/ are read only when the file is there.
 TEST(pibridge_config_folders_first_when_present) {
     const std::string h = pibridge::cam::testing::tmp("home");
     std::filesystem::remove_all(h);
@@ -183,7 +183,7 @@ TEST(pibridge_config_folders_first_when_present) {
     ::unsetenv("PIBRIDGE_REPO");
     auto c = DeviceCalib::default_candidates();
     CHECK(c.size() == 2);
-    CHECK(c[0] == h + "/.config/omarchyvr/headset-calibration.xml");
+    CHECK(c[0] == h + "/.config/pibridge/headset-calibration.xml");
     CHECK(c[1] == h + "/omarchyvr/analysis/headset-calibration.xml");
     write(h + "/.config/omarchyvr/headset-calibration.xml",
           replace(xml_doc(), "deviceUID=\"reference\"", "deviceUID=\"omarchyvr\""));

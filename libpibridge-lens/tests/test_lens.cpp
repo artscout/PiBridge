@@ -231,9 +231,9 @@ TEST(without_a_lens_conf_the_shipped_dream_air_profile_is_used_and_the_users_own
     // an explicit PIMAX_LENS_CONF that does not exist keeps the code defaults (the old driver behaviour)
     CHECK(!load(ASPECT, env_of({{"HOME", home}, {"PIMAX_LENS_CONF", "/nonexistent/lens.conf"}})).reference);
     // the user's own file wins over the reference
-    if (std::system(("mkdir -p '" + home + "/.config/omarchyvr'").c_str()) != 0) {
+    if (std::system(("mkdir -p '" + home + "/.config/pibridge'").c_str()) != 0) {
     }
-    write(home + "/.config/omarchyvr/lens.conf", "fov = 40 41 42 43\n");
+    write(home + "/.config/pibridge/lens.conf", "fov = 40 41 42 43\n");
     {
         const auto l = load(ASPECT, env);
         CHECK(l.file_found && !l.reference);

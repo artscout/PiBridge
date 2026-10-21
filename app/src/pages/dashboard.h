@@ -31,14 +31,17 @@ class Toggle;
 namespace pibridge::app {
 
 class RecordCard;
+class SoundTestPanel;
+class OverlayControl;
 
 class DashboardPage : public QWidget {
     Q_OBJECT
 public:
     // `io`: START TRACKING (SteamVR + Monado); `direct`: "Monado directly" (Development page), whose Monado the
-    // Controllers card and the headset card read while it runs.
+    // Controllers card and the headset card read while it runs. `overlay`: the SteamVR dashboard launcher, toggled from
+    // Quick settings (owned by the main window; a leaf).
     DashboardPage(StateSource& source, Actions& actions, Conf& conf, IoSessionControl& io, IoSessionControl& direct,
-                  QWidget* parent = nullptr);
+                  OverlayControl& overlay, QWidget* parent = nullptr);
 
     // The Record card (the screenshot mode shows it recording).
     RecordCard* recordCard() const { return record_; }
@@ -46,6 +49,8 @@ public:
 signals:
     void openTracking();
     void openRoom();
+    void startRoomSetup();      // ROOM SETUP button: launch the in-headset setup directly (mode menu, no page nav)
+    void startQuickRoomSetup(); // QUICK ROOM SETUP button: launch straight into the quick circle setup (no mode menu)
 
 protected:
     void showEvent(QShowEvent*) override;
@@ -73,12 +78,15 @@ private:
     void updateChovr();
     // The Tracking card's mode chip and the START TRACKING button (inside-out mode only).
     void updateMode();
+    // The Quick settings SteamVR-dashboard toggle: reflects the saved choice and shows the launcher's plain-words status.
+    void updateOverlay();
 
     StateSource& source_;
     Actions& actions_;
     Conf& conf_;
     IoSessionControl& io_;
     IoSessionControl& direct_;
+    OverlayControl& overlay_; // the SteamVR dashboard launcher, toggled from Quick settings (owned by the main window)
     // the controllers from Monado while the Tracking session runs with apps through Monado directly
     bool monadoMode_ = false;
     MonadoStatus mndStatus_;
@@ -88,9 +96,11 @@ private:
     std::unique_ptr<MonadoWorker> mnd_; // last: joined first, before the widgets go
     pibridge::ui::Chip* trChip_ = nullptr;
     QLabel* trMode_ = nullptr;
+    pibridge::ui::Segmented* trModeSel_ = nullptr; // head-tracking mode (Lighthouse / Inside-out), same as the Tracking page
     QPushButton* ioStart_ = nullptr;
     QPushButton* ioStop_ = nullptr;
     QPushButton* roomBtn_ = nullptr;
+    QPushButton* quickRoomBtn_ = nullptr;
     QPushButton* fixCaps_ = nullptr; // top bar: "Fix permissions" (pkexec setcap cap_sys_nice on monado-service)
     QString fixCapsPath_;            // the monado-service the button fixes
     QLabel* vrStatus_ = nullptr;
@@ -140,6 +150,8 @@ private:
     QLabel* trText_ = nullptr;
     QString trKey_; // what the station rows show now (rebuilt only when it changes)
     pibridge::ui::Toggle* passthrough_ = nullptr;
+    pibridge::ui::Toggle* dashOverlay_ = nullptr; // Quick settings: the SteamVR dashboard panel on/off
+    QLabel* dashOverlayLine_ = nullptr;           // its plain-words status
     pibridge::ui::Toggle* eyeToggle_ = nullptr;
     QPushButton* calibrate_ = nullptr;
     QPushButton* recenter_ = nullptr;
@@ -149,6 +161,7 @@ private:
     QLabel* toolResult_ = nullptr;
     pibridge::ui::GazeDot* gaze_ = nullptr;
     pibridge::ui::Toggle* audio_ = nullptr;
+    SoundTestPanel* soundPanel_ = nullptr; // the TEST SPEAKERS / TEST MIC card (gated on SteamVR running)
     RecordCard* record_ = nullptr;
 };
 

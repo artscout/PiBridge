@@ -6,6 +6,7 @@
 #include "pibridge/record/proc.h"
 #include "pibridge/record/status.h"
 #include "pibridge_env.h"
+#include "pibridge_record_capture_control.h"
 
 #include <cerrno>
 #include <cstring>
@@ -39,7 +40,7 @@ const char* const kUsage =
     "  --dir DIR                 output directory (default ~/Videos/pimax)\n"
     "  --audio on|off            record what you hear into the video (default on)\n"
     "  --mic on|off              also mix in your microphone (default off)\n"
-    "  --source auto|tap|mirror  auto (default): SteamVR's mirror texture while SteamVR runs, else Monado's tap\n"
+    "  --source auto|tap|layer|mirror  auto (default): the Vulkan capture layer while SteamVR runs, else Monado's tap\n"
     "pibridge-record start --brief / stop --brief: the saved settings, and one short line (\"Recording\", \"Saved: name.mp4\")\n"
     "Design and reliability notes: docs/record.md";
 
@@ -74,7 +75,7 @@ std::expected<Cmd, std::string> parse(const std::vector<std::string>& args) {
                 v = a.substr(9);
             }
             if (v != "auto" && !parseSource(v)) {
-                return std::unexpected("source = " + v + ": expected auto, tap or mirror");
+                return std::unexpected("source = " + v + ": expected auto, tap, layer or mirror");
             }
             source = v;
         } else if (a == "--save") {
@@ -174,24 +175,62 @@ std::vector<std::string> runArgs(const Settings& s, Source source) {
 std::expected<Source, std::string> pickSource(const Roots& r, const std::string& wanted) {
     const bool steamvr = steamvrRunning(r);
     const bool monado = monadoRunning(r);
-    const auto want = parseSource(wanted);
-    if (want == Source::Mirror || (!want && steamvr)) {
+    const auto want = parseSource(wanted); // nullopt == "auto"
+    if (want == Source::Mirror) {
         if (!steamvr) {
             return std::unexpected(std::string("SteamVR is not running: its mirror cannot be recorded"));
         }
         return Source::Mirror;
     }
+    if (want == Source::Layer) {
+        if (!steamvr) {
+            return std::unexpected(std::string("SteamVR is not running: the Vulkan capture layer runs inside it"));
+        }
+        return Source::Layer;
+    }
+    if (want == Source::Tap) {
+        if (monado) {
+            return Source::Tap;
+        }
+        if (steamvr) {
+            return std::unexpected(std::string(
+                "SteamVR runs: its compositor draws the headset image, which Monado's recorder tap cannot see. Record "
+                "the Vulkan capture layer instead (--source layer, the default)."));
+        }
+        return std::unexpected(std::string("no VR session: start \"Monado directly\" on the Development page"));
+    }
+    // auto: the capture layer under SteamVR, else Monado's tap
+    if (steamvr) {
+        return Source::Layer;
+    }
     if (monado) {
         return Source::Tap;
     }
-    if (steamvr) {
-        // --source tap under SteamVR + driver_monado: SteamVR's compositor draws, Monado's tap sees nothing
-        return std::unexpected(std::string(
-            "SteamVR runs: its compositor draws the headset image, which Monado's recorder tap cannot see. Record "
-            "SteamVR's mirror instead (--source mirror, the default)."));
-    }
     return std::unexpected(
         std::string("no VR session: start one first (\"Monado directly\" on the Development page, or SteamVR)"));
+}
+
+// The capture CONTROL file the Vulkan layer polls ($XDG_RUNTIME_DIR/pibridge/record-capture). `active` turns capture
+// on/off; the other lines tell the layer what and how to capture. Best effort: a write failure never blocks the
+// recorder (the layer just keeps its last control, or stays off).
+void writeCaptureControl(bool active, const Settings& s) {
+    const fs::path p = reclayer::captureControlPath();
+    std::error_code ec;
+    if (p.has_parent_path()) {
+        fs::create_directories(p.parent_path(), ec);
+    }
+    std::ofstream f(p, std::ios::trunc);
+    if (!f) {
+        return;
+    }
+    if (!active) {
+        f << "active 0\n"; // stop: the layer ignores the other keys while off
+        return;
+    }
+    f << "active 1\n"
+      << "view " << name(s.view) << '\n'
+      << "fps " << s.fps << '\n'
+      << "max_height " << s.max_height << '\n';
 }
 
 namespace {
@@ -245,6 +284,11 @@ std::expected<std::string, std::string> start(const Roots& r, const Overrides& o
     }
     std::error_code ec;
     fs::create_directories(r.session, ec);
+    // Tell the Vulkan capture layer (in vrcompositor) to begin capturing BEFORE the encoder client starts, so the
+    // layer has created the shared image by the time the client connects.
+    if (*src == Source::Layer) {
+        writeCaptureControl(true, *s);
+    }
     const fs::path bin = recorderBin();
     const fs::path log = r.session / "record.log";
     const auto t0 = std::chrono::steady_clock::now();
@@ -286,6 +330,7 @@ std::expected<std::string, std::string> start(const Roots& r, const Overrides& o
 }
 
 std::expected<std::string, std::string> stop(const Roots& r) {
+    writeCaptureControl(false, Settings{}); // turn the capture layer off (harmless for the tap/mirror sources)
     const fs::path pf = pidFile(r.session);
     std::error_code ec;
     const auto notRunning = [&] {

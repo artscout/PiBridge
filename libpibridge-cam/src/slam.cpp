@@ -105,7 +105,7 @@ std::optional<std::string> ImuNoise::default_path() {
         return *v;
     }
     if (auto h = env_os("HOME")) {
-        return path_join(*h, ".config/omarchyvr/slam-imu.json");
+        return path_join(*h, ".config/pibridge/slam-imu.json");
     }
     return std::nullopt;
 }

@@ -21,6 +21,7 @@ int vrZoneMain(const ZoneArg& z);
 /// Set the SteamVR chaperone standing pose from the live raw head pose: the floor `eyeHeight` m below the eyes, the
 /// centre where the head is and forward where it looks, written to the Live chaperone (IVRChaperoneSetup). The
 /// existing collision bounds are kept. The user must be standing in the centre, looking forward, when this runs.
-int vrStandingMain(std::optional<double> eyeHeight, std::optional<double> radius = std::nullopt, bool seated = false);
+int vrStandingMain(std::optional<double> eyeHeight, std::optional<double> radius = std::nullopt, bool seated = false,
+                   const std::string& perimeterFile = {});
 
 } // namespace pibridge::roomsetup

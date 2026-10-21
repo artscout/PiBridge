@@ -102,10 +102,18 @@ SoundTestPanel::SoundTestPanel(bool fake, QWidget* parent) : QWidget(parent), fa
 
 SoundTestPanel::~SoundTestPanel() = default;
 
+void SoundTestPanel::setVrRunning(bool on) {
+    if (vrRunning_ != on) {
+        vrRunning_ = on;
+        update();
+    }
+}
+
 void SoundTestPanel::update() {
     const bool busy = test_->busy();
-    speakers_->setEnabled(!busy);
-    mic_->setEnabled(!busy);
+    const bool ready = vrRunning_ || fake_; // the headset sound only works while SteamVR runs
+    speakers_->setEnabled(!busy && ready);
+    mic_->setEnabled(!busy && ready);
     if (test_->state() != SoundTest::State::Recording) {
         meter_->setLevel(0);
     }

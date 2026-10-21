@@ -28,6 +28,11 @@ public:
     void demo(const RecordInputs& in);
     void refresh();
 
+public slots:
+    // From the SteamVR dashboard overlay: start (true) / stop (false) a recording, the same as the RECORD / STOP
+    // buttons and only when that is allowed right now (otherwise it does nothing).
+    void recordFromVr(bool start);
+
 signals:
     // A message for the Dashboard's message line.
     void message(const QString& text, bool error);
@@ -39,6 +44,8 @@ protected:
 private:
     void apply(const RecordCardModel& m);
     void applySettings();
+    void doStart(); // the RECORD button / overlay start
+    void doStop();  // the STOP button / overlay stop
     void change(const char* key, const QString& value);
     QString tool() const;
 
@@ -47,6 +54,8 @@ private:
     std::unique_ptr<Runner> runner_;
     QTimer poll_;
     bool busy_ = false;
+    bool canStart_ = false; // the RECORD action is allowed now (mirrors the button's enabled state)
+    bool canStop_ = false;  // the STOP action is allowed now (a recording is running)
     bool demo_ = false;
     QString lastFolder_;
     QLabel* headline_ = nullptr;

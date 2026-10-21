@@ -34,9 +34,47 @@ enum class SetupMode { Fast, Full };
 const char* mode_name(SetupMode m);
 std::optional<SetupMode> mode_parse(std::string_view s);
 
+// --- PiBridge room-setup decision parameters (the floor by posture, the quick-setup zone sizes, and what makes a
+// drawn boundary acceptable). Plain tuned values, applied by the helpers below. ---
+enum class Posture { Stand, Sit };
+enum class ZoneSize { Small, Medium, Big };
+
+inline constexpr double FLOOR_DROP_STAND_M = 1.60;  // standing: floor this far below the head
+inline constexpr double FLOOR_DROP_SIT_M = 1.30;    // seated: floor this far below the head
+inline constexpr double FIRE_FLOOR_DROP_M = 0.04;   // a floor set by pointing: just below the ray's floor hit
+inline constexpr double ZONE_R_SMALL_M = 1.00;
+inline constexpr double ZONE_R_MEDIUM_M = 1.30;
+inline constexpr double ZONE_R_BIG_M = 1.60;
+inline constexpr double ZONE_R_FALLBACK_M = 1.30;
+inline constexpr double FLOOR_DROP_MIN_M = 1.00;    // the floor can be at most this near the face
+inline constexpr double FLOOR_DROP_MAX_M = 2.00;    // ... and at most this far below it (standing stick fine-tune range)
+inline constexpr double MIN_ZONE_AREA_M2 = 1.50;    // a drawn boundary is accepted only above this hull area
+inline constexpr double MIN_POINT_SPACING_M = 0.05; // drop points nearer than this to the previous one
+inline constexpr double MAX_POINT_RADIUS_M = 5.0;   // clamp each point to this far from the centre
+inline constexpr std::size_t MAX_BOUNDARY_POINTS = 254;
+
+/// How far below the head the floor goes for a posture. Seated is always FLOOR_DROP_SIT_M (1.30 m). Standing uses the
+/// user's entered eye height `stand_eye` when given (from the room settings), else the default FLOOR_DROP_STAND_M.
+double posture_floor_drop(Posture p, std::optional<double> stand_eye = std::nullopt);
+/// The quick-setup play-circle radius for a size (Small 1.00, Medium 1.50, Big 2.00 m).
+double zone_radius(ZoneSize z);
+Posture posture_parse(int code);  // 0 = Stand, else Sit
+ZoneSize zone_size_parse(int code); // 0 Small, 1 Medium, else Big
+/// A circle of `n` points of radius `r` around a centre, in the room frame (x z).
+std::vector<P2> circle(P2 centre, double r, int n = 32);
+/// The convex-hull area of a polygon (always non-negative).
+double hull_area(const std::vector<P2>& poly);
+/// Whether a drawn boundary encloses enough floor to be a usable play area (hull area >= MIN_ZONE_AREA_M2).
+bool zone_area_ok(const std::vector<P2>& poly);
+/// Tidy a drawn stroke for use as a boundary: clamp every point to <= MAX_POINT_RADIUS_M from `centre`, drop points
+/// closer than MIN_POINT_SPACING_M to the kept one, and cap at MAX_BOUNDARY_POINTS. Shape only; acceptance is
+/// zone_area_ok() on the result.
+std::vector<P2> prepare_boundary(const std::vector<P2>& trace, P2 centre);
+
 struct RoomSetup {
     std::string label;
     SetupMode mode = SetupMode::Fast;
+    bool seated = false; // the posture of the setup: seated = a seated-zero chaperone with no perimeter
     P2 centre{};
     double yaw = 0;
     std::vector<P2> boundary;
