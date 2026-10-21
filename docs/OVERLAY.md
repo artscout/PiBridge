@@ -2,14 +2,15 @@
 
 **For users:** this is an optional in-VR launcher. It is installed with the app; turn it on with the **SteamVR
 dashboard** switch in the **Dashboard → Quick settings** (right under Passthrough). As soon as it is on and SteamVR is
-running, open the SteamVR dashboard with the system button, pick the PiBridge tab, and press **ROOM SETUP** or **QUICK
-ROOM SETUP** — the play-space setup starts straight from there, no terminal and no manual registration. The rest of this
-page is the design detail. (New and not yet verified in a headset.)
+running, open the SteamVR dashboard with the system button, pick the PiBridge tab, and press **ROOM SETUP** / **QUICK
+ROOM SETUP** to start the play-space setup, or **RECORD** / **STOP** to capture video — straight from there, no terminal
+and no manual registration. The rest of this page is the design detail. (New and not yet verified in a headset.)
 
 When SteamVR is the runtime (the Crystal path), the only thing the user needs
 from inside VR is to **start room setup**. `pibridge-overlay` is a small SteamVR dashboard tab that does exactly that:
-open the dashboard with the system button, pick the PiBridge tab, and a little panel with two buttons —
-**ROOM SETUP** and **QUICK ROOM SETUP** — is there, clickable with the controller laser.
+open the dashboard with the system button, pick the PiBridge tab, and a little panel with four buttons —
+**ROOM SETUP**, **QUICK ROOM SETUP**, and **RECORD** / **STOP** (video capture) — is there, clickable with the
+controller laser.
 
 It is deliberately minimal. An earlier version embedded the whole app window (a 2048² texture uploaded ~30 times a
 second from `vrpanel.shm`, with a full mouse-event pipeline); that **crashed SteamVR** when the tab was opened. This
@@ -18,7 +19,7 @@ version draws a tiny static panel itself and does almost nothing per frame, so i
 ## What it does
 
 - **A small panel drawn in code** (`tools/overlay/src/overlay_core.cpp`): a 512×320 RGBA card (`kPanelW`×`kPanelH`,
-  about 0.6 m wide in the dashboard) with the two buttons, labelled with a built-in 5×7 font. No app window, no
+  about 0.6 m wide in the dashboard) with the four buttons, labelled with a built-in 5×7 font. No app window, no
   `vrpanel.shm`.
 - **Uploaded once.** `SetOverlayRaw` is called when the overlay is created and again *only* when the hovered button
   changes (a highlight re-draw). There is no per-frame upload.

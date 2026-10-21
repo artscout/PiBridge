@@ -80,7 +80,7 @@ bytes we derive from it, never the recording.
 | Quad views page | works | the layer itself: [linux-vulkan-quadviews-openxr-layer](https://github.com/artscout/linux-vulkan-quadviews-openxr-layer) |
 | SteamVR device status | works | controllers, battery, base stations |
 | Apps page | works | Steam games and your own programs; own apps wait until SteamVR (or Monado) is ready |
-| SteamVR dashboard tab | planned | |
+| SteamVR dashboard panel | new, not tested in a headset yet | `pibridge-overlay`: an in-VR panel (Room setup, quick room setup, record / stop video), toggled from Dashboard → Quick settings; [docs/OVERLAY.md](docs/OVERLAY.md) |
 | Room setup | new, not tested in a headset yet | `pibridge-roomsetup` (in the headset, port of ZoneTweak) and the Room page; SteamVR's chaperone file |
 | Inside-out tracking (SLAM) | experimental | see [SLAM status](#slam-status) |
 
@@ -155,6 +155,7 @@ the Crystal Super steps, eye tracking, checks, uninstall).
 - [docs/INSTALL.md](docs/INSTALL.md): install, set up, check, uninstall.
 - [docs/CONVENTIONS.md](docs/CONVENTIONS.md): layout of the tree, rules, file formats.
 - [docs/app.md](docs/app.md) and the other `docs/*.md`: one page per part.
+- [docs/OVERLAY.md](docs/OVERLAY.md): the in-VR SteamVR dashboard panel (room setup, record / stop).
 - [patches/README.md](patches/README.md): the setup patches, where they come from and their licences.
 
 ## Licence and trademarks
