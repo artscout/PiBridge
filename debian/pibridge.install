@@ -1,0 +1,10 @@
+# Extra files not placed by `cmake --install` (the CMake install already stages
+# the binaries, data, record layer, systemd user units, desktop entry, icons and
+# docs into debian/pibridge). Only repo-side extras are listed here.
+
+# winbridge SOURCES (OUR code, MIT/BSL): the Pimax DLLs it loads stay excluded.
+# No *.exe / *.so build outputs, no ctrl-prep binary, no windata.
+winbridge/*.cpp                 usr/share/pibridge/winbridge-src/
+winbridge/*.h                   usr/share/pibridge/winbridge-src/
+winbridge/build-winbridge.sh    usr/share/pibridge/winbridge-src/
+winbridge/vit/*                 usr/share/pibridge/winbridge-src/vit/

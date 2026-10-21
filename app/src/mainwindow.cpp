@@ -203,9 +203,11 @@ MainWindow::MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder 
             roomPage->launchSetup();
         }
     });
-    // A click on the overlay's record / stop buttons starts or stops a video recording through the Dashboard's card.
+    // A click on the overlay's record button starts or stops a video recording through the Dashboard's card; its
+    // segment controls (view / fps / size) write the recording settings the next start uses.
     if (RecordCard* rc = dash->recordCard()) {
         connect(overlay_.get(), &OverlayControl::recordRequested, rc, &RecordCard::recordFromVr);
+        connect(overlay_.get(), &OverlayControl::recordSettingChanged, rc, &RecordCard::setFromVr);
     }
     stack_->addWidget(roomPage);
     stack_->addWidget(dev);

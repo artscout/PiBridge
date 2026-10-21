@@ -1,0 +1,13 @@
+pibridge (1.0.1) unstable; urgency=medium
+
+  * Initial Debian packaging: single .deb, prefix /usr.
+    - PiBridge Qt 6 app and engine binaries, device descriptions, systemd user
+      units (in /usr/lib/systemd/user), desktop entry and icons, docs.
+    - Vulkan video-capture record layer (.so in /usr/lib/<triplet>/pibridge,
+      implicit-layer manifest in /usr/share/vulkan/implicit_layer.d).
+    - Bundled prebuilt PiBridge Monado SteamVR driver (NOT monado-service) and
+      the ONNX Runtime it links; OpenCV, Qt 6, Vulkan, ffmpeg from system.
+    - winbridge shipped as source + pibridge-build-winbridge helper.
+    - udev rule activated from postinst; per-user setup done by the app.
+
+ -- Albert Valiev <artscout@gmail.com>  Wed, 21 Oct 2026 12:41:18 +0200

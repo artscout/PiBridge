@@ -62,19 +62,27 @@ QString findOverlayProgram(const QString& appDir, const std::function<QString(co
     return which ? which(QStringLiteral("pibridge-overlay")) : QString();
 }
 
-std::optional<OverlayAction> parseOverlayRequest(const QByteArray& text) {
+std::optional<OverlayRequest> parseOverlayRequest(const QByteArray& text) {
     const QString line = QString::fromUtf8(text).split(QLatin1Char('\n')).value(0).trimmed();
     if (line == QLatin1String("quick-room-setup")) {
-        return OverlayAction::RoomSetupQuick;
+        return OverlayRequest{OverlayAction::RoomSetupQuick};
     }
     if (line == QLatin1String("room-setup")) {
-        return OverlayAction::RoomSetupFull;
+        return OverlayRequest{OverlayAction::RoomSetupFull};
     }
     if (line == QLatin1String("record-start")) {
-        return OverlayAction::RecordStart;
+        return OverlayRequest{OverlayAction::RecordStart};
     }
     if (line == QLatin1String("record-stop")) {
-        return OverlayAction::RecordStop;
+        return OverlayRequest{OverlayAction::RecordStop};
+    }
+    // "record-set <key> <value>" (key = view | fps | max_height), e.g. "record-set view both"
+    if (line.startsWith(QLatin1String("record-set "))) {
+        const QStringList f = line.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (f.size() == 3 && (f[1] == QLatin1String("view") || f[1] == QLatin1String("fps") ||
+                              f[1] == QLatin1String("max_height"))) {
+            return OverlayRequest{OverlayAction::RecordSet, f[1], f[2]};
+        }
     }
     return std::nullopt;
 }
@@ -106,8 +114,8 @@ void OverlayControl::pollRequest() {
         f.close();
     }
     QFile::remove(requestPath_); // consume it once
-    if (const std::optional<OverlayAction> a = parseOverlayRequest(text)) {
-        switch (*a) {
+    if (const std::optional<OverlayRequest> a = parseOverlayRequest(text)) {
+        switch (a->action) {
         case OverlayAction::RoomSetupFull:
             emit roomSetupRequested(false);
             break;
@@ -119,6 +127,9 @@ void OverlayControl::pollRequest() {
             break;
         case OverlayAction::RecordStop:
             emit recordRequested(false);
+            break;
+        case OverlayAction::RecordSet:
+            emit recordSettingChanged(a->key, a->value);
             break;
         }
     }

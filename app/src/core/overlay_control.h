@@ -42,10 +42,16 @@ ChipText overlayChip(const OverlayStatus& s);
 QString findOverlayProgram(const QString& appDir, const std::function<QString(const QString&)>& which);
 
 // What the overlay asked the app to do (the first line of the request file). Matches the strings pibridge-overlay
-// writes (tools/overlay/src/overlay_core.h).
-enum class OverlayAction { RoomSetupFull, RoomSetupQuick, RecordStart, RecordStop };
-// Pure: the overlay's request line -> the action, or nullopt when it is not a request the app knows.
-std::optional<OverlayAction> parseOverlayRequest(const QByteArray& text);
+// writes (tools/overlay/src/overlay_core.h). RecordSet carries a recording setting (key + value) from a segment click.
+enum class OverlayAction { RoomSetupFull, RoomSetupQuick, RecordStart, RecordStop, RecordSet };
+struct OverlayRequest {
+    OverlayAction action{};
+    QString key{};   // RecordSet only: view | fps | max_height
+    QString value{}; // RecordSet only
+    bool operator==(const OverlayRequest&) const = default;
+};
+// Pure: the overlay's request line -> the request, or nullopt when it is not one the app knows.
+std::optional<OverlayRequest> parseOverlayRequest(const QByteArray& text);
 
 // Owns pibridge-overlay as a leaf background process driven by the persisted switch, and watches its request file.
 class OverlayControl : public QObject {
@@ -72,6 +78,9 @@ signals:
     void roomSetupRequested(bool quick);
     // The overlay was clicked: start (true) or stop (false) a video recording. The app wires this to the Record card.
     void recordRequested(bool start);
+    // A recording setting changed from the overlay's segment controls (key = view | fps | max_height). The app wires
+    // this to the Record card, which writes it to record.toml.
+    void recordSettingChanged(const QString& key, const QString& value);
 
 private:
     void start();

@@ -129,24 +129,42 @@ void writeRequest(const std::string& line) {
     std::filesystem::rename(tmp, path, ec);
 }
 
-// Is a recording active? Reads the capture control file (pibridge_record_capture_control.h) that pibridge-record
-// writes: the `active` line is 1 while capturing. Missing file or no `active` line = not recording.
-bool readRecording() {
+// The capture control file (pibridge_record_capture_control.h) that pibridge-record writes while capturing: `active`,
+// `view`, `fps`, `max_height`. A missing file reads as inactive with the defaults.
+struct ControlState {
+    bool active = false;
+    std::string view = "both";
+    int fps = 60;
+    int maxHeight = 1080;
+};
+ControlState readControl() {
+    ControlState s;
     std::ifstream f(reclayer::captureControlPath());
     std::string line;
     while (std::getline(f, line)) {
         std::istringstream is(line);
         std::string key;
-        int value = 0;
-        if ((is >> key >> value) && key == "active") {
-            return value != 0;
+        if (!(is >> key)) {
+            continue;
+        }
+        if (key == "active") {
+            int v = 0;
+            if (is >> v) {
+                s.active = v != 0;
+            }
+        } else if (key == "view") {
+            is >> s.view;
+        } else if (key == "fps") {
+            is >> s.fps;
+        } else if (key == "max_height") {
+            is >> s.maxHeight;
         }
     }
-    return false;
+    return s;
 }
 
-// The small launcher panel: a dashboard overlay with two buttons, uploaded ONCE and re-uploaded only when the hovered
-// button changes. No app-window embed, no vrpanel.shm, no per-frame upload.
+// The small panel: a dashboard overlay with the RECORDING rows and the ROOM buttons, uploaded ONCE and re-uploaded only
+// when the hovered target, the selection or the recording state changes. No app-window embed, no per-frame upload.
 class Launcher {
 public:
     Launcher(vr::IVROverlay* ov, const Options& o) : ov_(ov), o_(o) {}
@@ -164,22 +182,22 @@ public:
         ov_->SetOverlayInputMethod(main_, vr::VROverlayInputMethod_Mouse);
         const vr::HmdVector2_t scale{{static_cast<float>(kPanelW), static_cast<float>(kPanelH)}};
         ov_->SetOverlayMouseScale(main_, &scale);
-        redraw(); // the one upload
+        syncState(); // reflect any recording already running
+        redraw();    // the one upload
         return true;
     }
 
     /// Returns false on VREvent_Quit (SteamVR going down: exit; the app restarts us).
     bool poll() {
-        if (const bool rec = readRecording(); rec != recording_) {
-            recording_ = rec; // the record button flips START RECORDING <-> STOP RECORDING
+        if (syncState()) {
             redraw();
         }
         vr::VREvent_t e{};
         while (ov_->PollNextOverlayEvent(main_, &e, sizeof(e))) {
             switch (e.eventType) {
             case vr::VREvent_MouseMove: {
-                const Button b = hitTest(e.data.mouse.x, e.data.mouse.y);
-                if (b != hover_) {
+                const Hit b = hitTest(e.data.mouse.x, e.data.mouse.y);
+                if (!(b == hover_)) {
                     hover_ = b;
                     redraw(); // only on a hover change
                 }
@@ -187,15 +205,20 @@ public:
             }
             case vr::VREvent_MouseButtonUp:
                 if (e.data.mouse.button == vr::VRMouseButton_Left) {
-                    const std::string req = requestFor(hitTest(e.data.mouse.x, e.data.mouse.y), recording_);
+                    const Hit h = hitTest(e.data.mouse.x, e.data.mouse.y);
+                    if (h.kind == Hit::Kind::Seg) {
+                        setSelection(h); // instant feedback; the app applies the request below
+                        redraw();
+                    }
+                    const std::string req = requestFor(h, recording_);
                     if (!req.empty()) {
                         writeRequest(req);
                     }
                 }
                 break;
             case vr::VREvent_FocusLeave:
-                if (hover_ != Button::None) {
-                    hover_ = Button::None;
+                if (hover_.kind != Hit::Kind::None) {
+                    hover_ = Hit{};
                     redraw();
                 }
                 break;
@@ -212,16 +235,43 @@ public:
 
 private:
     void redraw() {
-        rgba_ = drawPanel(hover_, recording_);
+        rgba_ = drawPanel(sel_, recording_, hover_);
         ov_->SetOverlayRaw(main_, rgba_.data(), kPanelW, kPanelH, 4);
+    }
+
+    // A segment click sets the local selection so the lit cell follows the laser at once; while recording, syncState()
+    // keeps the panel in step with the app's live values.
+    void setSelection(Hit h) {
+        switch (static_cast<Control>(h.control)) {
+        case Control::View: sel_.view = h.cell; break;
+        case Control::Fps: sel_.fps = h.cell; break;
+        case Control::Size: sel_.size = h.cell; break;
+        }
+    }
+
+    // Read the control file; update `recording_`, and (while recording) the selection from the app's live values.
+    // Returns true when anything changed (so the caller redraws).
+    bool syncState() {
+        const ControlState cs = readControl();
+        bool changed = cs.active != recording_;
+        recording_ = cs.active;
+        if (cs.active) {
+            const Selection s = selectionFrom(cs.view, cs.fps, cs.maxHeight);
+            if (!(s == sel_)) {
+                sel_ = s;
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     vr::IVROverlay* ov_;
     Options o_;
     vr::VROverlayHandle_t main_ = vr::k_ulOverlayHandleInvalid;
     vr::VROverlayHandle_t thumb_ = vr::k_ulOverlayHandleInvalid;
-    Button hover_ = Button::None;
-    bool recording_ = false; // last-seen capture state (readRecording), so the record button shows START or STOP
+    Hit hover_;
+    Selection sel_;          // the recording selection the panel shows (local; follows the control file while recording)
+    bool recording_ = false; // last-seen capture state, so the record button shows START or STOP
     std::vector<std::uint8_t> rgba_;
     std::string err_;
 };

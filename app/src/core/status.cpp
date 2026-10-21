@@ -170,7 +170,8 @@ QString headsetHint(const KeepaliveStatus& k, bool steamvrRunning) {
         return k.panelOn ? QStringLiteral("The headset is on.") : QStringLiteral("Turning the screen on...");
     }
     // idle
-    return steamvrRunning ? QStringLiteral("SteamVR is running; the headset wakes in a moment.") : QString();
+    return steamvrRunning ? QStringLiteral("SteamVR is running; the headset wakes in a moment.")
+                          : QStringLiteral("Start SteamVR to wake the headset.");
 }
 
 QString eyeLine(const EyedStatus& e) {

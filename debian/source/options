@@ -1,0 +1,9 @@
+# Keep the native source tarball lean: never pack build trees, VCS or caches.
+tar-ignore = ".git"
+tar-ignore = "build"
+tar-ignore = "build-*"
+tar-ignore = ".cache"
+tar-ignore = "compile_commands.json"
+tar-ignore = "*.exe"
+tar-ignore = "winbridge/*.so"
+tar-ignore = "windll"

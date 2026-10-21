@@ -275,6 +275,19 @@ void RecordCard::recordFromVr(bool start) {
     }
 }
 
+void RecordCard::setFromVr(const QString& key, const QString& value) {
+    // The overlay's segment controls write only these; validate so a stray request cannot set an arbitrary key.
+    const char* k = key == QLatin1String("view")         ? "view"
+                    : key == QLatin1String("fps")        ? "fps"
+                    : key == QLatin1String("max_height") ? "max_height"
+                                                         : nullptr;
+    if (k == nullptr) {
+        return;
+    }
+    change(k, value);
+    applySettings(); // the card's own controls follow the change
+}
+
 void RecordCard::showEvent(QShowEvent* e) {
     pibridge::ui::Card::showEvent(e);
     if (!demo_) {

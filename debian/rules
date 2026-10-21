@@ -1,0 +1,68 @@
+#!/usr/bin/make -f
+# PiBridge Debian packaging. One binary package `pibridge`, prefix /usr.
+# Build with:  dpkg-buildpackage -us -uc -b        (binary .deb, this machine)
+#              dpkg-buildpackage -us -uc -S        (source package)
+# Heavy build should run at:  DEB_BUILD_OPTIONS="parallel=8" nice -n 19 dpkg-buildpackage -us -uc -b
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+# ---------------------------------------------------------------------------
+# Bundled prebuilt Monado SteamVR driver (OUR build) + ONNX Runtime.
+# On THIS machine the binary .deb stages the PREBUILT driver from the path
+# below. A portable from-source build would instead build third_party/monado
+# from the repo, which drags ONNX Runtime (NOT a Debian package) + OpenCV +
+# Basalt; see docs/PACKAGING.md ("Build from source / other distros") and the
+# TODO below. Override on the command line, e.g.
+#   make -f debian/rules ... PIBRIDGE_MONADO_PREBUILT=/path/to/steamvr-monado
+# ---------------------------------------------------------------------------
+PIBRIDGE_MONADO_PREBUILT ?= $(HOME)/gamedev/pibridge-monado-build/steamvr-monado
+PIBRIDGE_ONNX_LIBDIR     ?= $(HOME)/gamedev/ovr-build/onnxruntime/lib
+
+# TODO (from-source Monado, not solved here): when PIBRIDGE_MONADO_PREBUILT is
+# unset/absent, build third_party/monado with PIMAX_USE_PIBRIDGE=ON against a
+# separately-obtained ONNX Runtime (-DONNXRuntime_ROOT_DIR=...) and, optionally,
+# Basalt (libbasalt.so). Not wired up: keep staging the prebuilt blob for now.
+
+DESTDIR     = $(CURDIR)/debian/pibridge
+PKG_LIBDIR  = $(DESTDIR)/usr/lib/pibridge
+MONADO_DST  = $(PKG_LIBDIR)/steamvr-monado
+DRIVER_SO   = $(MONADO_DST)/bin/linux64/driver_monado.so
+PRELOAD_SO  = $(MONADO_DST)/bin/linux64/pimax_rttime_preload.so
+
+%:
+	dh $@ --buildsystem=cmake+ninja --builddirectory=build-deb
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+	    -DCMAKE_INSTALL_PREFIX=/usr \
+	    -DPIBRIDGE_SYSTEMD_USER_UNIT_DIR=lib/systemd/user \
+	    -DPIBRIDGE_BUILD_TESTS=OFF
+
+# Tests are not built in the package.
+override_dh_auto_test:
+
+override_dh_auto_install:
+	dh_auto_install
+	# --- bundled Monado SteamVR driver (prebuilt; NOT monado-service) ---
+	@test -f "$(PIBRIDGE_MONADO_PREBUILT)/bin/linux64/driver_monado.so" || \
+	    { echo "ERROR: prebuilt Monado driver not found at $(PIBRIDGE_MONADO_PREBUILT)"; \
+	      echo "       set PIBRIDGE_MONADO_PREBUILT, or build it from third_party/monado"; \
+	      echo "       (see docs/PACKAGING.md)."; exit 1; }
+	mkdir -p "$(MONADO_DST)"
+	cp -a "$(PIBRIDGE_MONADO_PREBUILT)/." "$(MONADO_DST)/"
+	strip --strip-unneeded "$(DRIVER_SO)"
+	strip --strip-unneeded "$(PRELOAD_SO)"
+	# --- ONNX Runtime (not a Debian package: bundled next to the driver) ---
+	cp -a $(PIBRIDGE_ONNX_LIBDIR)/libonnxruntime.so* "$(PKG_LIBDIR)/"
+	# driver finds the co-located onnxruntime by absolute rpath
+	patchelf --set-rpath /usr/lib/pibridge "$(DRIVER_SO)"
+
+# The bundled driver blob and onnxruntime are prebuilt: do not strip/dwz/scan them.
+override_dh_strip:
+	dh_strip -Xsteamvr-monado -Xlibonnxruntime
+
+override_dh_dwz:
+	dh_dwz -Xsteamvr-monado -Xlibonnxruntime
+
+override_dh_shlibdeps:
+	dh_shlibdeps -Xsteamvr-monado -Xlibonnxruntime

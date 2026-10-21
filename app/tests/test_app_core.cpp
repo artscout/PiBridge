@@ -432,7 +432,7 @@ TEST(process_running_reads_comm) {
     CHECK(processRunning(QStringLiteral("vrserver"), tmp.path()));
     CHECK(!processRunning(QStringLiteral("vrmonitor"), tmp.path())); // not a pid dir
     CHECK(!processRunning(QStringLiteral("vrcompositor"), tmp.path()));
-    writeAll(tmp.path() + QStringLiteral("/303/comm"), "pibridge-keepalive\n"); // the kernel cuts at 15
+    writeAll(tmp.path() + QStringLiteral("/303/comm"), "pibridge-keepal\n"); // the kernel cuts comm at 15 chars
     CHECK(processRunning(QStringLiteral("pibridge-keepalived"), tmp.path()));
 }
 

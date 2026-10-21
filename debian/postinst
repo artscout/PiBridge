@@ -1,0 +1,40 @@
+#!/bin/sh
+# PiBridge postinst. Idempotent.
+set -e
+
+case "$1" in
+    configure)
+        ldconfig || true
+
+        # Activate the udev rule. The packaged canonical copy is installed to
+        # /usr/share/pibridge/udev/ by CMake; copy it into the live rules dir.
+        if [ -f /usr/share/pibridge/udev/70-pibridge.rules ]; then
+            cp -f /usr/share/pibridge/udev/70-pibridge.rules \
+                  /lib/udev/rules.d/70-pibridge.rules
+            if command -v udevadm >/dev/null 2>&1; then
+                udevadm control --reload-rules || true
+                udevadm trigger || true
+            fi
+        fi
+
+        cat <<'EOF'
+
+PiBridge is installed. The rest is per-user and is done by the app on first run:
+  - enabling the systemd *user* services (no system daemon-reload needed), and
+  - registering the PiBridge Monado SteamVR driver in openvrpaths.vrpath.
+Just launch "PiBridge" (or run `pibridge`). SteamVR is the runtime.
+
+Optional (inside-out / Pimax-engine tracking): build winbridge once with
+  pibridge-build-winbridge
+(needs mingw-w64; wine at run time). The proprietary Pimax kit is a separate
+manual step, see /usr/share/doc/pibridge/INSTALL.md.
+
+EOF
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

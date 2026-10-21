@@ -1,0 +1,9 @@
+# debhelper / dpkg-buildpackage build artifacts (keep only the packaging source)
+/.debhelper/
+/*.debhelper
+/*.debhelper.log
+/*.substvars
+/files
+/debhelper-build-stamp
+/tmp/
+/pibridge/

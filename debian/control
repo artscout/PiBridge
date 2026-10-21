@@ -1,0 +1,55 @@
+Source: pibridge
+Section: misc
+Priority: optional
+Maintainer: Albert Valiev <artscout@gmail.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ cmake,
+ ninja-build,
+ g++ (>= 13),
+ qt6-base-dev,
+ libopenxr-dev,
+ libvulkan-dev,
+ libgl-dev,
+ libegl-dev,
+ zlib1g-dev,
+ patchelf,
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+Homepage: https://github.com/artscout/PiBridge
+
+Package: pibridge
+Architecture: amd64
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+ libopencv-core410 | libopencv-core4.10,
+ libopencv-imgproc410 | libopencv-imgproc4.10,
+ libopencv-imgcodecs410 | libopencv-imgcodecs4.10,
+ libopencv-video410 | libopencv-video4.10,
+ libopencv-calib3d410 | libopencv-calib3d4.10,
+ libopencv-features2d410 | libopencv-features2d4.10,
+ libopencv-dnn410 | libopencv-dnn4.10,
+ libopencv-flann410 | libopencv-flann4.10,
+ ffmpeg,
+Recommends:
+ steam,
+Suggests:
+ wine,
+ mingw-w64,
+Description: Pimax Crystal Super / Dream Air VR hub for Linux
+ PiBridge is a one-app, one-click VR hub for Pimax headsets (Crystal Super and
+ Dream Air) on Linux: a Qt 6 desktop app plus the engine binaries for inside-out
+ 6DoF/SLAM tracking, eye tracking, controller tracking, room setup, video
+ recording and a VR home.
+ .
+ The package bundles the PiBridge Monado SteamVR driver (used as a SteamVR driver;
+ the standalone monado-service is not shipped) and the ONNX Runtime it needs,
+ which are not available as distribution packages. OpenCV, the Vulkan loader,
+ Qt 6, ffmpeg and every other library are used from their system packages.
+ .
+ SteamVR is the runtime (Recommends: steam); the per-user setup (enabling the
+ user services and registering the SteamVR driver) is done by the app on first
+ run. The optional inside-out (Pimax-engine) path needs winbridge, which is
+ shipped as source and built with the pibridge-build-winbridge helper
+ (Suggests: wine, mingw-w64).

@@ -32,6 +32,9 @@ public slots:
     // From the SteamVR dashboard overlay: start (true) / stop (false) a recording, the same as the RECORD / STOP
     // buttons and only when that is allowed right now (otherwise it does nothing).
     void recordFromVr(bool start);
+    // From the overlay's segment controls: a recording setting (key = view | fps | max_height) to write to record.toml,
+    // so a later start uses it. Ignores an unknown key.
+    void setFromVr(const QString& key, const QString& value);
 
 signals:
     // A message for the Dashboard's message line.

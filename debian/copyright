@@ -1,0 +1,63 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: PiBridge
+Source: https://github.com/artscout/PiBridge
+Comment:
+ PiBridge is a VR hub for Pimax headsets on Linux (not affiliated with Pimax).
+ It contains code ported from omarchyvr (https://github.com/laughtt/omarchyvr),
+ used under its MIT terms. See the NOTICE file for the full attribution of
+ ported and third-party material.
+ .
+ Two components are BUNDLED because they are not distribution packages:
+   * usr/lib/pibridge/steamvr-monado/  - the PiBridge Monado SteamVR driver, our
+     build of the Monado fork vendored in third_party/monado/ (Boost Software
+     License 1.0, as Monado). Shipped prebuilt and stripped.
+   * usr/lib/pibridge/libonnxruntime.so* - Microsoft ONNX Runtime (MIT), required
+     by the Pimax driver for Mercury hand tracking. Not packaged in Debian/Ubuntu.
+ .
+ Excluded on purpose (licence / not our code): the Mercury hand models, the
+ Pimax Play DLLs and the windata kit, winbridge.exe build output, and the
+ external lens/calibration data. Only repo content plus the two bundled
+ components above are shipped.
+
+Files: *
+Copyright: 2026 Albert Valiev <artscout@gmail.com>
+License: MIT
+
+Files: app/third_party/openvr/*
+Copyright: Valve Corporation
+License: BSD-3-Clause
+ (OpenVR SDK header, build-time only; SteamVR's libopenvr_api.so is loaded at
+ run time and is not part of this package.)
+
+Files: third_party/monado/*
+Copyright: Collabora, Ltd. and the Monado contributors
+License: BSL-1.0
+ (Vendored Monado fork with the Pimax driver. The prebuilt driver bundled in the
+ binary package is built from this tree.)
+
+License: MIT
+ Permission is hereby granted, free of charge, to any person obtaining a copy of
+ this software and associated documentation files (the "Software"), to deal in
+ the Software without restriction, including without limitation the rights to
+ use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ the Software, and to permit persons to whom the Software is furnished to do so,
+ subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included in all
+ copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+License: BSD-3-Clause
+ Redistribution and use in source and binary forms, with or without modification,
+ are permitted provided that the conditions of the 3-clause BSD license are met.
+ See app/third_party/openvr/LICENSE for the full text.
+
+License: BSL-1.0
+ Boost Software License - Version 1.0. The full text is distributed with the
+ Monado sources in third_party/monado/ (LICENSES/BSL-1.0.txt).

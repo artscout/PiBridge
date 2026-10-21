@@ -64,14 +64,20 @@ TEST(overlay_find_program) {
 }
 
 TEST(overlay_parse_request) {
-    CHECK(parseOverlayRequest(QByteArray("room-setup\n")) == std::optional<OverlayAction>(OverlayAction::RoomSetupFull));
-    CHECK(parseOverlayRequest(QByteArray("quick-room-setup\n")) ==
-          std::optional<OverlayAction>(OverlayAction::RoomSetupQuick));
+    using R = OverlayRequest;
+    CHECK(parseOverlayRequest(QByteArray("room-setup\n")) == std::optional<R>(R{OverlayAction::RoomSetupFull}));
+    CHECK(parseOverlayRequest(QByteArray("quick-room-setup\n")) == std::optional<R>(R{OverlayAction::RoomSetupQuick}));
     CHECK(parseOverlayRequest(QByteArray("quick-room-setup")) ==
-          std::optional<OverlayAction>(OverlayAction::RoomSetupQuick)); // no newline
-    CHECK(parseOverlayRequest(QByteArray("record-start\n")) ==
-          std::optional<OverlayAction>(OverlayAction::RecordStart));
-    CHECK(parseOverlayRequest(QByteArray("record-stop\n")) == std::optional<OverlayAction>(OverlayAction::RecordStop));
+          std::optional<R>(R{OverlayAction::RoomSetupQuick})); // no newline
+    CHECK(parseOverlayRequest(QByteArray("record-start\n")) == std::optional<R>(R{OverlayAction::RecordStart}));
+    CHECK(parseOverlayRequest(QByteArray("record-stop\n")) == std::optional<R>(R{OverlayAction::RecordStop}));
+    // record-set carries the key and value
+    CHECK(parseOverlayRequest(QByteArray("record-set view both\n")) ==
+          std::optional<R>(R{OverlayAction::RecordSet, QStringLiteral("view"), QStringLiteral("both")}));
+    CHECK(parseOverlayRequest(QByteArray("record-set max_height 0")) ==
+          std::optional<R>(R{OverlayAction::RecordSet, QStringLiteral("max_height"), QStringLiteral("0")}));
+    CHECK(!parseOverlayRequest(QByteArray("record-set bogus 1\n")).has_value()); // unknown key
+    CHECK(!parseOverlayRequest(QByteArray("record-set view\n")).has_value());    // missing value
     CHECK(!parseOverlayRequest(QByteArray("")).has_value());
     CHECK(!parseOverlayRequest(QByteArray("something-else\n")).has_value());
 }
