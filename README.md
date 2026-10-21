@@ -58,7 +58,7 @@ pixel font, for SteamVR's chaperone file on Linux. ZoneTweak's set dressing (the
 | Headset | Tracking | Display | Eye tracking | Status |
 |---|---|---|---|---|
 | Pimax Crystal Super (micro-OLED), Lighthouse faceplate | SteamVR Lighthouse: Index controllers, base stations | CustomHeadsetOpenVR + our patches; wake, keepalive, panel 72/90 Hz; headset audio | yes, with your own Tobii profile | **works** (one headset tested) |
-| Pimax Crystal Super, inside-out (no faceplate) | SLAM on the headset cameras (Basalt in omarchyvr's Monado), controllers by their LEDs | Monado's compositor | through the Pimax driver in Monado | **experimental**: head tracking usable on a worn headset, controllers not checked live yet |
+| Pimax Crystal Super, inside-out (no faceplate) | SLAM on the headset cameras (Pimax Play's engine under Wine, or Basalt), controllers by their LEDs | SteamVR via our bundled Monado driver | through the Pimax driver in Monado | **experimental**: head tracking usable on a worn headset, controllers not checked live yet |
 | Pimax Dream Air | | | | protocol and device description present (from omarchyvr); not tested with PiBridge |
 | Other Pimax models | | | | not supported yet: data wanted, see [docs/HEADSET-DATA.md](docs/HEADSET-DATA.md) |
 
@@ -86,7 +86,23 @@ bytes we derive from it, never the recording.
 
 ## SLAM status
 
-Inside-out tracking on the Crystal Super (no faceplate), as of 2026-10-19:
+**How we do it.** Inside-out runs the Pimax driver inside Monado, which SteamVR loads as its headset driver
+(`driver_monado.so` in vrserver), so games start through SteamVR as usual — no separate runtime. Our Monado (the Pimax
+Crystal Super driver linked against PiBridge's C++ `libpibridge_pimax.a`, no Rust) is **bundled in this repo** at
+`third_party/monado/` (see [docs/INSTALL.md](docs/INSTALL.md) section 7). The headset's cameras and IMU feed one of two
+interchangeable head-tracking engines, chosen on the Tracking page:
+
+- **Pimax Play's own engine** — the default, for parity with Windows: `pimax_slam.pi.dll` run under Wine in a small
+  host (`winbridge`) and reached through a VIT library, with the headset's factory calibration — the same tracking
+  Pimax Play uses on Windows ([docs/WINBRIDGE.md](docs/WINBRIDGE.md)).
+- **Basalt** — open source: Monado's Basalt visual-inertial tracker on the two lower cameras plus the IMU, with a
+  config PiBridge generates from the headset calibration.
+
+Controllers are found by their LEDs in the cameras (Pimax's LED engine in the same winbridge, or our
+`pibridge-ctrltrack` + IMU fusion). The lens distortion/FOV is a selectable profile (Default / like-Pimax / the raw
+Pimax compositor mesh).
+
+Status on the Crystal Super (no faceplate), as of 2026-10-19:
 
 - **Head tracking works on a worn headset** (recorded with the Development page's guided Record tracking, then checked
   offline): no tracking losses, 5-7 cm drift over a take, 3-5 mm/s creep standing still, about 1 degree tilt error.

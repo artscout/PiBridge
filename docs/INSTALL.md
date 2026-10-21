@@ -34,6 +34,10 @@ sudo dnf install cmake ninja-build gcc-c++ qt6-qtbase-devel openxr-devel zlib-de
 Check the compiler: `g++ --version` must say 13 or newer (Ubuntu 22.04 ships 11: install `g++-13` and add
 `-DCMAKE_CXX_COMPILER=g++-13` to the configure command below).
 
+Inside-out tracking (section 7, optional) needs more: **Wine** and, to build the Pimax engine host, **MinGW-w64**
+(`sudo apt install wine mingw-w64`; Arch `wine mingw-w64-gcc`; Fedora `wine mingw64-gcc-c++`). The open **Basalt**
+engine needs `libbasalt.so` built separately (section 7.1). None of this is needed for the tested Lighthouse path.
+
 ## 2. Build, test and install
 
 From the PiBridge source folder:
@@ -316,13 +320,53 @@ whether it is on, off or not installed.
 > app, the services, the dashboard panel *and* the foveated-rendering layer together) is **not wired up yet** — this
 > is a TODO. For now, follow the two installs above.
 
-### 7.1 Pimax's own tracking engines (inside-out, optional)
+### 7.1 Inside-out tracking (SteamVR + Monado, optional)
 
-Tracking page, **Head tracking engine: Pimax** runs Pimax Play's own head SLAM and controller LED engine under Wine
-(`winbridge`, docs/WINBRIDGE.md). Needs `wine` and, once (again after a Pimax Play update), Pimax Play's files copied
-from the PC's Windows into `~/.local/share/pibridge/windata`: the table and commands are in
-[WINBRIDGE.md, "Copying the Pimax files"](WINBRIDGE.md#copying-the-pimax-files-once-and-again-after-a-pimax-play-update).
-The files are Pimax's: personal use, they stay on this computer.
+Inside-out tracks the head in 6DoF from the headset's own cameras — no base stations, no faceplate. It runs as a
+SteamVR driver (the bundled Monado, section 7.2 below), so games still start through SteamVR as usual. It is
+**experimental**; Lighthouse (section 5) is the tested path. Turn it on from the Tracking page
+(**Head tracking by: Inside-out**).
+
+Common to both engines: the bundled Monado built and installed (**section 7.2**); `pimax-cam` and `pimax-ctrltrack`
+(installed with the app, section 2); and the headset's factory **camera calibration**
+(`device_calibration_<serial>.xml`, copied below, or set as `rec_cam_calib`). Then pick one head-tracking engine on the
+Tracking page (**Head tracking engine**):
+
+**A) Pimax — the default, matches Pimax Play.** Pimax Play's own head-SLAM and controller-LED engine, run under Wine
+(`winbridge`; the full design and rationale are in [WINBRIDGE.md](WINBRIDGE.md)). One-time setup:
+
+1. Install Wine and MinGW-w64 (section 1).
+2. Copy Pimax Play's files from a Windows PC into `~/.local/share/pibridge/windata/`: the `Program Files/Pimax/Runtime`
+   DLLs, the SLAM kit (`voc_GEN_8X4.dbow`, `pimax_database.bin`), this headset's `device_calibration_<serial>.xml`, and
+   the `H1/` controller models. The exact table and copy commands:
+   [WINBRIDGE.md, "Copying the Pimax files"](WINBRIDGE.md#copying-the-pimax-files-once-and-again-after-a-pimax-play-update).
+   These files are Pimax's — personal use, they stay on this computer and are never committed.
+3. Build the engine host and the VIT bridge and put them where the app looks:
+   ```
+   cd winbridge
+   x86_64-w64-mingw32-g++ -O2 -static server.cpp -lws2_32 -o winbridge.exe
+   g++ -O2 -std=c++20 -fPIC -shared vit_winbridge.cpp -o libpibridge_vit_winbridge.so -pthread
+   mkdir -p ~/.local/share/pibridge/winbridge
+   cp winbridge.exe libpibridge_vit_winbridge.so ~/.local/share/pibridge/winbridge/
+   ```
+   (The app also finds them in the source tree and in `~/.local/lib/pibridge/winbridge/`.)
+4. On the Tracking page choose **Head tracking engine: Pimax**; it tells you in plain words what is still missing.
+
+**B) Basalt — open source.** Monado's Basalt tracker on the two lower cameras plus the IMU. Build `libbasalt.so`
+separately (Monado's Basalt fork) and put it where the app finds it — `~/.local/lib/pibridge/`, `/usr/local/lib/`,
+`/usr/lib/`, or set `rec_basalt_lib`. PiBridge generates the base Basalt config from the headset calibration at start;
+the tunables (detection grid, camera count, accel/gyro bias, drift hold) are on the Tracking page, documented in
+[TRACKING.md](TRACKING.md). Choose **Head tracking engine: Basalt**.
+
+### 7.2 The PiBridge-linked Monado (bundled with PiBridge)
+
+Inside-out mode runs through our own Monado: `monado-service` and the SteamVR driver `driver_monado.so` carry the Pimax
+Crystal Super driver, linked against PiBridge's `libpibridge_pimax.a`. **The full Monado source is bundled in this
+repository** at [`third_party/monado/`](../third_party/monado) — a snapshot of our Monado fork (Monado plus the Pimax
+driver, with the `PIMAX_USE_PIBRIDGE` switch already applied), so there is nothing extra to clone and no patch to apply.
+Build and install it following [docs/monado-abi.md](monado-abi.md) ("The PiBridge-linked Monado"); the app's preflight
+checks the feature markers in the result, and its Fix/Play button restores `cap_sys_nice` after each relink. Lighthouse
+mode (section 5) does not need any of this — CustomHeadsetOpenVR draws the picture there.
 
 ## 8. Check that it works
 
@@ -370,6 +414,7 @@ They read their own files (`~/.config/pimax-linux/`, `~/.config/omarchyvr/`), wh
 | zlib | optional, system package | your distribution; without it the headset calibration blob is not inflated |
 | IBM Plex fonts | optional, system package | your distribution; fallbacks: Noto Sans, DejaVu |
 | `openvr.h` | vendored header | `app/third_party/openvr/` (OpenVR SDK 2.15.6, Valve, BSD-3-Clause) |
+| Monado (inside-out driver) | bundled source | `third_party/monado/` — a snapshot of our Monado fork (Monado + PiBridge's Pimax Crystal Super driver, BSL-1.0); the `PIMAX_USE_PIBRIDGE` switch is already applied; built per docs/monado-abi.md |
 | `libopenvr_api.so` | loaded at run time with `dlopen` | your SteamVR install (the app finds it through `~/.config/openvr/openvrpaths.vrpath`); not linked, not shipped |
 | Headset and eye chip protocols, gaze math, the two daemons, device descriptions | our code, ported | from omarchyvr (laughtt and contributors, MIT OR Apache-2.0, used as MIT; see NOTICE), Rust to C++ |
 | Quad views settings code | our code, copied | from artscout-qv-vulkan-linux (MIT) |

@@ -219,11 +219,12 @@ one imported archive (C++ link language, plus zlib, pthreads, dl, m, rt) takes t
 for `drv_pimax` and `pimax_ht_bench`, and all seven headers come from `PIMAX_PIBRIDGE_INCLUDE` (byte-identical copies,
 `monado_abi_headers`). Configure checks that the archive and each header exist.
 
-**Source**: omarchyvr's `forks/monado` at `0dff9fa2a` plus the Crystal Super driver diff (still uncommitted in
-omarchyvr: `pimax_hmd.c`, `pimax_interface.h`, `pimax_prober.c`, `target_lists.c`), then the patch. A local clone of
-the fork on a branch `pibridge-abi` (two local commits, never pushed), not a `git worktree`: Monado's
-`GetGitRevisionDescription.cmake` cannot find the refs of a worktree of a submodule (it looks in the superproject's
-`.git`) and configure fails.
+**Source**: bundled in this repository at [`third_party/monado/`](../third_party/monado) — a snapshot of our Monado
+fork (Monado plus the Pimax Crystal Super driver, with the `PIMAX_USE_PIBRIDGE` switch already applied in
+`src/xrt/drivers/CMakeLists.txt`), so a user build needs no clone and no separate patch step. The snapshot has no `.git`;
+the fork's own history is not carried (PiBridge's repository history is the record). Build it out-of-tree with the three
+options below. (Historically this came from omarchyvr's `forks/monado`; we now vendor it so the inside-out driver is
+self-contained here.)
 
 **Build dir**: never a fresh cache (omarchyvr lesson 6 and 2026-10-15). Copy the live build's `CMakeCache.txt`,
 replace only the source and build paths (`CMAKE_HOME_DIRECTORY`, `CMAKE_CACHEFILE_DIR`, `XRT_SOURCE_DIR`,
