@@ -280,9 +280,16 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
             say(QStringLiteral("Starting VR: SteamVR with the Monado driver..."));
             return;
         }
+        const bool steamUp = source_.fake() || steamClientRunning();
         const bool started = actions_.launchSteamVR();
-        say(started ? QStringLiteral("Starting SteamVR...") : QStringLiteral("Could not start Steam. Is it installed?"),
-            !started);
+        if (!started) {
+            say(QStringLiteral("Could not start Steam. Is it installed?"), true);
+        } else if (!steamUp) {
+            say(QStringLiteral("Steam is not running — starting it first; SteamVR will launch once Steam is up "
+                               "(press START VR again if it does not)."));
+        } else {
+            say(QStringLiteral("Starting SteamVR..."));
+        }
         waitingForSteamVr_ = started;
         if (started) {
             messageTimer_.start(120000);
@@ -780,6 +787,11 @@ void DashboardPage::updateVrStatus() {
         line = h > 0 ? QStringLiteral("VR running %1 h %2 m").arg(h).arg(m) : QStringLiteral("VR running %1 m").arg(m);
     } else {
         line = QStringLiteral("VR not running");
+        // SteamVR is a Steam app and cannot start unless the Steam client is running, so say so plainly: otherwise
+        // START VR looks like it does nothing when Steam is closed.
+        if (!source_.fake() && !steamClientRunning()) {
+            line += QStringLiteral("      Start Steam first to launch SteamVR");
+        }
     }
     const VrDevice* hmd = nullptr;
     for (const VrDevice& d : source_.state().steamvr.devices) {

@@ -115,10 +115,12 @@ Status on the Crystal Super (no faceplate), as of 2026-10-19:
 - **From the app:** the Tracking page's START TRACKING runs SteamVR with Monado's driver (`driver_monado`) instead of
   CustomHeadsetOpenVR, so games start as usual (in progress). "Monado directly" (no SteamVR; own OpenXR apps,
   `pibridge-home` as a home scene) is on the Development page for debugging. Neither is tested in a headset yet.
-- **No Rust left:** the Pimax libraries Monado links (headset, cameras, auto exposure, lenses, controllers, hands) are
-  ported to C++ (`libpibridge_pimax.a`), byte for byte against the Rust originals; a Monado build linked with it gives
-  identical tracking offline. The live A/B in the headset is next.
-  Plan and results: [docs/research/rust-port-plan.md](docs/research/rust-port-plan.md).
+- **No Rust:** the Pimax libraries Monado links (headset, cameras, auto exposure, lenses, controllers, hands) are
+  ported to C++ (`libpibridge_pimax.a`), byte for byte against the Rust originals (every ported test has a C++ twin).
+  The bundled Monado (`third_party/monado/`) links this C++ archive — **nothing Rust is built or shipped**, and it is
+  what runs live. (The driver's dynamic symbols carry `PIBRIDGE_PIMAX_ABI`, so a PiBridge-linked build is
+  distinguishable from an old Rust-linked one.) Plan and results:
+  [docs/research/rust-port-plan.md](docs/research/rust-port-plan.md).
 - **Open:** no persistent world anchor yet (the room boundary can turn or shift between sessions), the gyro bias
   takes about 40 s to settle after a start, and longer walking takes are still to be recorded.
 
