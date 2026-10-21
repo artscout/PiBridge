@@ -14,11 +14,10 @@ struct Rect {
     bool has(std::uint32_t x, std::uint32_t y) const { return x >= x0 && x < x1 && y >= y0 && y < y1; }
 };
 
-// Four buttons, stacked, with a margin. Fixed for kPanelW x kPanelH.
+// Three buttons, stacked, with a margin. Fixed for kPanelW x kPanelH. The third is the record toggle.
 constexpr Rect kRoomSetup{24, 20, kPanelW - 24, 100};
 constexpr Rect kQuickRoomSetup{24, 114, kPanelW - 24, 194};
-constexpr Rect kRecordStart{24, 208, kPanelW - 24, 288};
-constexpr Rect kRecordStop{24, 302, kPanelW - 24, 382};
+constexpr Rect kRecord{24, 208, kPanelW - 24, 288};
 
 struct Rgba {
     std::uint8_t r, g, b, a;
@@ -34,12 +33,15 @@ constexpr Rgba kText{236, 236, 242, 255};
 // A 5x7 uppercase font, only the glyphs the two labels need (others draw blank). Each row is 5 bits, b4 = leftmost.
 const std::array<std::uint8_t, 7>& glyph(char c) {
     static const std::array<std::uint8_t, 7> kSpace{0, 0, 0, 0, 0, 0, 0};
+    static const std::array<std::uint8_t, 7> kA{0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11};
     static const std::array<std::uint8_t, 7> kC{0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E};
     static const std::array<std::uint8_t, 7> kD{0x1C, 0x12, 0x11, 0x11, 0x11, 0x12, 0x1C};
     static const std::array<std::uint8_t, 7> kE{0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F};
+    static const std::array<std::uint8_t, 7> kG{0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F};
     static const std::array<std::uint8_t, 7> kI{0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E};
     static const std::array<std::uint8_t, 7> kK{0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11};
     static const std::array<std::uint8_t, 7> kM{0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11};
+    static const std::array<std::uint8_t, 7> kN{0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11};
     static const std::array<std::uint8_t, 7> kO{0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E};
     static const std::array<std::uint8_t, 7> kP{0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10};
     static const std::array<std::uint8_t, 7> kQ{0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D};
@@ -48,12 +50,15 @@ const std::array<std::uint8_t, 7>& glyph(char c) {
     static const std::array<std::uint8_t, 7> kT{0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04};
     static const std::array<std::uint8_t, 7> kU{0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E};
     switch (c) {
+    case 'A': return kA;
     case 'C': return kC;
     case 'D': return kD;
     case 'E': return kE;
+    case 'G': return kG;
     case 'I': return kI;
     case 'K': return kK;
     case 'M': return kM;
+    case 'N': return kN;
     case 'O': return kO;
     case 'P': return kP;
     case 'Q': return kQ;
@@ -122,12 +127,11 @@ void drawButton(Canvas& cv, Rect r, const std::string& label, bool hot) {
 
 } // namespace
 
-std::string requestFor(Button b) {
+std::string requestFor(Button b, bool recording) {
     switch (b) {
     case Button::RoomSetup: return kRequestRoomSetup;
     case Button::QuickRoomSetup: return kRequestQuickRoomSetup;
-    case Button::RecordStart: return kRequestRecordStart;
-    case Button::RecordStop: return kRequestRecordStop;
+    case Button::Record: return recording ? kRequestRecordStop : kRequestRecordStart;
     case Button::None: break;
     }
     return {};
@@ -145,22 +149,18 @@ Button hitTest(float x, float y) {
     if (kQuickRoomSetup.has(px, py)) {
         return Button::QuickRoomSetup;
     }
-    if (kRecordStart.has(px, py)) {
-        return Button::RecordStart;
-    }
-    if (kRecordStop.has(px, py)) {
-        return Button::RecordStop;
+    if (kRecord.has(px, py)) {
+        return Button::Record;
     }
     return Button::None;
 }
 
-std::vector<std::uint8_t> drawPanel(Button hovered) {
+std::vector<std::uint8_t> drawPanel(Button hovered, bool recording) {
     Canvas cv;
     cv.fill({0, 0, kPanelW, kPanelH}, kBg);
     drawButton(cv, kRoomSetup, "ROOM SETUP", hovered == Button::RoomSetup);
     drawButton(cv, kQuickRoomSetup, "QUICK ROOM SETUP", hovered == Button::QuickRoomSetup);
-    drawButton(cv, kRecordStart, "RECORD", hovered == Button::RecordStart);
-    drawButton(cv, kRecordStop, "STOP", hovered == Button::RecordStop);
+    drawButton(cv, kRecord, recording ? "STOP RECORDING" : "START RECORDING", hovered == Button::Record);
     return cv.take();
 }
 

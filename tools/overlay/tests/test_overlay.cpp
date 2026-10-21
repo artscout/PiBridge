@@ -24,9 +24,9 @@ TEST(options) {
 TEST(panel_is_small) {
     // a few hundred pixels, never a 2048-square app window
     CHECK(kPanelW <= 1024 && kPanelH <= 1024);
-    CHECK(drawPanel(Button::None).size() == static_cast<std::size_t>(kPanelW) * kPanelH * 4U);
+    CHECK(drawPanel(Button::None, false).size() == static_cast<std::size_t>(kPanelW) * kPanelH * 4U);
     // every pixel opaque
-    const auto p = drawPanel(Button::None);
+    const auto p = drawPanel(Button::None, false);
     bool opaque = true;
     for (std::size_t i = 3; i < p.size(); i += 4) {
         opaque = opaque && p[i] == 255;
@@ -35,34 +35,34 @@ TEST(panel_is_small) {
 }
 
 TEST(hover_changes_only_on_change) {
-    const auto rest = drawPanel(Button::None);
-    const auto hot0 = drawPanel(Button::RoomSetup);
-    const auto hot1 = drawPanel(Button::QuickRoomSetup);
+    const auto rest = drawPanel(Button::None, false);
+    const auto hot0 = drawPanel(Button::RoomSetup, false);
+    const auto hot1 = drawPanel(Button::QuickRoomSetup, false);
     CHECK(rest != hot0);
     CHECK(rest != hot1);
     CHECK(hot0 != hot1);
-    CHECK(drawPanel(Button::RoomSetup) == hot0); // deterministic
+    CHECK(drawPanel(Button::RoomSetup, false) == hot0);   // deterministic
+    CHECK(drawPanel(Button::None, true) != rest);         // the record label flips START <-> STOP
 }
 
 TEST(hit_test) {
-    // GL space: y grows up from the bottom, so a large y is near the top button. Centres of the four stacked buttons.
+    // GL space: y grows up from the bottom, so a large y is near the top button. Centres of the three stacked buttons.
     const float w = static_cast<float>(kPanelW) / 2;
     const float h = static_cast<float>(kPanelH);
     CHECK(hitTest(w, h - 60.0F) == Button::RoomSetup);
     CHECK(hitTest(w, h - 154.0F) == Button::QuickRoomSetup);
-    CHECK(hitTest(w, h - 248.0F) == Button::RecordStart);
-    CHECK(hitTest(w, h - 342.0F) == Button::RecordStop);
+    CHECK(hitTest(w, h - 248.0F) == Button::Record);
     CHECK(hitTest(2.0F, 2.0F) == Button::None);                          // the bottom margin
     CHECK(hitTest(-1.0F, 10.0F) == Button::None);                        // off the panel
     CHECK(hitTest(static_cast<float>(kPanelW) + 5, 10.0F) == Button::None);
 }
 
 TEST(request_lines) {
-    CHECK(requestFor(Button::RoomSetup) == "room-setup");
-    CHECK(requestFor(Button::QuickRoomSetup) == "quick-room-setup");
-    CHECK(requestFor(Button::RecordStart) == "record-start");
-    CHECK(requestFor(Button::RecordStop) == "record-stop");
-    CHECK(requestFor(Button::None).empty());
+    CHECK(requestFor(Button::RoomSetup, false) == "room-setup");
+    CHECK(requestFor(Button::QuickRoomSetup, false) == "quick-room-setup");
+    CHECK(requestFor(Button::Record, false) == "record-start"); // not recording -> start
+    CHECK(requestFor(Button::Record, true) == "record-stop");   // recording -> stop
+    CHECK(requestFor(Button::None, false).empty());
 }
 
 TEST(manifest) {

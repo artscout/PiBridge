@@ -36,7 +36,7 @@ int runSelfTest() {
         bad++;
     };
     // the panel draws at its fixed size (a few hundred px, not 2048)
-    if (overlay::drawPanel(overlay::Button::None).size() !=
+    if (overlay::drawPanel(overlay::Button::None, false).size() !=
         static_cast<std::size_t>(overlay::kPanelW) * overlay::kPanelH * 4U) {
         fail("drawPanel size wrong");
     }
@@ -44,11 +44,11 @@ int runSelfTest() {
         fail("panel is too big (must be small, not a full window)");
     }
     // hover lights one button: the pixels differ from the resting panel
-    if (overlay::drawPanel(overlay::Button::RoomSetup) == overlay::drawPanel(overlay::Button::None)) {
+    if (overlay::drawPanel(overlay::Button::RoomSetup, false) == overlay::drawPanel(overlay::Button::None, false)) {
         fail("hover does not change the panel");
     }
     // the laser hit test: GL space is bottom-left, so a point high on the screen (large y) hits the top button.
-    // Centres of the four stacked buttons (top to bottom).
+    // Centres of the three stacked buttons (top to bottom).
     const float ph = static_cast<float>(overlay::kPanelH);
     if (overlay::hitTest(256.0F, ph - 60.0F) != overlay::Button::RoomSetup) {
         fail("hitTest ROOM SETUP wrong");
@@ -56,20 +56,17 @@ int runSelfTest() {
     if (overlay::hitTest(256.0F, ph - 154.0F) != overlay::Button::QuickRoomSetup) {
         fail("hitTest QUICK ROOM SETUP wrong");
     }
-    if (overlay::hitTest(256.0F, ph - 248.0F) != overlay::Button::RecordStart) {
+    if (overlay::hitTest(256.0F, ph - 248.0F) != overlay::Button::Record) {
         fail("hitTest RECORD wrong");
-    }
-    if (overlay::hitTest(256.0F, ph - 342.0F) != overlay::Button::RecordStop) {
-        fail("hitTest STOP wrong");
     }
     if (overlay::hitTest(5.0F, 5.0F) != overlay::Button::None) {
         fail("hitTest off a button wrong");
     }
-    if (overlay::requestFor(overlay::Button::RoomSetup) != "room-setup" ||
-        overlay::requestFor(overlay::Button::QuickRoomSetup) != "quick-room-setup" ||
-        overlay::requestFor(overlay::Button::RecordStart) != "record-start" ||
-        overlay::requestFor(overlay::Button::RecordStop) != "record-stop" ||
-        !overlay::requestFor(overlay::Button::None).empty()) {
+    if (overlay::requestFor(overlay::Button::RoomSetup, false) != "room-setup" ||
+        overlay::requestFor(overlay::Button::QuickRoomSetup, false) != "quick-room-setup" ||
+        overlay::requestFor(overlay::Button::Record, false) != "record-start" ||
+        overlay::requestFor(overlay::Button::Record, true) != "record-stop" ||
+        !overlay::requestFor(overlay::Button::None, false).empty()) {
         fail("requestFor wrong");
     }
     const std::string m = overlay::manifestJson("pibridge.dashboard", "/bin/x", "/ico.png", "PiBridge");

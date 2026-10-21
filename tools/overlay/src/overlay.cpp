@@ -5,6 +5,7 @@
 
 #include "pibridge/room/files.h"
 #include "pibridge/room/json.h"
+#include "pibridge_record_capture_control.h"
 #include "pibridge_status.h"
 
 #include <dlfcn.h>
@@ -15,6 +16,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -127,6 +129,22 @@ void writeRequest(const std::string& line) {
     std::filesystem::rename(tmp, path, ec);
 }
 
+// Is a recording active? Reads the capture control file (pibridge_record_capture_control.h) that pibridge-record
+// writes: the `active` line is 1 while capturing. Missing file or no `active` line = not recording.
+bool readRecording() {
+    std::ifstream f(reclayer::captureControlPath());
+    std::string line;
+    while (std::getline(f, line)) {
+        std::istringstream is(line);
+        std::string key;
+        int value = 0;
+        if ((is >> key >> value) && key == "active") {
+            return value != 0;
+        }
+    }
+    return false;
+}
+
 // The small launcher panel: a dashboard overlay with two buttons, uploaded ONCE and re-uploaded only when the hovered
 // button changes. No app-window embed, no vrpanel.shm, no per-frame upload.
 class Launcher {
@@ -152,6 +170,10 @@ public:
 
     /// Returns false on VREvent_Quit (SteamVR going down: exit; the app restarts us).
     bool poll() {
+        if (const bool rec = readRecording(); rec != recording_) {
+            recording_ = rec; // the record button flips START RECORDING <-> STOP RECORDING
+            redraw();
+        }
         vr::VREvent_t e{};
         while (ov_->PollNextOverlayEvent(main_, &e, sizeof(e))) {
             switch (e.eventType) {
@@ -165,7 +187,7 @@ public:
             }
             case vr::VREvent_MouseButtonUp:
                 if (e.data.mouse.button == vr::VRMouseButton_Left) {
-                    const std::string req = requestFor(hitTest(e.data.mouse.x, e.data.mouse.y));
+                    const std::string req = requestFor(hitTest(e.data.mouse.x, e.data.mouse.y), recording_);
                     if (!req.empty()) {
                         writeRequest(req);
                     }
@@ -190,7 +212,7 @@ public:
 
 private:
     void redraw() {
-        rgba_ = drawPanel(hover_);
+        rgba_ = drawPanel(hover_, recording_);
         ov_->SetOverlayRaw(main_, rgba_.data(), kPanelW, kPanelH, 4);
     }
 
@@ -199,6 +221,7 @@ private:
     vr::VROverlayHandle_t main_ = vr::k_ulOverlayHandleInvalid;
     vr::VROverlayHandle_t thumb_ = vr::k_ulOverlayHandleInvalid;
     Button hover_ = Button::None;
+    bool recording_ = false; // last-seen capture state (readRecording), so the record button shows START or STOP
     std::vector<std::uint8_t> rgba_;
     std::string err_;
 };

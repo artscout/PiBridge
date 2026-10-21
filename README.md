@@ -80,8 +80,9 @@ bytes we derive from it, never the recording.
 | Quad views page | works | the layer itself: [linux-vulkan-quadviews-openxr-layer](https://github.com/artscout/linux-vulkan-quadviews-openxr-layer) |
 | SteamVR device status | works | controllers, battery, base stations |
 | Apps page | works | Steam games and your own programs; own apps wait until SteamVR (or Monado) is ready |
-| SteamVR dashboard panel | new, not tested in a headset yet | `pibridge-overlay`: an in-VR panel (Room setup, quick room setup, record / stop video), toggled from Dashboard → Quick settings; [docs/OVERLAY.md](docs/OVERLAY.md) |
-| Room setup | new, not tested in a headset yet | `pibridge-roomsetup` (in the headset, port of ZoneTweak) and the Room page; SteamVR's chaperone file |
+| SteamVR dashboard panel | works (tested in a headset) | `pibridge-overlay`: an in-VR panel with Room setup, quick room setup and one record button (START/STOP recording), toggled from Dashboard → Quick settings; [docs/OVERLAY.md](docs/OVERLAY.md) |
+| Room setup | works (tested in a headset) | `pibridge-roomsetup` (in the headset, port of ZoneTweak) and the Room page; SteamVR's chaperone file |
+| Video recording | works | `pibridge-record` + a Vulkan capture layer (`tools/record-layer`) that grabs the game's eye image in SteamVR's compositor → NVENC/CPU mp4; Dashboard Record card or the overlay; [docs/record.md](docs/record.md) |
 | Inside-out tracking (SLAM) | experimental | see [SLAM status](#slam-status) |
 
 ## SLAM status
@@ -128,7 +129,7 @@ Status on the Crystal Super (no faceplate), as of 2026-10-19:
 
 | What | Tested | Notes |
 |---|---|---|
-| GPU and driver | NVIDIA RTX 5090, open modules 595.99.02 | needs the FEC patch and an EDID override from `patches/nvidia/`; other GPUs untested |
+| GPU and driver | NVIDIA RTX 5090, open modules 615.71.09+ (or 595.99.02) | **615.71.09+ works as-is, no patch** (the Blackwell DSC fix is upstream); 595.x needs the FEC patch + EDID override from `patches/nvidia/`; other GPUs untested |
 | Distribution | Ubuntu 26.04, KDE Wayland | package names for Arch and Fedora are in the guide, not tried on hardware |
 | SteamVR | Steam's SteamVR for Linux | PiBridge does not start or change SteamVR on its own |
 | CustomHeadsetOpenVR | upstream `4f25826` + `patches/chovr/` | or the `linux-crystal-super` branch of artscout/CustomHeadsetOpenVR |

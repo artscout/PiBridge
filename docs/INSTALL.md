@@ -115,8 +115,9 @@ eye tracker; when SteamVR closes they give everything back and the headset goes 
 
 ### 4.1 The SteamVR dashboard panel (installed with the app)
 
-`pibridge-overlay` is a small tab in the SteamVR dashboard with two buttons — **ROOM SETUP** and **QUICK ROOM SETUP**
-— so you can start room setup from inside VR without taking the headset off. It is built and installed together with the
+`pibridge-overlay` is a small tab in the SteamVR dashboard with three buttons — **ROOM SETUP**, **QUICK ROOM SETUP**
+and a video-record button (**START RECORDING** / **STOP RECORDING**) — so you can start room setup or recording from
+inside VR without taking the headset off. It is built and installed together with the
 app by `cmake --install` (the binary goes to `~/.local/bin/pibridge-overlay`, its manifest to
 `~/.local/share/pibridge/pibridge.vrmanifest`); there is nothing extra to build.
 
@@ -129,8 +130,22 @@ dashboard the next time you open it; off, the app stops it. The choice is saved 
 registration that would let SteamVR start it on its own is deliberately left off (leaving the app as the single owner
 of the panel). Full detail is in [OVERLAY.md](OVERLAY.md).
 
-> This panel is new and has not been verified in a headset yet (see [OVERLAY.md](OVERLAY.md)). Until then, you can also
-> start room setup from the Dashboard or the Room page.
+This panel, and the in-headset room setup it launches, are tested in a headset (see [OVERLAY.md](OVERLAY.md)). You can
+also start room setup from the Dashboard or the Room page.
+
+### 4.2 Video recording (the Vulkan capture layer)
+
+PiBridge records what the headset shows — the Dashboard **Record video** card, or the overlay's record button — with
+`pibridge-record` and a small **Vulkan implicit layer** (`tools/record-layer`: `libpibridge-record-layer.so` and its
+manifest `VK_LAYER_PIBRIDGE_record.json`). The loader pulls the layer into SteamVR's `vrcompositor`, where it copies the
+game's rendered eye image and hands it to `pibridge-record` for NVENC (or CPU) mp4 encoding — no GL mirror, no missed
+frames. Both are built and installed with the app (`cmake --install`): the `.so` goes to `~/.local/lib/pibridge/`, the
+manifest to `~/.local/share/vulkan/implicit_layer.d/`.
+
+**One root step for games under Proton/SteamVR:** the Steam Linux Runtime container does not see
+`~/.local/share/vulkan/implicit_layer.d`, so the manifest must also sit in a system path
+(`/usr/share/vulkan/implicit_layer.d/VK_LAYER_PIBRIDGE_record.json`) — a root step, done through the app's pkexec
+prompt. Full detail (capture sources, encoders, options) is in [record.md](record.md).
 
 ## 5. Pimax Crystal Super (Lighthouse faceplate)
 
