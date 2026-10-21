@@ -9,7 +9,7 @@ libpibridge-hmd is `eyed::HidHeadsetCommands` (`src/hid_commands.{h,cpp}`), `src
 
 ## What it does
 
-- Creates the gaze file (default `/dev/shm/omarchyvr-eye-gaze`, 136 bytes, "OVEG", the layout the deployed SteamVR
+- Creates the gaze file (default `/dev/shm/pibridge-eye-gaze`, 136 bytes, "OVEG", the layout the deployed SteamVR
   driver reads) and writes "no gaze" into it.
 - Starts the live tracker: finds the EyeChip (2104:0561), powers the eye module when the headset is there and the
   chip has been missing for 5 s (once per headset enumeration), runs the start list through the guard (with the

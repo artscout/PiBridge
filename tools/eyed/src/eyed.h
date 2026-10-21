@@ -2,7 +2,7 @@
 // Ported from omarchyvr omarchyvr-tools/src/eyed.rs (MIT OR Apache-2.0).
 //
 // pibridge-eyed: runs the eye tracker on its own (no Monado) and publishes the gaze in shared memory (pibridge::eye::shm,
-// `/dev/shm/omarchyvr-eye-gaze`) for the SteamVR driver: the setup of the Crystal Super (SteamVR Lighthouse +
+// `/dev/shm/pibridge-eye-gaze`) for the SteamVR driver: the setup of the Crystal Super (SteamVR Lighthouse +
 // CustomHeadsetOpenVR), whose SteamVR eye tracking component then serves OpenXR `XR_EXT_eye_gaze_interaction`.
 //
 // Options (defaults from pibridge.conf): `--frames FILE` (the start list made by `pibridge-eye frames` from a Windows

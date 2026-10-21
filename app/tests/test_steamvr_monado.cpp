@@ -794,10 +794,14 @@ TEST(cap_sys_nice_reading_and_fix_permissions) {
 TEST(daemons_pause_before_an_inside_out_start) {
     // the words of the status files
     const auto alive = [](qint64 p) { return p == 11 || p == 12; };
-    CHECK(daemonsHolding({}, {}, alive).isEmpty()); // not running
-    CHECK((daemonsHolding("{\"state\": \"idle\", \"pid\": 11}", "{\"state\": \"streaming\", \"pid\": 12}", alive) ==
+    CHECK(daemonsHolding({}, {}, false, alive).isEmpty()); // not running
+    CHECK((daemonsHolding("{\"state\": \"idle\", \"pid\": 11}", "{\"state\": \"streaming\", \"pid\": 12}", false, alive) ==
            QStringList{QStringLiteral("the headset service (pibridge-keepalived)"), QStringLiteral("the eye tracker (pibridge-eyed)")}));
-    CHECK(daemonsHolding("{\"state\": \"paused\", \"pid\": 11}", "{\"state\": \"idle\", \"pid\": 99}", alive).isEmpty());
+    // eye tracking on: pibridge-eyed keeps the eye chip to feed the gaze shm, so it is never counted as holding
+    CHECK((daemonsHolding("{\"state\": \"idle\", \"pid\": 11}", "{\"state\": \"streaming\", \"pid\": 12}", true, alive) ==
+           QStringList{QStringLiteral("the headset service (pibridge-keepalived)")}));
+    CHECK(daemonsHolding("{\"state\": \"paused\", \"pid\": 11}", "{\"state\": \"streaming\", \"pid\": 12}", true, alive).isEmpty());
+    CHECK(daemonsHolding("{\"state\": \"paused\", \"pid\": 11}", "{\"state\": \"idle\", \"pid\": 99}", false, alive).isEmpty());
     CHECK(insideOutMarkerText(4242, IoVariant::SteamVr) == QStringLiteral("pibridge-inside-out 1\nowner 4242\nvariant steamvr\n"));
     const auto m = parseInsideOutMarker(insideOutMarkerText(7, IoVariant::MonadoDirect).toLatin1());
     CHECK(m && m->first == 7 && m->second == QStringLiteral("monado"));
@@ -826,7 +830,7 @@ TEST(daemons_pause_before_an_inside_out_start) {
             markers.push_back(on);
             return true;
         };
-        d.daemonsHolding = [&holding] { return holding; };
+        d.daemonsHolding = [&holding](bool) { return holding; };
         IoSessionControl c(std::move(d));
         markers.clear();
         CHECK(c.start());
@@ -865,7 +869,7 @@ TEST(daemons_pause_before_an_inside_out_start) {
             markers.push_back(on);
             return true;
         };
-        d.daemonsHolding = [] { return QStringList{QStringLiteral("the eye tracker (pibridge-eyed)")}; };
+        d.daemonsHolding = [](bool) { return QStringList{QStringLiteral("the eye tracker (pibridge-eyed)")}; };
         IoSessionControl c(std::move(d));
         CHECK(c.start());
         r.now = kDaemonReleaseMs;

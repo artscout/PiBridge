@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Ported from omarchyvr pimax-eye/src/shm.rs (MIT OR Apache-2.0).
 //
-// The gaze for other processes: one small file in shared memory (`/dev/shm/omarchyvr-eye-gaze`), rewritten for every
+// The gaze for other processes: one small file in shared memory (`/dev/shm/pibridge-eye-gaze`), rewritten for every
 // sample by the eye daemon. Readers: the SteamVR driver (CustomHeadsetOpenVR with the Linux patch, which hands the
 // gaze to SteamVR's eye tracking component and so to OpenXR XR_EXT_eye_gaze_interaction) and anything else that wants
 // the gaze without owning the eye chip. The C layout is omarchyvr's `linux/crystal-super/omarchyvr_eye_gaze.h`

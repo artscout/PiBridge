@@ -392,15 +392,15 @@ IoSessionEnv buildIoEnv(const IoSettings& io, const RecSetup& s, int refreshHz, 
             d << QStringLiteral("PIMAX_SLAM_SMOOTH=0");
         }
     }
-    // eye tracking (pimax_eyeglue.c PIMAX_EYE): the driver opens the Tobii eye chip directly over usbfs and publishes
-    // the gaze pose (XRT_INPUT_GENERIC_EYE_GAZE_POSE) into SteamVR. pibridge-eyed lets go of the chip while the
-    // inside-out session runs (the pause marker, common/pibridge_pause.h), so there is no USB contention. The per-eye
-    // calibration file (drift correction) is the app's, matching the capi's default path.
-    if (s.eyeTracking) {
-        d << QStringLiteral("PIMAX_EYE=1");
-        if (!s.eyeCalib.isEmpty()) {
-            d << QStringLiteral("PIMAX_EYE_CALIBRATION=") + s.eyeCalib;
-        }
+    // eye tracking (ovrd_driver.cpp PIMAX_EYE_STEAMVR): the SteamVR driver reads pibridge-eyed's gaze shared memory
+    // (/dev/shm/pibridge-eye-gaze) and serves SteamVR eye tracking (Prop_SupportsXrEyeGazeInteraction, OpenXR apps get
+    // XR_EXT_eye_gaze_interaction). pibridge-eyed keeps the Tobii chip and writes the shm as in Lighthouse (it does NOT
+    // pause in inside-out), so Monado does NOT open the chip itself (no PIMAX_EYE, no USB contention).
+    // Only when Monado is the headset driver (inside-out) does it serve SteamVR eye tracking; in Lighthouse the
+    // headset (and its eye tracking) come from CustomHeadsetOpenVR, so Monado must NOT also claim eye gaze there (two
+    // drivers fighting over it dropped the HMD -> HmdNotFound).
+    if (s.eyeTracking && io.mode == TrackingMode::InsideOut) {
+        d << QStringLiteral("PIMAX_EYE_STEAMVR=1");
     }
     // the room anchor hook (Monado's offset file and head ring): the switch, or the room map (core/roommap_link.h).
     // With the room-map tool there, every inside-out session has the hook, so "Map the room" works in the session that

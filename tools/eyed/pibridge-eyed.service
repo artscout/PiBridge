@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# PiBridge eye tracker (port of omarchyvr-eyed.service): the eye chip's gaze in /dev/shm/omarchyvr-eye-gaze for
+# PiBridge eye tracker (port of omarchyvr-eyed.service): the eye chip's gaze in /dev/shm/pibridge-eye-gaze for
 # the SteamVR driver. Options come from ~/.config/pibridge/pibridge.conf (eye_start_list, eye_profile,
 # eye_tracking, eye_flip_x, follow): with the defaults it runs only while SteamVR's vrserver runs, with the Crystal
 # Super's start list and the user's eye profile from ~/.config/pibridge (or ~/.config/pimax-linux, ~/.config/omarchyvr), flip x on.

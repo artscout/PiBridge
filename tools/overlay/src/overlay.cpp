@@ -11,6 +11,8 @@
 #include <dlfcn.h>
 #include <openvr.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
@@ -129,38 +131,43 @@ void writeRequest(const std::string& line) {
     std::filesystem::rename(tmp, path, ec);
 }
 
-// The capture control file (pibridge_record_capture_control.h) that pibridge-record writes while capturing: `active`,
-// `view`, `fps`, `max_height`. A missing file reads as inactive with the defaults.
-struct ControlState {
-    bool active = false;
-    std::string view = "both";
-    int fps = 60;
-    int maxHeight = 1080;
-};
-ControlState readControl() {
-    ControlState s;
+// A pibridge-record process is actually running. The capture control file can be left `active 1` by a recorder that
+// died with SteamVR, so the overlay also checks the process: the button follows the app's real recording state instead
+// of a stale file (it no longer sticks on STOP after a crash + restart).
+bool recorderAlive() {
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator("/proc", ec)) {
+        const std::string name = e.path().filename().string();
+        if (name.empty() ||
+            !std::all_of(name.begin(), name.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; })) {
+            continue; // not a pid directory
+        }
+        std::ifstream f(e.path() / "comm");
+        std::string comm;
+        if (std::getline(f, comm) && comm == "pibridge-record") { // comm is 15 chars, so the mirror counts too
+            return true;
+        }
+    }
+    return false;
+}
+
+// True while a recording is really running: the capture control file (pibridge_record_capture_control.h) says active
+// AND a pibridge-record process is alive. A missing file, `active 0`, or a dead recorder all read as not recording.
+bool recordingActive() {
     std::ifstream f(reclayer::captureControlPath());
     std::string line;
+    bool active = false;
     while (std::getline(f, line)) {
         std::istringstream is(line);
         std::string key;
-        if (!(is >> key)) {
-            continue;
-        }
-        if (key == "active") {
+        if ((is >> key) && key == "active") {
             int v = 0;
             if (is >> v) {
-                s.active = v != 0;
+                active = v != 0;
             }
-        } else if (key == "view") {
-            is >> s.view;
-        } else if (key == "fps") {
-            is >> s.fps;
-        } else if (key == "max_height") {
-            is >> s.maxHeight;
         }
     }
-    return s;
+    return active && recorderAlive();
 }
 
 // The small panel: a dashboard overlay with the RECORDING rows and the ROOM buttons, uploaded ONCE and re-uploaded only
@@ -206,10 +213,6 @@ public:
             case vr::VREvent_MouseButtonUp:
                 if (e.data.mouse.button == vr::VRMouseButton_Left) {
                     const Hit h = hitTest(e.data.mouse.x, e.data.mouse.y);
-                    if (h.kind == Hit::Kind::Seg) {
-                        setSelection(h); // instant feedback; the app applies the request below
-                        redraw();
-                    }
                     const std::string req = requestFor(h, recording_);
                     if (!req.empty()) {
                         writeRequest(req);
@@ -235,33 +238,17 @@ public:
 
 private:
     void redraw() {
-        rgba_ = drawPanel(sel_, recording_, hover_);
+        rgba_ = drawPanel(recording_, hover_);
         ov_->SetOverlayRaw(main_, rgba_.data(), kPanelW, kPanelH, 4);
     }
 
-    // A segment click sets the local selection so the lit cell follows the laser at once; while recording, syncState()
-    // keeps the panel in step with the app's live values.
-    void setSelection(Hit h) {
-        switch (static_cast<Control>(h.control)) {
-        case Control::View: sel_.view = h.cell; break;
-        case Control::Fps: sel_.fps = h.cell; break;
-        case Control::Size: sel_.size = h.cell; break;
-        }
-    }
-
-    // Read the control file; update `recording_`, and (while recording) the selection from the app's live values.
-    // Returns true when anything changed (so the caller redraws).
+    // Follow the app's real recording state (a live pibridge-record + an active control file). Returns true when it
+    // changed (so the caller redraws): the button flips to STOP when a recording starts and back to START when it ends,
+    // including when a recording ends by a crash rather than a clean stop.
     bool syncState() {
-        const ControlState cs = readControl();
-        bool changed = cs.active != recording_;
-        recording_ = cs.active;
-        if (cs.active) {
-            const Selection s = selectionFrom(cs.view, cs.fps, cs.maxHeight);
-            if (!(s == sel_)) {
-                sel_ = s;
-                changed = true;
-            }
-        }
+        const bool active = recordingActive();
+        const bool changed = active != recording_;
+        recording_ = active;
         return changed;
     }
 
@@ -270,7 +257,6 @@ private:
     vr::VROverlayHandle_t main_ = vr::k_ulOverlayHandleInvalid;
     vr::VROverlayHandle_t thumb_ = vr::k_ulOverlayHandleInvalid;
     Hit hover_;
-    Selection sel_;          // the recording selection the panel shows (local; follows the control file while recording)
     bool recording_ = false; // last-seen capture state, so the record button shows START or STOP
     std::vector<std::uint8_t> rgba_;
     std::string err_;

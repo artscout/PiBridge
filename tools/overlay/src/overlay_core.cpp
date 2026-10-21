@@ -14,39 +14,24 @@ struct Rect {
     bool has(std::uint32_t x, std::uint32_t y) const { return x >= x0 && x < x1 && y >= y0 && y < y1; }
 };
 
-// Layout, fixed for kPanelW x kPanelH. A RECORDING section (a header, three segmented rows of a left label and three
-// cells) and a ROOM section (a header and two wide buttons), stacked with margins.
-constexpr std::uint32_t kLabelX0 = 24, kLabelX1 = 150;
-constexpr std::uint32_t kC0X0 = 160, kC0X1 = 266;
-constexpr std::uint32_t kC1X0 = 274, kC1X1 = 380;
-constexpr std::uint32_t kC2X0 = 388, kC2X1 = 494;
+// Layout, fixed for kPanelW x kPanelH. One RECORDING button and a ROOM section (a header and two wide buttons),
+// stacked with margins.
 constexpr std::uint32_t kWideX0 = 24, kWideX1 = kPanelW - 24;
 
 constexpr Rect kRecHeader{kWideX0, 16, kWideX1, 46};
-// rows: View 56..110, Fps 118..172, Size 180..234
-constexpr std::array<Rect, 3> kLabels{{{kLabelX0, 56, kLabelX1, 110},
-                                       {kLabelX0, 118, kLabelX1, 172},
-                                       {kLabelX0, 180, kLabelX1, 234}}};
-constexpr std::array<std::array<Rect, 3>, 3> kCells{{
-    {{{kC0X0, 56, kC0X1, 110}, {kC1X0, 56, kC1X1, 110}, {kC2X0, 56, kC2X1, 110}}},
-    {{{kC0X0, 118, kC0X1, 172}, {kC1X0, 118, kC1X1, 172}, {kC2X0, 118, kC2X1, 172}}},
-    {{{kC0X0, 180, kC0X1, 234}, {kC1X0, 180, kC1X1, 234}, {kC2X0, 180, kC2X1, 234}}},
-}};
-constexpr Rect kRecordBtn{kWideX0, 250, kWideX1, 320};
-constexpr Rect kRoomHeader{kWideX0, 336, kWideX1, 366};
-constexpr Rect kRoomSetup{kWideX0, 372, kWideX1, 442};
-constexpr Rect kQuickRoomSetup{kWideX0, 450, kWideX1, 520};
+constexpr Rect kRecordBtn{kWideX0, 56, kWideX1, 126};
+constexpr Rect kRoomHeader{kWideX0, 150, kWideX1, 180};
+constexpr Rect kRoomSetup{kWideX0, 190, kWideX1, 260};
+constexpr Rect kQuickRoomSetup{kWideX0, 268, kWideX1, 338};
 
 struct Rgba {
     std::uint8_t r, g, b, a;
 };
 
 constexpr Rgba kBg{24, 26, 32, 255};        // the dark card
-constexpr Rgba kBtn{44, 48, 60, 255};       // a resting button / cell
-constexpr Rgba kBtnSel{70, 86, 120, 255};   // the chosen cell (lit, distinct from a hover)
-constexpr Rgba kBtnHot{58, 110, 196, 255};  // the hovered button / cell (accent)
+constexpr Rgba kBtn{44, 48, 60, 255};       // a resting button
+constexpr Rgba kBtnHot{58, 110, 196, 255};  // the hovered button (accent)
 constexpr Rgba kBorder{80, 86, 104, 255};   // a resting edge
-constexpr Rgba kBorderSel{110, 140, 200, 255};
 constexpr Rgba kBorderHot{150, 190, 255, 255};
 constexpr Rgba kText{236, 236, 242, 255};
 constexpr Rgba kHeader{150, 156, 174, 255}; // a dim section header
@@ -180,66 +165,16 @@ void drawButton(Canvas& cv, Rect r, const std::string& label, bool hot) {
     cv.text(r, label, 4, kText);
 }
 
-// A segmented row: a left label and three cells; `selected` is lit, the hovered cell (`hotCell`, -1 = none) accented.
-void drawSegRow(Canvas& cv, int control, const char* label, const std::array<const char*, 3>& cells, int selected,
-                int hotCell) {
-    cv.text(kLabels[static_cast<std::size_t>(control)], label, 3, kHeader);
-    for (int cell = 0; cell < 3; cell++) {
-        const Rect r = kCells[static_cast<std::size_t>(control)][static_cast<std::size_t>(cell)];
-        const bool hot = cell == hotCell;
-        const bool sel = cell == selected;
-        cv.fill(r, hot ? kBtnHot : (sel ? kBtnSel : kBtn));
-        cv.border(r, hot ? kBorderHot : (sel ? kBorderSel : kBorder), 2);
-        cv.text(r, cells[static_cast<std::size_t>(cell)], 3, kText);
-    }
-}
-
 } // namespace
-
-std::string segKey(int control) {
-    switch (static_cast<Control>(control)) {
-    case Control::View: return "view";
-    case Control::Fps: return "fps";
-    case Control::Size: return "max_height";
-    }
-    return {};
-}
-
-std::string segValue(int control, int cell) {
-    if (cell < 0 || cell > 2) {
-        return {};
-    }
-    switch (static_cast<Control>(control)) {
-    case Control::View: return std::array<const char*, 3>{"left", "right", "both"}[static_cast<std::size_t>(cell)];
-    case Control::Fps: return std::array<const char*, 3>{"30", "60", "72"}[static_cast<std::size_t>(cell)];
-    case Control::Size: return std::array<const char*, 3>{"720", "1080", "0"}[static_cast<std::size_t>(cell)];
-    }
-    return {};
-}
 
 std::string requestFor(Hit h, bool recording) {
     switch (h.kind) {
     case Hit::Kind::Room: return kRequestRoomSetup;
     case Hit::Kind::QuickRoom: return kRequestQuickRoomSetup;
     case Hit::Kind::Record: return recording ? kRequestRecordStop : kRequestRecordStart;
-    case Hit::Kind::Seg: {
-        const std::string value = segValue(h.control, h.cell);
-        if (value.empty()) {
-            return {};
-        }
-        return std::string(kRequestRecordSetPrefix) + segKey(h.control) + " " + value;
-    }
     case Hit::Kind::None: break;
     }
     return {};
-}
-
-Selection selectionFrom(const std::string& view, int fps, int maxHeight) {
-    Selection s;
-    s.view = view == "left" ? 0 : (view == "right" ? 1 : 2);
-    s.fps = fps == 30 ? 0 : (fps == 72 ? 2 : 1);
-    s.size = maxHeight == 720 ? 0 : (maxHeight == 0 ? 2 : 1);
-    return s;
 }
 
 Hit hitTest(float x, float y) {
@@ -248,13 +183,6 @@ Hit hitTest(float x, float y) {
     }
     const auto px = static_cast<std::uint32_t>(x);
     const auto py = kPanelH - 1 - static_cast<std::uint32_t>(y); // GL bottom-left -> top-first row
-    for (int control = 0; control < 3; control++) {
-        for (int cell = 0; cell < 3; cell++) {
-            if (kCells[static_cast<std::size_t>(control)][static_cast<std::size_t>(cell)].has(px, py)) {
-                return {Hit::Kind::Seg, control, cell};
-            }
-        }
-    }
     if (kRecordBtn.has(px, py)) {
         return {Hit::Kind::Record};
     }
@@ -267,16 +195,10 @@ Hit hitTest(float x, float y) {
     return {};
 }
 
-std::vector<std::uint8_t> drawPanel(const Selection& sel, bool recording, Hit hovered) {
-    const auto hotCell = [&hovered](int control) {
-        return (hovered.kind == Hit::Kind::Seg && hovered.control == control) ? hovered.cell : -1;
-    };
+std::vector<std::uint8_t> drawPanel(bool recording, Hit hovered) {
     Canvas cv;
     cv.fill({0, 0, kPanelW, kPanelH}, kBg);
     cv.text(kRecHeader, "RECORDING", 3, kHeader);
-    drawSegRow(cv, static_cast<int>(Control::View), "VIEW", {"L", "R", "BOTH"}, sel.view, hotCell(0));
-    drawSegRow(cv, static_cast<int>(Control::Fps), "FPS", {"30", "60", "72"}, sel.fps, hotCell(1));
-    drawSegRow(cv, static_cast<int>(Control::Size), "SIZE", {"720", "1080", "FULL"}, sel.size, hotCell(2));
     drawButton(cv, kRecordBtn, recording ? "STOP RECORDING" : "START RECORDING", hovered.kind == Hit::Kind::Record);
     cv.text(kRoomHeader, "ROOM", 3, kHeader);
     drawButton(cv, kRoomSetup, "ROOM SETUP", hovered.kind == Hit::Kind::Room);

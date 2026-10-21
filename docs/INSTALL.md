@@ -156,7 +156,7 @@ Who does what in this setup:
 | Head and controller tracking | SteamVR's own Lighthouse driver (the faceplate) |
 | The headset display in SteamVR (render size, lens distortion, IPD) | CustomHeadsetOpenVR (sboys3) with our patches (5.3) |
 | Wake, keepalive, panel on, sound switch | `pibridge-keepalived` |
-| Eye tracking for OpenXR apps (`XR_EXT_eye_gaze_interaction`) | `pibridge-eyed` -> `/dev/shm/omarchyvr-eye-gaze` -> CustomHeadsetOpenVR |
+| Eye tracking for OpenXR apps (`XR_EXT_eye_gaze_interaction`) | `pibridge-eyed` -> `/dev/shm/pibridge-eye-gaze` -> CustomHeadsetOpenVR |
 | 7104x3840 at 90 Hz over DSC on RTX 50 | driver 615.71.09+ works as-is; only older branches (595.x) need the NVIDIA patch + EDID override (5.2) |
 | Headset speakers and microphone | USB audio, with the WirePlumber rule (5.4) |
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // pibridge-eyed's state machine with FakeChip trackers (libpibridge-eye's in-process chip streaming eyemath-encoded gaze), a
 // recording headset command sink, a fake process table, a temporary gaze file and temporary config and runtime dirs.
-// Nothing opens a device, reads the real /proc for the followed process, or touches /dev/shm/omarchyvr-eye-gaze.
+// Nothing opens a device, reads the real /proc for the followed process, or touches /dev/shm/pibridge-eye-gaze.
 #include "eyed.h"
 
 #include "pibridge_status.h"

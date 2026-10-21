@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The app's read-only reader of the gaze shared memory /dev/shm/omarchyvr-eye-gaze (136 bytes, magic "OVEG",
+// The app's read-only reader of the gaze shared memory /dev/shm/pibridge-eye-gaze (136 bytes, magic "OVEG",
 // seqlock; layout of omarchyvr pimax-eye/src/shm.rs and linux/crystal-super/omarchyvr_eye_gaze.h). The app only
 // reads it for the live dot on the dashboard; it never creates or writes it.
 #pragma once
@@ -10,7 +10,7 @@
 
 namespace pibridge::app {
 
-inline constexpr const char* kGazeShmPath = "/dev/shm/omarchyvr-eye-gaze";
+inline constexpr const char* kGazeShmPath = "/dev/shm/pibridge-eye-gaze";
 inline constexpr uint32_t kGazeMagic = 0x4745564fu; // "OVEG" little endian
 inline constexpr uint32_t kGazeVersion = 1;
 inline constexpr size_t kGazeSize = 136;

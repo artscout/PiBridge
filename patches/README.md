@@ -24,7 +24,7 @@ lighthouse driver does the tracking.
 | File | What it does |
 |---|---|
 | `chovr-linux-direct-usb.patch` | Without the Pimax runtime (Linux), connect to the headset over USB before deciding on the Lighthouse shim |
-| `chovr-linux-eye-gaze.patch` | Read the gaze from shared memory (`/dev/shm/omarchyvr-eye-gaze`, written by `pibridge-eyed`; `CUSTOM_HEADSET_EYE_GAZE_SHM` overrides the path) and serve SteamVR's eye tracking: OpenXR apps get `XR_EXT_eye_gaze_interaction` |
+| `chovr-linux-eye-gaze.patch` | Read the gaze from shared memory and serve SteamVR's eye tracking: OpenXR apps get `XR_EXT_eye_gaze_interaction`. The gaze file is now `/dev/shm/pibridge-eye-gaze` (written by `pibridge-eyed`); this unmodified patch still reads the old name `/dev/shm/omarchyvr-eye-gaze`, which `pibridge-eyed` symlinks to the new file for binary compatibility (or set `CUSTOM_HEADSET_EYE_GAZE_SHM`) |
 | `omarchyvr_eye_gaze.h` | The layout of that file (136 bytes, magic "OVEG", seqlock) for C and C++ readers. It keeps its omarchyvr name: the driver patch, PiBridge's docs and other readers know it by that name, and PiBridge writes the file byte for byte as omarchyvr does |
 
 Apply on upstream commit `4f25826` ("Filter cropping and 100% resolution for other headsets"), direct-usb first:

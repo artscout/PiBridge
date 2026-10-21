@@ -54,7 +54,7 @@ Each part has `CMakeLists.txt` (the root adds it when present), `include/` or `s
   never enters the repo; tests use the public synthetic data (`pimax-eye/data/base-frames.txt` is public: copy it).
 
 ## Files and formats (keep compatible with what is deployed today)
-- Gaze shared memory: `/dev/shm/omarchyvr-eye-gaze`, 136 bytes, magic "OVEG", seqlock, layout of
+- Gaze shared memory: `/dev/shm/pibridge-eye-gaze`, 136 bytes, magic "OVEG", seqlock, layout of
   `pimax-eye/src/shm.rs` and `~/gamedev/omarchyvr/linux/crystal-super/omarchyvr_eye_gaze.h` (CustomHeadsetOpenVR
   reads it). Byte-identical.
 - Frame lists (`eye-start-*.txt`), the eye profile body (`eye-profile-*.bin`), `eye-calibration.toml`: same formats

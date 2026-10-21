@@ -123,7 +123,10 @@ Config Config::from_env(const LogFn& log_in) {
     c.conv = pibridge::eyemath::FrameConv::from_env();
     c.with_cal = env_on("EYE_CAL");
     c.skip_auth = env_on("EYE_SKIP_AUTH");
-    c.usb_reset = !env_off("EYE_USB_RESET");
+    // USB reset of the Tobii chip (USBDEVFS_RESET, "re-enumerates like a replug") is OFF by default: on the Crystal
+    // Super the eye chip (2104:0561) shares a USB hub with the headset's wake HID (34a4:0044); resetting it glitches
+    // the hub and drops the headset (HMD not found). Opt in with EYE_USB_RESET=1 on a setup where the chip needs it.
+    c.usb_reset = env_on("EYE_USB_RESET");
     c.power_on = !env_off("EYE_POWER_ON");
     if (const auto v = env("EYE_LATENCY_MS")) {
         const auto t = trim(*v);

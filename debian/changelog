@@ -1,3 +1,18 @@
+pibridge (1.0.2) unstable; urgency=medium
+
+  * Eye tracking now starts under SteamVR + Monado (inside-out / SLAM): the
+    Play start no longer waits for pibridge-eyed to "pause" (it keeps the eye
+    chip to feed the gaze shared memory), so Start VR with eye tracking on
+    comes up instead of timing out.
+  * Video recording captures the submitted per-eye image the headset shows,
+    not the game's intermediate multiview passes: fixes mostly-black / flashing
+    recordings in multi-pass games (e.g. Falcon BMS). Native and Proton games.
+  * In-VR overlay: one START/STOP RECORDING button that follows the app's real
+    recording state (no longer stuck "recording" after a crash); the recording
+    settings (view / fps / size) live only in the app's Recording page.
+
+ -- Albert Valiev <artscout@gmail.com>  Wed, 21 Oct 2026 17:30:00 +0200
+
 pibridge (1.0.1) unstable; urgency=medium
 
   * Initial Debian packaging: single .deb, prefix /usr.

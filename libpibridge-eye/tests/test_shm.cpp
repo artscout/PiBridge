@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Ported from omarchyvr pimax-eye/src/shm.rs tests (MIT OR Apache-2.0). Temp files only: the live daemon's
-// /dev/shm/omarchyvr-eye-gaze is never touched.
+// /dev/shm/pibridge-eye-gaze is never touched.
 #include "pibridge/eye/shm.h"
 
 #include "pibridge_test.h"
@@ -158,7 +158,7 @@ TEST(a_negative_or_nan_ipd_is_published_as_zero) {
 }
 
 TEST(the_default_path_is_the_deployed_one) {
-    CHECK(default_path() == fs::path("/dev/shm/omarchyvr-eye-gaze"));
+    CHECK(default_path() == fs::path("/dev/shm/pibridge-eye-gaze"));
 }
 
 PIBRIDGE_TEST_MAIN()

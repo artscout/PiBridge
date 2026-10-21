@@ -36,45 +36,30 @@ int runSelfTest() {
         bad++;
     };
     using overlay::Hit;
-    const overlay::Selection sel;
     // the panel draws at its fixed size (a few hundred px, not 2048)
-    if (overlay::drawPanel(sel, false, Hit{}).size() != static_cast<std::size_t>(overlay::kPanelW) * overlay::kPanelH * 4U) {
+    if (overlay::drawPanel(false, Hit{}).size() != static_cast<std::size_t>(overlay::kPanelW) * overlay::kPanelH * 4U) {
         fail("drawPanel size wrong");
     }
     if (!(overlay::kPanelW <= 1024 && overlay::kPanelH <= 1024)) {
         fail("panel is too big (must be small, not a full window)");
     }
-    // hover lights a target; a different selection and the recording state each change the pixels
-    if (overlay::drawPanel(sel, false, Hit{Hit::Kind::Room}) == overlay::drawPanel(sel, false, Hit{})) {
+    // hover lights a target; the recording state (START vs STOP) changes the pixels
+    if (overlay::drawPanel(false, Hit{Hit::Kind::Room}) == overlay::drawPanel(false, Hit{})) {
         fail("hover does not change the panel");
     }
-    overlay::Selection other = sel;
-    other.view = 0; // not the default BOTH
-    if (overlay::drawPanel(other, false, Hit{}) == overlay::drawPanel(sel, false, Hit{})) {
-        fail("selection does not change the panel");
-    }
-    if (overlay::drawPanel(sel, true, Hit{}) == overlay::drawPanel(sel, false, Hit{})) {
+    if (overlay::drawPanel(true, Hit{}) == overlay::drawPanel(false, Hit{})) {
         fail("recording label does not change the panel");
     }
     // the laser hit test: GL space is bottom-left, so a point high on the screen (large y) hits the top row. Centres of
-    // the segment cells (row y, cell x) and of the wide buttons.
+    // the three wide buttons.
     const float ph = static_cast<float>(overlay::kPanelH);
-    if (!(overlay::hitTest(213.0F, ph - 83.0F) == Hit{Hit::Kind::Seg, 0, 0})) {
-        fail("hitTest VIEW cell 0 wrong");
-    }
-    if (!(overlay::hitTest(327.0F, ph - 145.0F) == Hit{Hit::Kind::Seg, 1, 1})) {
-        fail("hitTest FPS cell 1 wrong");
-    }
-    if (!(overlay::hitTest(441.0F, ph - 207.0F) == Hit{Hit::Kind::Seg, 2, 2})) {
-        fail("hitTest SIZE cell 2 wrong");
-    }
-    if (!(overlay::hitTest(256.0F, ph - 285.0F) == Hit{Hit::Kind::Record})) {
+    if (!(overlay::hitTest(260.0F, ph - 92.0F) == Hit{Hit::Kind::Record})) {
         fail("hitTest RECORD wrong");
     }
-    if (!(overlay::hitTest(256.0F, ph - 407.0F) == Hit{Hit::Kind::Room})) {
+    if (!(overlay::hitTest(260.0F, ph - 226.0F) == Hit{Hit::Kind::Room})) {
         fail("hitTest ROOM SETUP wrong");
     }
-    if (!(overlay::hitTest(256.0F, ph - 485.0F) == Hit{Hit::Kind::QuickRoom})) {
+    if (!(overlay::hitTest(260.0F, ph - 304.0F) == Hit{Hit::Kind::QuickRoom})) {
         fail("hitTest QUICK ROOM SETUP wrong");
     }
     if (!(overlay::hitTest(5.0F, 5.0F) == Hit{})) {
@@ -84,9 +69,6 @@ int runSelfTest() {
         overlay::requestFor(Hit{Hit::Kind::QuickRoom}, false) != "quick-room-setup" ||
         overlay::requestFor(Hit{Hit::Kind::Record}, false) != "record-start" ||
         overlay::requestFor(Hit{Hit::Kind::Record}, true) != "record-stop" ||
-        overlay::requestFor(Hit{Hit::Kind::Seg, 0, 2}, false) != "record-set view both" ||
-        overlay::requestFor(Hit{Hit::Kind::Seg, 1, 0}, false) != "record-set fps 30" ||
-        overlay::requestFor(Hit{Hit::Kind::Seg, 2, 2}, false) != "record-set max_height 0" ||
         !overlay::requestFor(Hit{}, false).empty()) {
         fail("requestFor wrong");
     }

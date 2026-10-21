@@ -81,16 +81,19 @@ qint64 bootTicksNow(const QString& procRoot = QStringLiteral("/proc"), long tick
 
 // ---------------------------------------------------------------- the daemons let go of the headset
 
-// $XDG_RUNTIME_DIR/pibridge/inside-out.active (common/pibridge_pause.h): while it names a running owner, pibridge-keepalived and
-// pibridge-eyed close the headset and report "paused". Every inside-out start writes it first and waits until both
-// daemons say so (or do not run); every end removes it.
+// $XDG_RUNTIME_DIR/pibridge/inside-out.active (common/pibridge_pause.h): while it names a running owner, pibridge-keepalived
+// releases the headset's HID (wake/keepalive) and reports "paused" so Monado's Pimax driver can take it. pibridge-eyed holds
+// the Tobii eye chip (a different USB device), not the headset display; when eye tracking is on it keeps the chip and feeds the
+// gaze shared memory to the driver (it does NOT pause), so the start must not wait for it. Every inside-out start writes the
+// marker first and waits for keepalived to say so (or not run); every end removes it.
 QString insideOutMarkerPath();
 QString insideOutMarkerText(qint64 owner, IoVariant v);
 // The owner and variant of a marker text (nullopt: not a marker).
 std::optional<std::pair<qint64, QString>> parseInsideOutMarker(const QByteArray& text);
 // Which daemons still hold the headset, in plain words ("the headset service (pibridge-keepalived)"): a status file
-// that is there, written by a running pid, and not "paused". A missing file or a dead writer counts as let go.
-QStringList daemonsHolding(const QByteArray& keepaliveJson, const QByteArray& eyedJson,
+// that is there, written by a running pid, and not "paused". A missing file or a dead writer counts as let go. When
+// eyeTrackerKeepsChip is true (eye tracking is on), pibridge-eyed is meant to keep the eye chip and is never counted.
+QStringList daemonsHolding(const QByteArray& keepaliveJson, const QByteArray& eyedJson, bool eyeTrackerKeepsChip,
                            const std::function<bool(qint64)>& alive);
 inline constexpr qint64 kDaemonReleaseMs = 15000; // keepalived first wakes a sleeping headset (about 5 s)
 
@@ -132,7 +135,7 @@ public:
         std::function<qint64()> unixNow;
         // both variants: the pause marker (on: write ours; off: remove ours or a stale one) and the daemons' state
         std::function<bool(bool on)> marker;
-        std::function<QStringList()> daemonsHolding;
+        std::function<QStringList(bool eyeTrackerKeepsChip)> daemonsHolding;
     };
     explicit IoSessionControl(Deps d, QObject* parent = nullptr);
     ~IoSessionControl() override;

@@ -133,7 +133,7 @@ std::optional<std::pair<qint64, QString>> parseInsideOutMarker(const QByteArray&
     return std::pair{owner, variant};
 }
 
-QStringList daemonsHolding(const QByteArray& keepaliveJson, const QByteArray& eyedJson,
+QStringList daemonsHolding(const QByteArray& keepaliveJson, const QByteArray& eyedJson, bool eyeTrackerKeepsChip,
                            const std::function<bool(qint64)>& alive) {
     QStringList out;
     const auto holds = [&alive](const QByteArray& json) {
@@ -150,7 +150,9 @@ QStringList daemonsHolding(const QByteArray& keepaliveJson, const QByteArray& ey
     if (holds(keepaliveJson)) {
         out << QStringLiteral("the headset service (pibridge-keepalived)");
     }
-    if (holds(eyedJson)) {
+    // pibridge-eyed holds the Tobii eye chip, not the headset display; when eye tracking is on it keeps the chip and
+    // feeds the gaze shared memory to Monado (it does not pause), so it never blocks the start.
+    if (!eyeTrackerKeepsChip && holds(eyedJson)) {
         out << QStringLiteral("the eye tracker (pibridge-eyed)");
     }
     return out;
@@ -272,12 +274,13 @@ IoSessionControl::Deps IoSessionControl::realDeps(IoVariant v, Conf& conf, IoLin
         }
         return true;
     };
-    d.daemonsHolding = [alive] {
+    d.daemonsHolding = [alive](bool eyeTrackerKeepsChip) {
         const auto read = [](const QString& n) {
             QFile f(statusDir() + QLatin1Char('/') + n);
             return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
         };
-        return daemonsHolding(read(QStringLiteral("keepalived.json")), read(QStringLiteral("eyed.json")), alive);
+        return daemonsHolding(read(QStringLiteral("keepalived.json")), read(QStringLiteral("eyed.json")),
+                              eyeTrackerKeepsChip, alive);
     };
     if (v == IoVariant::SteamVr) {
         const auto files = [] {
@@ -385,7 +388,7 @@ IoSessionControl::Deps IoSessionControl::fakeDeps(IoVariant v, Conf& conf, IoLin
     d.roomStatus = [] { return QByteArray(); };
     d.unixNow = [] { return qint64(1760000000); };
     d.marker = [](bool) { return true; };          // nothing is written in fake mode
-    d.daemonsHolding = [] { return QStringList{}; };
+    d.daemonsHolding = [](bool) { return QStringList{}; };
     return d;
 }
 
@@ -556,7 +559,7 @@ bool IoSessionControl::start() {
         emit changed();
         return false;
     }
-    if (d_.daemonsHolding && !d_.daemonsHolding().isEmpty()) {
+    if (d_.daemonsHolding && !d_.daemonsHolding(setup_.eyeTracking).isEmpty()) {
         waitingRelease_ = true;
         releaseDeadline_ = d_.nowMs() + kDaemonReleaseMs;
         if (d_.autoTick) {
@@ -695,7 +698,7 @@ void IoSessionControl::tickSteamVr(qint64 now) {
 
 void IoSessionControl::tick() {
     if (waitingRelease_) {
-        const QStringList holding = d_.daemonsHolding ? d_.daemonsHolding() : QStringList{};
+        const QStringList holding = d_.daemonsHolding ? d_.daemonsHolding(setup_.eyeTracking) : QStringList{};
         if (holding.isEmpty()) {
             waitingRelease_ = false;
             continueStart();

@@ -74,7 +74,7 @@ std::filesystem::path settings_path_of(const std::vector<std::string>& args) {
 std::string usage() {
     return "usage: pibridge-eyed [--frames FILE] [--profile FILE | --no-profile] [--shm PATH] [--follow PROCESS | "
            "--no-follow] [--settings FILE]\n"
-           "Runs the eye tracker and publishes the gaze in shared memory (default /dev/shm/omarchyvr-eye-gaze).\n"
+           "Runs the eye tracker and publishes the gaze in shared memory (default /dev/shm/pibridge-eye-gaze).\n"
            "Defaults come from ~/.config/pibridge/pibridge.conf (eye_start_list, eye_profile, eye_tracking,\n"
            "eye_flip_x, follow); the start list and profile default to eye-start-crystal-super.txt and\n"
            "eye-profile-crystal-super.bin in ~/.config/pibridge (or ~/.config/pimax-linux, then\n"

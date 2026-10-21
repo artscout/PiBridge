@@ -4,8 +4,6 @@
 // status file removed); SIGHUP re-reads pibridge.conf (the command line still overrides it).
 #include "eyed.h"
 
-#include "pibridge_pause.h"
-
 #include "pibridge/hmd/sys.h"
 
 #include <array>
@@ -59,16 +57,14 @@ int main(int argc, char** argv) {
 
     eyed::Daemon d(*opts, eyed::Deps{});
     warn_settings(settings, settings_path);
-    // an inside-out session owns the eye chip (common/pibridge_pause.h): start paused, so the chip is never opened
-    if (pibridge::pause::active_marker()) {
-        d.set_paused(true, eyed::Clock::now());
-    }
+    // eyed keeps running during an inside-out session and does NOT pause on the inside-out marker: the Tobii eye chip
+    // (2104:0561) is independent of the HMD HID and the SLAM cameras, and Monado's SteamVR driver reads eyed's gaze shm
+    // (it no longer opens the chip itself). So eyed owns the chip and writes the shm the same way as in Lighthouse.
     if (auto r = d.start(eyed::Clock::now()); !r) {
         std::fprintf(stderr, "pibridge-eyed: %s\n", r.error().c_str());
         return 1;
     }
     bool run = true;
-    auto last_marker = eyed::Clock::time_point{};
     while (run) {
         // the Rust loop polls every 2 ms: a new sample reaches the gaze file within that
         std::array<pollfd, 1> pf{pollin(sfd.get())};
@@ -90,13 +86,7 @@ int main(int argc, char** argv) {
             }
         }
         if (run) {
-            const auto now = eyed::Clock::now();
-            // the marker is checked twice a second (the loop runs every 2 ms)
-            if (now - last_marker >= std::chrono::milliseconds(500)) {
-                last_marker = now;
-                d.set_paused(pibridge::pause::active_marker().has_value(), now);
-            }
-            d.tick(now);
+            d.tick(eyed::Clock::now());
         }
     }
     d.stop();

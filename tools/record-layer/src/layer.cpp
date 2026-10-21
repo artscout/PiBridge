@@ -30,6 +30,7 @@
 #include "pibridge_record_capture_ipc.h"
 
 #include <atomic>
+#include <csignal>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -173,31 +174,51 @@ class CaptureServer {
 public:
     void start() {
         std::lock_guard lock(mtx_);
-        if (listen_fd_ >= 0 || started_) {
-            return;
+        bindLocked();
+    }
+
+    // Decide whether THIS process should be the capturer, and if so own the socket. Cross-process arbitration via the
+    // owner marker file (captureControlPath()+".owner" = "pid preferred"): the eye is rendered in the APP process (a
+    // viewMask target -> preferred), not always the compositor. A preferred process preempts a non-preferred owner; a
+    // non-preferred process (the compositor external-image fallback) serves only when no live owner exists. Best-effort
+    // and race-tolerant: a brief double-serve is acceptable, the app is never blocked. Returns true = capture now.
+    bool arbitrate(bool preferred) {
+        const long me = ::getpid();
+        const std::string op = ownerPath();
+        long ownerPid = 0;
+        int ownerPref = 0;
+        {
+            std::ifstream f(op);
+            if (f) {
+                f >> ownerPid >> ownerPref;
+            }
         }
-        started_ = true;
-        const std::string path = captureSocketPath();
+        const bool ownerLive = ownerPid > 0 && (::kill(static_cast<pid_t>(ownerPid), 0) == 0 || errno == EPERM);
+        bool claim = false;
+        if (ownerPid == me) {
+            claim = true; // already ours
+        } else if (!ownerLive) {
+            claim = true; // free or dead owner
+        } else if (preferred && ownerPref == 0) {
+            claim = true; // a viewMask capturer preempts a non-preferred (compositor-fallback) owner
+        }
+        if (!claim) {
+            std::lock_guard lock(mtx_);
+            owner_ = false;
+            return false;
+        }
         std::error_code ec;
-        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
-        ::unlink(path.c_str());
-        const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-        if (fd < 0) {
-            logf("[vrcompositor] capture server: socket() failed: %s", std::strerror(errno));
-            return;
+        std::filesystem::create_directories(std::filesystem::path(op).parent_path(), ec);
+        if (FILE* f = std::fopen(op.c_str(), "w"); f != nullptr) {
+            std::fprintf(f, "%ld %d\n", me, preferred ? 1 : 0);
+            std::fclose(f);
         }
-        sockaddr_un addr{};
-        addr.sun_family = AF_UNIX;
-        std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
-        if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || ::listen(fd, 4) != 0) {
-            logf("[vrcompositor] capture server: bind/listen %s failed: %s", path.c_str(), std::strerror(errno));
-            ::close(fd);
-            return;
+        std::lock_guard lock(mtx_);
+        owner_ = true;
+        if (listen_fd_ < 0) {
+            bindLocked(); // take over the socket path (unlink + bind)
         }
-        listen_fd_ = fd;
-        quit_.store(false);
-        thread_ = std::thread([this] { loop(); });
-        logf("[vrcompositor] capture server listening at %s", path.c_str());
+        return listen_fd_ >= 0;
     }
 
     ~CaptureServer() { shutdown(); }
@@ -219,6 +240,20 @@ public:
         if (image_fd_ >= 0) {
             ::close(image_fd_);
             image_fd_ = -1;
+        }
+        if (owner_) { // release ownership so the next capturer can take over cleanly
+            long ownerPid = 0;
+            int pref = 0;
+            {
+                std::ifstream f(ownerPath());
+                if (f) {
+                    f >> ownerPid >> pref;
+                }
+            }
+            if (ownerPid == ::getpid()) {
+                ::unlink(ownerPath().c_str());
+            }
+            owner_ = false;
         }
     }
 
@@ -282,6 +317,40 @@ private:
         int fd = -1;
         bool ready = true; // ready to receive the next frame (no outstanding unacked frame)
     };
+
+    static std::string ownerPath() { return captureControlPath() + ".owner"; }
+
+    // (re)bind the AF_UNIX socket at the fixed path, stealing it from a previous owner (unlink + bind), and start the
+    // poll loop if it is not already running. Must hold mtx_. Returns with listen_fd_ >= 0 on success.
+    void bindLocked() {
+        const std::string path = captureSocketPath();
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+        ::unlink(path.c_str());
+        const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        if (fd < 0) {
+            logf("[%s] capture server: socket() failed: %s", proc_name(), std::strerror(errno));
+            return;
+        }
+        sockaddr_un addr{};
+        addr.sun_family = AF_UNIX;
+        std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+        if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || ::listen(fd, 4) != 0) {
+            logf("[%s] capture server: bind/listen %s failed: %s", proc_name(), path.c_str(), std::strerror(errno));
+            ::close(fd);
+            return;
+        }
+        if (listen_fd_ >= 0) {
+            ::close(listen_fd_); // replace an old bind (loop picks up the new fd under mtx_)
+        }
+        listen_fd_ = fd;
+        started_ = true;
+        if (!thread_.joinable()) {
+            quit_.store(false);
+            thread_ = std::thread([this] { loop(); });
+        }
+        logf("[%s] capture server listening at %s", proc_name(), path.c_str());
+    }
 
     void sendHello(Client& c) {
         // sendmsg with the fd as SCM_RIGHTS ancillary data.
@@ -362,6 +431,7 @@ private:
     std::mutex mtx_;
     std::atomic<bool> quit_{false};
     bool started_ = false;
+    bool owner_ = false; // this process currently owns the capture socket (via the owner marker file)
     int listen_fd_ = -1;
     std::thread thread_;
     std::vector<Client> clients_;
@@ -486,6 +556,48 @@ struct DeviceData {
     uint32_t primaryFamily = 0;                                       // queueCreateInfos[0], a fallback
     std::tuple<uint32_t, uint32_t, uint32_t, int> lastPicked{0, 0, 0, 0}; // last capture target logged (avoid spam)
     std::shared_ptr<CaptureCtx> cap;
+
+    // --- multiview probe (LOG ONLY): learn which colour attachments are drawn with a viewMask != 0 (both eyes), so
+    // we can later catch the eye buffer reliably regardless of array vs per-eye swapchains. Maps grow for the device's
+    // lifetime (cleared with the DeviceData on vkDestroyDevice); handle reuse within a session may add a stray line.
+    PFN_vkCreateImageView createImageView = nullptr;
+    PFN_vkCreateRenderPass createRenderPass = nullptr;       // core v1 (legacy multiview via VkRenderPassMultiviewCreateInfo)
+    PFN_vkCreateRenderPass2 createRenderPass2 = nullptr;     // core or KHR alias
+    PFN_vkCreateFramebuffer createFramebuffer = nullptr;
+    PFN_vkCmdBeginRenderPass cmdBeginRenderPass = nullptr;   // core v1
+    PFN_vkCmdBeginRenderPass2 cmdBeginRenderPass2 = nullptr; // core or KHR alias
+    PFN_vkCmdBeginRendering cmdBeginRendering = nullptr;     // core (1.3) or KHR alias
+    // the app's own copy/blit, hooked to learn which stereo image is the submitted eye (copied into an external image)
+    PFN_vkCmdCopyImage cmdCopyImage = nullptr;
+    PFN_vkCmdBlitImage appCmdBlitImage = nullptr;
+    PFN_vkCmdCopyImage2 cmdCopyImage2 = nullptr; // core 1.3 / KHR alias
+    PFN_vkCmdBlitImage2 cmdBlitImage2 = nullptr; // core 1.3 / KHR alias
+    std::unordered_map<VkImageView, VkImage> views;          // image view -> its image
+    std::unordered_map<VkRenderPass, uint32_t> rpViewMask;   // render pass -> OR of its subpass viewMasks
+    std::unordered_map<VkRenderPass, std::vector<VkImageLayout>> rpAttachFinal; // render pass -> per-attachment finalLayout
+    std::unordered_map<VkFramebuffer, std::vector<VkImageView>> fbViews; // framebuffer -> views (empty = imageless)
+    std::set<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, int, int>> mvLogged; // (viewMask,w,h,layers,fmt,ext) dedup
+
+    // Every colour 2D image (external OR internal), for the viewMask eye target: BMS renders both eyes with multiview
+    // into an INTERNAL image that never reaches the compositor, so it is absent from `images` (external only).
+    std::unordered_map<VkImage, SwapchainInfo> allImages;
+    // The authoritative capture target: the colour attachment drawn under a non-zero viewMask (both eyes). Set by the
+    // render-pass / dynamic-rendering begin hooks; captured in prlQueueSubmit when fresh. srcLayout = the attachment's
+    // finalLayout, so the capture blit transitions FROM the right layout (fixes the black capture).
+    struct EyeTarget {
+        VkImage img = VK_NULL_HANDLE;
+        SwapchainInfo info;
+        VkImageLayout srcLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        uint32_t viewMask = 0;
+        std::uint64_t ns = 0; // when last seen (freshness; stale target is ignored)
+    };
+    EyeTarget eyeTarget;
+    std::tuple<uint32_t, uint32_t, uint32_t, int> eyeLogged{0, 0, 0, 0};
+    // The finished stereo eye: the arrayLayers>=2 colour image the app copies/blits into an external (submitted) image.
+    // Once known, considerEye captures ONLY this image, so a game that draws several multiview passes (BMS: HDR,
+    // tonemap, final) no longer makes the target cycle (which gave mostly-black video). VK_NULL_HANDLE until seen.
+    VkImage copyEyeImg = VK_NULL_HANDLE;
+    std::uint64_t copyEyeNs = 0;
 };
 
 std::mutex g_mutex;
@@ -557,9 +669,8 @@ VKAPI_ATTR VkResult VKAPI_CALL prlCreateInstance(const VkInstanceCreateInfo* pCr
                           ? pCreateInfo->pApplicationInfo->pApplicationName
                           : "(unnamed)";
     logf("pibridge-record-layer (M2b capture) [%s]: vkCreateInstance, app \"%s\"", proc_name(), app);
-    if (in_compositor()) {
-        server().start(); // the capture server lives only in vrcompositor; a client may connect any time
-    }
+    // The capture server is started lazily by whichever process wins arbitration (the one rendering the viewMask eye,
+    // else the compositor fallback) — see CaptureServer::arbitrate in prlQueueSubmit.
     return r;
 }
 
@@ -599,12 +710,42 @@ VKAPI_ATTR VkResult VKAPI_CALL prlCreateDevice(VkPhysicalDevice physicalDevice, 
     d.getMemoryFd = reinterpret_cast<PFN_vkGetMemoryFdKHR>(load("vkGetMemoryFdKHR"));
     d.queueSubmit = reinterpret_cast<PFN_vkQueueSubmit>(load("vkQueueSubmit"));
     d.getDeviceQueue = reinterpret_cast<PFN_vkGetDeviceQueue>(load("vkGetDeviceQueue"));
+    // multiview probe entry points (log only); core name first, KHR alias as a fallback
+    d.createImageView = reinterpret_cast<PFN_vkCreateImageView>(load("vkCreateImageView"));
+    d.createFramebuffer = reinterpret_cast<PFN_vkCreateFramebuffer>(load("vkCreateFramebuffer"));
+    d.createRenderPass = reinterpret_cast<PFN_vkCreateRenderPass>(load("vkCreateRenderPass"));
+    d.cmdBeginRenderPass = reinterpret_cast<PFN_vkCmdBeginRenderPass>(load("vkCmdBeginRenderPass"));
+    d.createRenderPass2 = reinterpret_cast<PFN_vkCreateRenderPass2>(load("vkCreateRenderPass2"));
+    if (d.createRenderPass2 == nullptr) {
+        d.createRenderPass2 = reinterpret_cast<PFN_vkCreateRenderPass2>(load("vkCreateRenderPass2KHR"));
+    }
+    d.cmdBeginRenderPass2 = reinterpret_cast<PFN_vkCmdBeginRenderPass2>(load("vkCmdBeginRenderPass2"));
+    if (d.cmdBeginRenderPass2 == nullptr) {
+        d.cmdBeginRenderPass2 = reinterpret_cast<PFN_vkCmdBeginRenderPass2>(load("vkCmdBeginRenderPass2KHR"));
+    }
+    d.cmdBeginRendering = reinterpret_cast<PFN_vkCmdBeginRendering>(load("vkCmdBeginRendering"));
+    if (d.cmdBeginRendering == nullptr) {
+        d.cmdBeginRendering = reinterpret_cast<PFN_vkCmdBeginRendering>(load("vkCmdBeginRenderingKHR"));
+    }
+    // the app's own copy/blit, hooked only to learn which stereo image is the submitted eye (noteCopyToExternal)
+    d.cmdCopyImage = reinterpret_cast<PFN_vkCmdCopyImage>(load("vkCmdCopyImage"));
+    d.appCmdBlitImage = reinterpret_cast<PFN_vkCmdBlitImage>(load("vkCmdBlitImage"));
+    d.cmdCopyImage2 = reinterpret_cast<PFN_vkCmdCopyImage2>(load("vkCmdCopyImage2"));
+    if (d.cmdCopyImage2 == nullptr) {
+        d.cmdCopyImage2 = reinterpret_cast<PFN_vkCmdCopyImage2>(load("vkCmdCopyImage2KHR"));
+    }
+    d.cmdBlitImage2 = reinterpret_cast<PFN_vkCmdBlitImage2>(load("vkCmdBlitImage2"));
+    if (d.cmdBlitImage2 == nullptr) {
+        d.cmdBlitImage2 = reinterpret_cast<PFN_vkCmdBlitImage2>(load("vkCmdBlitImage2KHR"));
+    }
     if (pCreateInfo->queueCreateInfoCount > 0 && pCreateInfo->pQueueCreateInfos != nullptr) {
         d.primaryFamily = pCreateInfo->pQueueCreateInfos[0].queueFamilyIndex;
     }
 
-    // The capture context: only the compositor needs it, and only when vkGetMemoryFdKHR exists (external memory).
-    if (in_compositor() && d.getMemoryFd != nullptr) {
+    // The capture context: any process that can export memory (vkGetMemoryFdKHR) may capture — the eye is often
+    // rendered in the APP's process (a viewMask multiview target), not the compositor. Cross-process ownership of the
+    // one capture socket is arbitrated at capture time (CaptureServer::arbitrate).
+    if (d.getMemoryFd != nullptr) {
         auto cap = std::make_shared<CaptureCtx>();
         cap->device = *pDevice;
         cap->createImage = d.createImage;
@@ -650,7 +791,7 @@ VKAPI_ATTR VkResult VKAPI_CALL prlCreateDevice(VkPhysicalDevice physicalDevice, 
                         inst.getMemProps != nullptr;
         cap->failed = !ok;
         if (!ok) {
-            logf("[vrcompositor] capture disabled: a required entry point or memory property is missing");
+            logf("[%s] capture disabled: a required entry point or memory property is missing", proc_name());
         }
         d.cap = cap;
     }
@@ -661,7 +802,7 @@ VKAPI_ATTR VkResult VKAPI_CALL prlCreateDevice(VkPhysicalDevice physicalDevice, 
     }
     logf("vkCreateDevice: device ready [%s] (vkGetMemoryFdKHR %s, capture %s)", proc_name(),
          gdpa(*pDevice, "vkGetMemoryFdKHR") != nullptr ? "present" : "absent",
-         in_compositor() && gdpa(*pDevice, "vkGetMemoryFdKHR") != nullptr ? "armed" : "off");
+         gdpa(*pDevice, "vkGetMemoryFdKHR") != nullptr ? "armed" : "off");
     return r;
 }
 
@@ -736,7 +877,8 @@ VKAPI_ATTR VkResult VKAPI_CALL prlCreateImage(VkDevice device, const VkImageCrea
     }
     const bool external = handleTypes != 0;
     const bool color = (pCreateInfo->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0;
-    if (external && color) {
+    const bool twoD = pCreateInfo->imageType == VK_IMAGE_TYPE_2D;
+    if (color && twoD) {
         const auto k = std::make_tuple(pCreateInfo->extent.width, pCreateInfo->extent.height,
                                        pCreateInfo->arrayLayers, static_cast<int>(pCreateInfo->format));
         SwapchainInfo si{pCreateInfo->extent.width, pCreateInfo->extent.height, pCreateInfo->arrayLayers,
@@ -747,11 +889,14 @@ VKAPI_ATTR VkResult VKAPI_CALL prlCreateImage(VkDevice device, const VkImageCrea
             std::lock_guard lock(g_mutex);
             auto it = g_devices.find(disp_key(device));
             if (it != g_devices.end()) {
-                fresh = it->second.logged.insert(k).second;
-                it->second.images[*pImage] = si; // remember every external colour image, for capture selection
+                it->second.allImages[*pImage] = si; // ALL colour 2D images (for the viewMask eye target)
+                if (external) {
+                    fresh = it->second.logged.insert(k).second;
+                    it->second.images[*pImage] = si; // external colour images only (compositor fallback selection)
+                }
             }
         }
-        if (fresh) {
+        if (external && fresh) {
             logf("[%s] external image: %ux%u arrayLayers %u samples %u format %d usage 0x%x handleTypes 0x%x%s",
                  proc_name(), pCreateInfo->extent.width, pCreateInfo->extent.height, pCreateInfo->arrayLayers,
                  static_cast<unsigned>(pCreateInfo->samples), static_cast<int>(pCreateInfo->format),
@@ -770,10 +915,444 @@ VKAPI_ATTR void VKAPI_CALL prlDestroyImage(VkDevice device, VkImage image, const
         if (it != g_devices.end()) {
             down = it->second.destroyImage;
             it->second.images.erase(image);
+            it->second.allImages.erase(image);
+            if (it->second.eyeTarget.img == image) {
+                it->second.eyeTarget = DeviceData::EyeTarget{}; // target image gone
+            }
         }
     }
     if (down != nullptr) {
         down(device, image, pAllocator);
+    }
+}
+
+// ---- multiview probe (LOG ONLY) ----------------------------------------------------------------------------------
+// Does NOT touch capture/selection/blit. Records image-view -> image, render-pass -> viewMask, framebuffer -> views,
+// and on a render pass / dynamic-rendering begin with viewMask != 0 logs the colour attachment(s) (both eyes are drawn
+// in one pass under multiview). An attachment found in the external-colour `images` map is the EYE CANDIDATE.
+VKAPI_ATTR VkResult VKAPI_CALL prlCreateImageView(VkDevice device, const VkImageViewCreateInfo* pCreateInfo,
+                                                  const VkAllocationCallbacks* pAllocator, VkImageView* pView) {
+    PFN_vkCreateImageView down = nullptr;
+    {
+        std::lock_guard lock(g_mutex);
+        auto it = g_devices.find(disp_key(device));
+        if (it != g_devices.end()) {
+            down = it->second.createImageView;
+        }
+    }
+    if (down == nullptr) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    const VkResult r = down(device, pCreateInfo, pAllocator, pView);
+    if (r == VK_SUCCESS && pCreateInfo != nullptr && pView != nullptr) {
+        std::lock_guard lock(g_mutex);
+        auto it = g_devices.find(disp_key(device));
+        if (it != g_devices.end()) {
+            it->second.views[*pView] = pCreateInfo->image;
+        }
+    }
+    return r;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL prlCreateRenderPass(VkDevice device, const VkRenderPassCreateInfo* pCreateInfo,
+                                                   const VkAllocationCallbacks* pAllocator, VkRenderPass* pRenderPass) {
+    PFN_vkCreateRenderPass down = nullptr;
+    {
+        std::lock_guard lock(g_mutex);
+        auto it = g_devices.find(disp_key(device));
+        if (it != g_devices.end()) {
+            down = it->second.createRenderPass;
+        }
+    }
+    if (down == nullptr) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    const VkResult r = down(device, pCreateInfo, pAllocator, pRenderPass);
+    if (r == VK_SUCCESS && pCreateInfo != nullptr && pRenderPass != nullptr) {
+        // Legacy multiview: a VkRenderPassMultiviewCreateInfo chained in pNext carries one view mask per subpass.
+        uint32_t mask = 0;
+        for (const auto* p = static_cast<const VkBaseInStructure*>(pCreateInfo->pNext); p != nullptr; p = p->pNext) {
+            if (p->sType == VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO) {
+                const auto* mv = reinterpret_cast<const VkRenderPassMultiviewCreateInfo*>(p);
+                for (uint32_t i = 0; i < mv->subpassCount; i++) {
+                    mask |= mv->pViewMasks[i];
+                }
+            }
+        }
+        std::vector<VkImageLayout> finals(pCreateInfo->attachmentCount);
+        for (uint32_t i = 0; i < pCreateInfo->attachmentCount; i++) {
+            finals[i] = pCreateInfo->pAttachments[i].finalLayout;
+        }
+        std::lock_guard lock(g_mutex);
+        auto it = g_devices.find(disp_key(device));
+        if (it != g_devices.end()) {
+            it->second.rpViewMask[*pRenderPass] = mask; // store even when 0, so Begin can look it up
+            it->second.rpAttachFinal[*pRenderPass] = std::move(finals);
+        }
+    }
+    return r;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL prlCreateRenderPass2(VkDevice device, const VkRenderPassCreateInfo2* pCreateInfo,
+                                                    const VkAllocationCallbacks* pAllocator, VkRenderPass* pRenderPass) {
+    PFN_vkCreateRenderPass2 down = nullptr;
+    {
+        std::lock_guard lock(g_mutex);
+        auto it = g_devices.find(disp_key(device));
+        if (it != g_devices.end()) {
+            down = it->second.createRenderPass2;
+        }
+    }
+    if (down == nullptr) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    const VkResult r = down(device, pCreateInfo, pAllocator, pRenderPass);
+    if (r == VK_SUCCESS && pCreateInfo != nullptr && pRenderPass != nullptr) {
+        uint32_t mask = 0;
+        for (uint32_t i = 0; i < pCreateInfo->subpassCount; i++) {
+            mask |= pCreateInfo->pSubpasses[i].viewMask;
+        }
+        std::vector<VkImageLayout> finals(pCreateInfo->attachmentCount);
+        for (uint32_t i = 0; i < pCreateInfo->attachmentCount; i++) {
+            finals[i] = pCreateInfo->pAttachments[i].finalLayout;
+        }
+        std::lock_guard lock(g_mutex);
+        auto it = g_devices.find(disp_key(device));
+        if (it != g_devices.end()) {
+            it->second.rpViewMask[*pRenderPass] = mask;
+            it->second.rpAttachFinal[*pRenderPass] = std::move(finals);
+        }
+    }
+    return r;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL prlCreateFramebuffer(VkDevice device, const VkFramebufferCreateInfo* pCreateInfo,
+                                                    const VkAllocationCallbacks* pAllocator,
+                                                    VkFramebuffer* pFramebuffer) {
+    PFN_vkCreateFramebuffer down = nullptr;
+    {
+        std::lock_guard lock(g_mutex);
+        auto it = g_devices.find(disp_key(device));
+        if (it != g_devices.end()) {
+            down = it->second.createFramebuffer;
+        }
+    }
+    if (down == nullptr) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    const VkResult r = down(device, pCreateInfo, pAllocator, pFramebuffer);
+    if (r == VK_SUCCESS && pCreateInfo != nullptr && pFramebuffer != nullptr) {
+        std::vector<VkImageView> views;
+        if ((pCreateInfo->flags & VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT) == 0 && pCreateInfo->pAttachments != nullptr) {
+            views.assign(pCreateInfo->pAttachments, pCreateInfo->pAttachments + pCreateInfo->attachmentCount);
+        }
+        std::lock_guard lock(g_mutex);
+        auto it = g_devices.find(disp_key(device));
+        if (it != g_devices.end()) {
+            it->second.fbViews[*pFramebuffer] = std::move(views); // empty = imageless: views arrive at begin time
+        }
+    }
+    return r;
+}
+
+// Build the probe log line for one colour attachment drawn under a non-zero viewMask. Must hold g_mutex.
+void probeAttachment(DeviceData& d, const char* src, uint32_t viewMask, VkImage img, std::vector<std::string>& lines) {
+    uint32_t w = 0, h = 0, layers = 0;
+    int fmt = 0;
+    bool external = false;
+    if (img != VK_NULL_HANDLE) {
+        auto ii = d.images.find(img);
+        if (ii != d.images.end()) {
+            external = true;
+            w = ii->second.w;
+            h = ii->second.h;
+            layers = ii->second.arrayLayers;
+            fmt = static_cast<int>(ii->second.format);
+        }
+    }
+    const auto key = std::make_tuple(viewMask, w, h, layers, fmt, external ? 1 : 0);
+    if (!d.mvLogged.insert(key).second) {
+        return; // this distinct tuple was already logged
+    }
+    const int nviews = __builtin_popcount(viewMask);
+    char buf[320];
+    if (external) {
+        std::snprintf(buf, sizeof(buf),
+                      "[%s] MULTIVIEW %s: viewMask 0x%x (%d views), colour attachment %ux%u arrayLayers %u format %d "
+                      "[external: in images map] <- EYE CANDIDATE",
+                      proc_name(), src, viewMask, nviews, w, h, layers, fmt);
+    } else {
+        std::snprintf(buf, sizeof(buf),
+                      "[%s] MULTIVIEW %s: viewMask 0x%x (%d views), colour attachment (not an external image)",
+                      proc_name(), src, viewMask, nviews);
+    }
+    lines.emplace_back(buf);
+}
+
+// Learn the finished stereo eye: the arrayLayers>=2 colour image the app COPIES/BLITS into an external (exported,
+// submitted) image is the eye that reaches the HMD. Recording its handle lets considerEye capture only it (not the
+// game's other multiview passes). Other copies (UI, per-eye single-layer, mip chains) are ignored by the filter.
+// Must hold g_mutex.
+void noteCopyToExternal(DeviceData& d, VkImage srcImage, VkImage dstImage) {
+    if (srcImage == VK_NULL_HANDLE || dstImage == VK_NULL_HANDLE) {
+        return;
+    }
+    if (d.images.find(dstImage) == d.images.end()) {
+        return; // dst is not an external / submitted image
+    }
+    auto s = d.allImages.find(srcImage);
+    if (s == d.allImages.end() || s->second.arrayLayers < 2) {
+        return; // src is not a known stereo (both-eyes) colour image
+    }
+    if (d.copyEyeImg != srcImage) {
+        d.copyEyeImg = srcImage;
+        logf("[%s] EYE LOCK: image %ux%u arrayLayers %u format %lld is copied into a submitted image -> capture only it",
+             proc_name(), s->second.w, s->second.h, s->second.arrayLayers, static_cast<long long>(s->second.format));
+    }
+    d.copyEyeNs = now_ns();
+}
+
+// Promote a viewMask colour attachment to this device's eye capture target (it is drawn with both views, so it IS the
+// stereo eye — true whether the swapchain is an array or the app resolves per-eye). Needs a known colour image usable
+// as a blit source (TRANSFER_SRC); prefers a stereo array (arrayLayers>=2), else the largest, and refreshes freshness
+// each time. srcLayout = the attachment's finalLayout, so the capture blit transitions FROM the right layout (this is
+// what fixes the black capture). Non-colour / unknown attachments are absent from allImages and skipped. Must hold
+// g_mutex.
+void considerEye(DeviceData& d, uint32_t viewMask, VkImage img, VkImageLayout layout) {
+    if (img == VK_NULL_HANDLE) {
+        return;
+    }
+    // Once we know the eye image that is actually submitted (copied into an external image), lock onto it: a game may
+    // draw several multiview passes (BMS: HDR scene, tonemap, final) and only the last one is copied out, so without
+    // this the target cycles between passes and the video is mostly intermediate (black) frames.
+    if (d.copyEyeImg != VK_NULL_HANDLE && now_ns() - d.copyEyeNs < 2000000000ull && img != d.copyEyeImg) {
+        return;
+    }
+    auto ai = d.allImages.find(img);
+    if (ai == d.allImages.end()) {
+        return;
+    }
+    const SwapchainInfo& info = ai->second;
+    if ((info.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) == 0) {
+        const auto k = std::make_tuple(info.w, info.h, info.arrayLayers, static_cast<int>(info.format));
+        if (k != d.eyeLogged) {
+            d.eyeLogged = k;
+            logf("[%s] viewMask eye %ux%u arrayLayers %u format %lld lacks TRANSFER_SRC (usage 0x%x): cannot blit it, "
+                 "using the external-image fallback",
+                 proc_name(), info.w, info.h, info.arrayLayers, static_cast<long long>(info.format),
+                 static_cast<unsigned>(info.usage));
+        }
+        return;
+    }
+    const std::uint64_t area = static_cast<std::uint64_t>(info.w) * info.h;
+    const std::uint64_t curArea = static_cast<std::uint64_t>(d.eyeTarget.info.w) * d.eyeTarget.info.h;
+    const bool stale = d.eyeTarget.img == VK_NULL_HANDLE || now_ns() - d.eyeTarget.ns > 500000000ull;
+    const bool replace = stale || (info.arrayLayers >= 2 && d.eyeTarget.info.arrayLayers < 2) ||
+                         ((info.arrayLayers >= 2) == (d.eyeTarget.info.arrayLayers >= 2) && area >= curArea);
+    if (replace) {
+        d.eyeTarget.img = img;
+        d.eyeTarget.info = info;
+        d.eyeTarget.srcLayout = layout;
+        d.eyeTarget.viewMask = viewMask;
+        const auto k = std::make_tuple(info.w, info.h, info.arrayLayers, static_cast<int>(info.format));
+        if (k != d.eyeLogged) {
+            d.eyeLogged = k;
+            logf("[%s] CAPTURE (viewMask eye): image %ux%u arrayLayers %u format %lld srcLayout %d", proc_name(),
+                 info.w, info.h, info.arrayLayers, static_cast<long long>(info.format), static_cast<int>(layout));
+        }
+    }
+    if (d.eyeTarget.img == img) {
+        d.eyeTarget.ns = now_ns();
+    }
+}
+
+// Resolve a render pass begin's colour attachments (framebuffer views, or imageless via the pNext attachment info),
+// log each under the given tag, and set the eye target from each (with its finalLayout). Must hold g_mutex.
+void probeRenderPassBegin(DeviceData& d, const char* src, uint32_t viewMask, const VkRenderPassBeginInfo* pBegin,
+                          std::vector<std::string>& lines) {
+    const std::vector<VkImageLayout>* finals = nullptr;
+    if (auto f = d.rpAttachFinal.find(pBegin->renderPass); f != d.rpAttachFinal.end()) {
+        finals = &f->second;
+    }
+    const auto layoutOf = [&](uint32_t i) {
+        return (finals != nullptr && i < finals->size()) ? (*finals)[i] : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    };
+    const VkRenderPassAttachmentBeginInfo* ab = nullptr;
+    for (const auto* p = static_cast<const VkBaseInStructure*>(pBegin->pNext); p != nullptr; p = p->pNext) {
+        if (p->sType == VK_STRUCTURE_TYPE_RENDER_PASS_ATTACHMENT_BEGIN_INFO) {
+            ab = reinterpret_cast<const VkRenderPassAttachmentBeginInfo*>(p);
+        }
+    }
+    if (ab != nullptr) { // imageless framebuffer: the views are here
+        for (uint32_t i = 0; i < ab->attachmentCount; i++) {
+            auto vi = d.views.find(ab->pAttachments[i]);
+            VkImage img = vi != d.views.end() ? vi->second : VK_NULL_HANDLE;
+            probeAttachment(d, src, viewMask, img, lines);
+            considerEye(d, viewMask, img, layoutOf(i));
+        }
+    } else {
+        auto fb = d.fbViews.find(pBegin->framebuffer);
+        if (fb != d.fbViews.end()) {
+            uint32_t i = 0;
+            for (VkImageView v : fb->second) {
+                auto vi = d.views.find(v);
+                VkImage img = vi != d.views.end() ? vi->second : VK_NULL_HANDLE;
+                probeAttachment(d, src, viewMask, img, lines);
+                considerEye(d, viewMask, img, layoutOf(i));
+                i++;
+            }
+        }
+    }
+}
+
+// The app copying/blitting a stereo colour image into an external image tells us which image is the submitted eye.
+// Forward first (never change what the app does), then note it under the lock.
+VKAPI_ATTR void VKAPI_CALL prlCmdCopyImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcLayout,
+                                           VkImage dstImage, VkImageLayout dstLayout, uint32_t regionCount,
+                                           const VkImageCopy* pRegions) {
+    PFN_vkCmdCopyImage down = nullptr;
+    {
+        std::lock_guard lock(g_mutex);
+        auto it = g_devices.find(disp_key(commandBuffer));
+        if (it != g_devices.end()) {
+            down = it->second.cmdCopyImage;
+            noteCopyToExternal(it->second, srcImage, dstImage);
+        }
+    }
+    if (down != nullptr) {
+        down(commandBuffer, srcImage, srcLayout, dstImage, dstLayout, regionCount, pRegions);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL prlCmdBlitImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcLayout,
+                                           VkImage dstImage, VkImageLayout dstLayout, uint32_t regionCount,
+                                           const VkImageBlit* pRegions, VkFilter filter) {
+    PFN_vkCmdBlitImage down = nullptr;
+    {
+        std::lock_guard lock(g_mutex);
+        auto it = g_devices.find(disp_key(commandBuffer));
+        if (it != g_devices.end()) {
+            down = it->second.appCmdBlitImage;
+            noteCopyToExternal(it->second, srcImage, dstImage);
+        }
+    }
+    if (down != nullptr) {
+        down(commandBuffer, srcImage, srcLayout, dstImage, dstLayout, regionCount, pRegions, filter);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL prlCmdCopyImage2(VkCommandBuffer commandBuffer, const VkCopyImageInfo2* pInfo) {
+    PFN_vkCmdCopyImage2 down = nullptr;
+    {
+        std::lock_guard lock(g_mutex);
+        auto it = g_devices.find(disp_key(commandBuffer));
+        if (it != g_devices.end()) {
+            down = it->second.cmdCopyImage2;
+            if (pInfo != nullptr) {
+                noteCopyToExternal(it->second, pInfo->srcImage, pInfo->dstImage);
+            }
+        }
+    }
+    if (down != nullptr) {
+        down(commandBuffer, pInfo);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL prlCmdBlitImage2(VkCommandBuffer commandBuffer, const VkBlitImageInfo2* pInfo) {
+    PFN_vkCmdBlitImage2 down = nullptr;
+    {
+        std::lock_guard lock(g_mutex);
+        auto it = g_devices.find(disp_key(commandBuffer));
+        if (it != g_devices.end()) {
+            down = it->second.cmdBlitImage2;
+            if (pInfo != nullptr) {
+                noteCopyToExternal(it->second, pInfo->srcImage, pInfo->dstImage);
+            }
+        }
+    }
+    if (down != nullptr) {
+        down(commandBuffer, pInfo);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL prlCmdBeginRenderPass(VkCommandBuffer commandBuffer,
+                                                 const VkRenderPassBeginInfo* pRenderPassBegin,
+                                                 VkSubpassContents contents) {
+    PFN_vkCmdBeginRenderPass down = nullptr;
+    std::vector<std::string> lines;
+    {
+        std::lock_guard lock(g_mutex);
+        auto it = g_devices.find(disp_key(commandBuffer));
+        if (it != g_devices.end()) {
+            down = it->second.cmdBeginRenderPass;
+            if (pRenderPassBegin != nullptr) {
+                auto rp = it->second.rpViewMask.find(pRenderPassBegin->renderPass);
+                if (rp != it->second.rpViewMask.end() && rp->second != 0) {
+                    probeRenderPassBegin(it->second, "renderpass1", rp->second, pRenderPassBegin, lines);
+                }
+            }
+        }
+    }
+    for (const std::string& l : lines) {
+        logf("%s", l.c_str());
+    }
+    if (down != nullptr) {
+        down(commandBuffer, pRenderPassBegin, contents);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL prlCmdBeginRenderPass2(VkCommandBuffer commandBuffer,
+                                                  const VkRenderPassBeginInfo* pRenderPassBegin,
+                                                  const VkSubpassBeginInfo* pSubpassBeginInfo) {
+    PFN_vkCmdBeginRenderPass2 down = nullptr;
+    std::vector<std::string> lines;
+    {
+        std::lock_guard lock(g_mutex);
+        auto it = g_devices.find(disp_key(commandBuffer));
+        if (it != g_devices.end()) {
+            down = it->second.cmdBeginRenderPass2;
+            DeviceData& d = it->second;
+            if (pRenderPassBegin != nullptr) {
+                auto rp = d.rpViewMask.find(pRenderPassBegin->renderPass);
+                if (rp != d.rpViewMask.end() && rp->second != 0) {
+                    probeRenderPassBegin(d, "renderpass2", rp->second, pRenderPassBegin, lines);
+                }
+            }
+        }
+    }
+    for (const std::string& l : lines) {
+        logf("%s", l.c_str());
+    }
+    if (down != nullptr) {
+        down(commandBuffer, pRenderPassBegin, pSubpassBeginInfo);
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL prlCmdBeginRendering(VkCommandBuffer commandBuffer, const VkRenderingInfo* pRenderingInfo) {
+    PFN_vkCmdBeginRendering down = nullptr;
+    std::vector<std::string> lines;
+    {
+        std::lock_guard lock(g_mutex);
+        auto it = g_devices.find(disp_key(commandBuffer));
+        if (it != g_devices.end()) {
+            down = it->second.cmdBeginRendering;
+            DeviceData& d = it->second;
+            if (pRenderingInfo != nullptr && pRenderingInfo->viewMask != 0 && pRenderingInfo->pColorAttachments != nullptr) {
+                for (uint32_t i = 0; i < pRenderingInfo->colorAttachmentCount; i++) {
+                    const VkRenderingAttachmentInfo& ca = pRenderingInfo->pColorAttachments[i];
+                    auto vi = d.views.find(ca.imageView);
+                    VkImage img = vi != d.views.end() ? vi->second : VK_NULL_HANDLE;
+                    probeAttachment(d, "dynrender", pRenderingInfo->viewMask, img, lines);
+                    considerEye(d, pRenderingInfo->viewMask, img, ca.imageLayout);
+                }
+            }
+        }
+    }
+    for (const std::string& l : lines) {
+        logf("%s", l.c_str());
+    }
+    if (down != nullptr) {
+        down(commandBuffer, pRenderingInfo);
     }
 }
 
@@ -813,7 +1392,10 @@ bool buildResources(CaptureCtx& cap, CaptureView view, const SwapchainInfo& src,
     const double scale = static_cast<double>(targetH) / static_cast<double>(srcH);
     const uint32_t perEyeW = evenDown(static_cast<uint32_t>(static_cast<double>(src.w) * scale + 0.5));
     const uint32_t dstH = evenDown(targetH);
-    const uint32_t dstW = view == CaptureView::BothEyes ? evenDown(perEyeW * 2) : perEyeW;
+    // Only a stereo-array source (layer 0 = left, 1 = right) can be split into two; a single-layer eye image is
+    // captured whole for every view.
+    const bool stereo = src.arrayLayers >= 2;
+    const uint32_t dstW = (view == CaptureView::BothEyes && stereo) ? evenDown(perEyeW * 2) : perEyeW;
     cap.dstW = dstW;
     cap.dstH = dstH;
 
@@ -919,7 +1501,7 @@ bool buildResources(CaptureCtx& cap, CaptureView view, const SwapchainInfo& src,
 // Record + submit one blit of the selected view/layer(s) into the exportable image, with its own fence. Submitted to
 // `queue` (the queue the app just used) so it is ordered after the app's work on that queue, and we never wait on the
 // fence here (the compositor is never stalled). Returns true if a blit was submitted.
-bool submitBlit(CaptureCtx& cap, VkQueue queue, VkImage srcImage, CaptureView view) {
+bool submitBlit(CaptureCtx& cap, VkQueue queue, VkImage srcImage, CaptureView view, VkImageLayout srcLayout) {
     if (cap.resetCommandBuffer(cap.cmd, 0) != VK_SUCCESS) {
         return false;
     }
@@ -930,18 +1512,20 @@ bool submitBlit(CaptureCtx& cap, VkQueue queue, VkImage srcImage, CaptureView vi
         return false;
     }
 
-    const uint32_t srcLayerCount = view == CaptureView::BothEyes ? 2u : 1u;
-    const uint32_t srcBaseLayer = view == CaptureView::RightEye ? 1u : 0u;
+    // A single-layer source (cap.srcLayers < 2) has no left/right layers: capture it whole for every view.
+    const bool stereo = cap.srcLayers >= 2;
+    const uint32_t srcLayerCount = (view == CaptureView::BothEyes && stereo) ? 2u : 1u;
+    const uint32_t srcBaseLayer = (view == CaptureView::RightEye && stereo) ? 1u : 0u;
 
-    // ON-HARDWARE ITERATION #1: the source image's current layout. Best guess: the compositor leaves a frame bound
-    // for the HMD in SHADER_READ_ONLY_OPTIMAL. We transition it to TRANSFER_SRC and back. If this proves wrong on the
-    // live headset (validation/corruption), the fallbacks to try are GENERAL or PRESENT_SRC_KHR as oldLayout, or an
-    // oldLayout of UNDEFINED only if a torn frame is acceptable (UNDEFINED discards contents on some drivers).
+    // The source image's layout when we grab it. For the viewMask eye it is the render pass's finalLayout (passed in);
+    // for the compositor external-image fallback it is SHADER_READ_ONLY_OPTIMAL. We transition it to TRANSFER_SRC and
+    // back. Broad access masks (MEMORY_*) so whatever wrote the eye (colour attachment, a resolve/copy, a shader) is
+    // made visible, regardless of the prior usage. (Wrong oldLayout was the BLACK-capture bug.)
     VkImageMemoryBarrier srcToTransfer{};
     srcToTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    srcToTransfer.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    srcToTransfer.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT;
     srcToTransfer.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    srcToTransfer.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    srcToTransfer.oldLayout = srcLayout;
     srcToTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     srcToTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     srcToTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -966,7 +1550,7 @@ bool submitBlit(CaptureCtx& cap, VkQueue queue, VkImage srcImage, CaptureView vi
     VkImageBlit regions[2]{};
     const int32_t sw = static_cast<int32_t>(cap.srcW);
     const int32_t sh = static_cast<int32_t>(cap.srcH);
-    const int32_t perEyeW = static_cast<int32_t>(view == CaptureView::BothEyes ? cap.dstW / 2 : cap.dstW);
+    const int32_t perEyeW = static_cast<int32_t>((view == CaptureView::BothEyes && stereo) ? cap.dstW / 2 : cap.dstW);
     const int32_t dh = static_cast<int32_t>(cap.dstH);
     uint32_t regionCount = 0;
     const auto addRegion = [&](uint32_t srcLayer, int32_t dstX0, int32_t dstX1) {
@@ -978,7 +1562,7 @@ bool submitBlit(CaptureCtx& cap, VkQueue queue, VkImage srcImage, CaptureView vi
         b.dstOffsets[0] = VkOffset3D{dstX0, 0, 0};
         b.dstOffsets[1] = VkOffset3D{dstX1, dh, 1};
     };
-    if (view == CaptureView::BothEyes) {
+    if (view == CaptureView::BothEyes && stereo) {
         addRegion(0, 0, perEyeW);
         addRegion(1, perEyeW, perEyeW * 2);
     } else {
@@ -1006,12 +1590,12 @@ bool submitBlit(CaptureCtx& cap, VkQueue queue, VkImage srcImage, CaptureView vi
     dstRelease.image = cap.dstImage;
     dstRelease.subresourceRange = VkImageSubresourceRange{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
-    // src: TRANSFER_SRC -> back to SHADER_READ_ONLY so the compositor reads it unchanged.
+    // src: TRANSFER_SRC -> back to its original layout so the app/compositor reads it unchanged.
     VkImageMemoryBarrier srcBack = srcToTransfer;
     srcBack.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    srcBack.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    srcBack.dstAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT;
     srcBack.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    srcBack.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    srcBack.newLayout = srcLayout;
 
     VkImageMemoryBarrier post[2] = {dstRelease, srcBack};
     cap.cmdPipelineBarrier(cap.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
@@ -1035,7 +1619,7 @@ bool submitBlit(CaptureCtx& cap, VkQueue queue, VkImage srcImage, CaptureView vi
 // Called from prlQueueSubmit AFTER the app's own submit was forwarded. Advances the pending blit, and starts a new one
 // when due. Never blocks the compositor.
 void maybeCapture(const std::shared_ptr<CaptureCtx>& capPtr, VkQueue queue, uint32_t family, const Control& ctl,
-                  VkImage srcImage, const SwapchainInfo& srcInfo) {
+                  VkImage srcImage, const SwapchainInfo& srcInfo, VkImageLayout srcLayout) {
     if (!capPtr) {
         return;
     }
@@ -1064,12 +1648,12 @@ void maybeCapture(const std::shared_ptr<CaptureCtx>& capPtr, VkQueue queue, uint
     }
     // (re)build the exportable image if the parameters changed since last time
     if (!cap.haveResources || cap.view != ctl.view || cap.srcW != srcInfo.w || cap.srcH != srcInfo.h ||
-        cap.poolFamily != family) {
+        cap.srcLayers != srcInfo.arrayLayers || cap.poolFamily != family) {
         if (!buildResources(cap, ctl.view, srcInfo, ctl.max_height, family, fps)) {
             return;
         }
     }
-    if (!submitBlit(cap, queue, srcImage, ctl.view)) {
+    if (!submitBlit(cap, queue, srcImage, ctl.view, srcLayout)) {
         // one failed submit is not fatal; but a reset is needed before the next try (the fence may be unsignalled)
         cap.resetFences(cap.device, 1, &cap.fence);
         return;
@@ -1107,7 +1691,7 @@ VKAPI_ATTR VkResult VKAPI_CALL prlQueueSubmit(VkQueue queue, uint32_t submitCoun
     // Forward the app's submit FIRST: the capture must never delay the compositor's own frame.
     const VkResult r = down(queue, submitCount, pSubmits, fence);
 
-    if (in_compositor() && cap) {
+    if (cap) {
         static std::atomic<std::uint64_t> submits{0};
         const std::uint64_t i = submits.fetch_add(1);
         // read the control only now and then (it is a file poll); keep the last one between polls
@@ -1123,43 +1707,107 @@ VKAPI_ATTR VkResult VKAPI_CALL prlQueueSubmit(VkQueue queue, uint32_t submitCoun
             ctl = lastCtl;
         }
         if (ctl.active) {
-            // pick the target image for the chosen view: the game's eye buffer = the largest arrayLayers>=2 colour
-            // image. Only the device that holds it captures.
-            VkImage bestImg = VK_NULL_HANDLE;
-            SwapchainInfo bestInfo;
-            std::uint64_t bestArea = 0;
+            VkImage srcImg = VK_NULL_HANDLE;
+            SwapchainInfo srcInfo;
+            VkImageLayout srcLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            bool preferred = false; // a viewMask eye (this process renders the eye) beats the compositor fallback
             {
                 std::lock_guard lock(g_mutex);
                 auto it = g_devices.find(disp_key(queue));
                 if (it != g_devices.end()) {
-                    for (const auto& [img, info] : it->second.images) {
-                        if (info.arrayLayers < 2) {
-                            continue;
+                    DeviceData& d = it->second;
+                    // PREFERRED: the eye drawn with a non-zero viewMask in THIS process (array or internal multiview),
+                    // seen within the last second. Its srcLayout came from the render pass's finalLayout.
+                    if (d.eyeTarget.img != VK_NULL_HANDLE && now_ns() - d.eyeTarget.ns < 1000000000ull) {
+                        srcImg = d.eyeTarget.img;
+                        srcInfo = d.eyeTarget.info;
+                        srcLayout = d.eyeTarget.srcLayout;
+                        preferred = true;
+                        // When the viewMask eye is an INTERNAL buffer (BMS draws several multiview passes - scene, HDR,
+                        // tonemap - into it, so capturing it cycles and the video is mostly black), the finished eye the
+                        // HMD shows is an EXTERNAL (exported, submitted) image of the SAME per-eye size. Prefer that: it
+                        // is the one and only submitted frame, whichever pass the game drew last. It is sampled by the
+                        // distortion pass, so it sits in SHADER_READ_ONLY_OPTIMAL.
+                        if (d.images.find(srcImg) == d.images.end()) {
+                            const uint32_t eyeW = d.eyeTarget.info.w, eyeH = d.eyeTarget.info.h;
+                            VkImage ext = VK_NULL_HANDLE;
+                            SwapchainInfo extInfo;
+                            for (const auto& [img, info] : d.images) { // a stereo array of the eye size wins outright
+                                if (info.w == eyeW && info.h == eyeH && info.arrayLayers >= 2) {
+                                    ext = img;
+                                    extInfo = info;
+                                    break;
+                                }
+                            }
+                            if (ext == VK_NULL_HANDLE) { // else the per-eye single-layer 8-bit sRGB submit of that size
+                                for (const auto& [img, info] : d.images) {
+                                    if (info.w == eyeW && info.h == eyeH && info.arrayLayers == 1 &&
+                                        (info.format == 43 || info.format == 50)) {
+                                        ext = img;
+                                        extInfo = info;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (ext != VK_NULL_HANDLE) {
+                                srcImg = ext;
+                                srcInfo = extInfo;
+                                srcLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                                const auto k = std::make_tuple(extInfo.w, extInfo.h, extInfo.arrayLayers,
+                                                               static_cast<int>(extInfo.format));
+                                if (k != d.lastPicked) {
+                                    d.lastPicked = k;
+                                    logf("[%s] CAPTURE target (external submit, eye-size matched): image %ux%u "
+                                         "arrayLayers %u format %lld",
+                                         proc_name(), extInfo.w, extInfo.h, extInfo.arrayLayers,
+                                         static_cast<long long>(extInfo.format));
+                                }
+                            }
                         }
-                        const std::uint64_t area = static_cast<std::uint64_t>(info.w) * info.h;
-                        if (area > bestArea) {
-                            bestArea = area;
-                            bestImg = img;
-                            bestInfo = info;
+                    } else if (in_compositor()) {
+                        // FALLBACK (compositor only): the game's external eye buffer = the largest arrayLayers>=2 colour
+                        // image, else the largest single-layer 8-bit sRGB (format 43/50) colour image (per-eye submit).
+                        std::uint64_t bestArea = 0;
+                        for (const auto& [img, info] : d.images) {
+                            if (info.arrayLayers < 2) {
+                                continue;
+                            }
+                            const std::uint64_t area = static_cast<std::uint64_t>(info.w) * info.h;
+                            if (area > bestArea) {
+                                bestArea = area;
+                                srcImg = img;
+                                srcInfo = info;
+                            }
                         }
-                    }
-                    if (bestImg != VK_NULL_HANDLE) {
-                        const auto k = std::make_tuple(bestInfo.w, bestInfo.h, bestInfo.arrayLayers,
-                                                       static_cast<int>(bestInfo.format));
-                        if (k != it->second.lastPicked) {
-                            it->second.lastPicked = k;
-                            const char* vn = ctl.view == CaptureView::LeftEye    ? "left"
-                                             : ctl.view == CaptureView::RightEye ? "right"
-                                             : ctl.view == CaptureView::BothEyes ? "both"
-                                                                                 : "compositor";
-                            logf("[vrcompositor] CAPTURE target view=%s: image %ux%u arrayLayers %u format %lld", vn,
-                                 bestInfo.w, bestInfo.h, bestInfo.arrayLayers, static_cast<long long>(bestInfo.format));
+                        if (srcImg == VK_NULL_HANDLE) {
+                            for (const auto& [img, info] : d.images) {
+                                if (info.arrayLayers != 1 || (info.format != 43 && info.format != 50)) {
+                                    continue;
+                                }
+                                const std::uint64_t area = static_cast<std::uint64_t>(info.w) * info.h;
+                                if (area > bestArea) {
+                                    bestArea = area;
+                                    srcImg = img;
+                                    srcInfo = info;
+                                }
+                            }
+                        }
+                        if (srcImg != VK_NULL_HANDLE) {
+                            const auto k = std::make_tuple(srcInfo.w, srcInfo.h, srcInfo.arrayLayers,
+                                                           static_cast<int>(srcInfo.format));
+                            if (k != d.lastPicked) {
+                                d.lastPicked = k;
+                                logf("[%s] CAPTURE target (external fallback): image %ux%u arrayLayers %u format %lld",
+                                     proc_name(), srcInfo.w, srcInfo.h, srcInfo.arrayLayers,
+                                     static_cast<long long>(srcInfo.format));
+                            }
                         }
                     }
                 }
             }
-            if (bestImg != VK_NULL_HANDLE) {
-                maybeCapture(cap, queue, family, ctl, bestImg, bestInfo);
+            // Own the one capture socket (the eye process wins over the compositor fallback), then capture.
+            if (srcImg != VK_NULL_HANDLE && server().arbitrate(preferred)) {
+                maybeCapture(cap, queue, family, ctl, srcImg, srcInfo, srcLayout);
             }
         }
     }
@@ -1183,6 +1831,23 @@ const Hook kHooks[] = {
     PRL_HOOK(vkCreateImage, prlCreateImage),
     PRL_HOOK(vkDestroyImage, prlDestroyImage),
     PRL_HOOK(vkQueueSubmit, prlQueueSubmit),
+    // multiview probe (log only); KHR aliases share the prl function (ABI-identical to core)
+    PRL_HOOK(vkCreateImageView, prlCreateImageView),
+    PRL_HOOK(vkCreateRenderPass, prlCreateRenderPass),
+    PRL_HOOK(vkCmdBeginRenderPass, prlCmdBeginRenderPass),
+    PRL_HOOK(vkCreateRenderPass2, prlCreateRenderPass2),
+    PRL_HOOK(vkCreateRenderPass2KHR, prlCreateRenderPass2),
+    PRL_HOOK(vkCreateFramebuffer, prlCreateFramebuffer),
+    PRL_HOOK(vkCmdBeginRenderPass2, prlCmdBeginRenderPass2),
+    PRL_HOOK(vkCmdBeginRenderPass2KHR, prlCmdBeginRenderPass2),
+    PRL_HOOK(vkCmdBeginRendering, prlCmdBeginRendering),
+    PRL_HOOK(vkCmdBeginRenderingKHR, prlCmdBeginRendering),
+    PRL_HOOK(vkCmdCopyImage, prlCmdCopyImage),
+    PRL_HOOK(vkCmdBlitImage, prlCmdBlitImage),
+    PRL_HOOK(vkCmdCopyImage2, prlCmdCopyImage2),
+    PRL_HOOK(vkCmdCopyImage2KHR, prlCmdCopyImage2),
+    PRL_HOOK(vkCmdBlitImage2, prlCmdBlitImage2),
+    PRL_HOOK(vkCmdBlitImage2KHR, prlCmdBlitImage2),
 };
 #undef PRL_HOOK
 
@@ -1207,9 +1872,7 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL prlGetInstanceProcAddr(VkInstance insta
 }
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL prlGetDeviceProcAddr(VkDevice device, const char* name) {
-    if (PFN_vkVoidFunction h = hookFor(name); h != nullptr) {
-        return h;
-    }
+    const PFN_vkVoidFunction h = hookFor(name);
     PFN_vkGetDeviceProcAddr gdpa = nullptr;
     {
         std::lock_guard lock(g_mutex);
@@ -1217,6 +1880,15 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL prlGetDeviceProcAddr(VkDevice device, c
         if (it != g_devices.end()) {
             gdpa = it->second.gdpa;
         }
+    }
+    if (h != nullptr) {
+        // Only expose a device entry point we hook if the driver actually provides that exact name, so we never claim
+        // an unsupported core/KHR alias (e.g. vkCmdBeginRenderingKHR on an older driver). If the device is not known
+        // yet (startup), keep the hook.
+        if (gdpa == nullptr || gdpa(device, name) != nullptr) {
+            return h;
+        }
+        return nullptr;
     }
     return gdpa != nullptr ? gdpa(device, name) : nullptr;
 }
