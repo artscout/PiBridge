@@ -12,6 +12,7 @@
 #include <QWidget>
 #include <memory>
 
+#include "../core/actions.h"
 #include "../core/conf.h"
 #include "../core/io_session.h"
 #include "../core/rec_session.h"
@@ -34,7 +35,8 @@ namespace pibridge::app {
 class DevelopmentPage : public QWidget {
     Q_OBJECT
 public:
-    DevelopmentPage(StateSource& source, Conf& conf, IoSessionControl& direct, QWidget* parent = nullptr);
+    DevelopmentPage(StateSource& source, Conf& conf, IoSessionControl& direct, Actions& actions,
+                    QWidget* parent = nullptr);
     ~DevelopmentPage() override;
 
     // Fake mode only (screenshots): start a guided recording and jump `ms` into its steps; finish() stops it.
@@ -64,11 +66,13 @@ private:
     void updateBuild();
     void updateDirect();
     void fixPermissions();
+    void importEyeCalibration();
     QString home() const;
 
     StateSource& source_;
     Conf& conf_;
     IoSessionControl& direct_;
+    Actions& actions_;
     bool fake_;
     std::unique_ptr<Runner> runner_; // speech only
     std::unique_ptr<Announcer> announcer_;
@@ -124,6 +128,8 @@ private:
     pibridge::ui::Card* listCard_ = nullptr;
     QVBoxLayout* list_ = nullptr;
     QLabel* setupView_ = nullptr;
+    QPushButton* importEye_ = nullptr; // Import calibration from Windows (pibridge-eye profile)
+    QLabel* importResult_ = nullptr;
 };
 
 } // namespace pibridge::app

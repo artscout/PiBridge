@@ -35,9 +35,13 @@ inline constexpr char kVitBridge[] = "rec_vit_winbridge";    // libpibridge_vit_
 inline constexpr char kSlamConfig[] = "rec_slam_config";
 inline constexpr char kLens[] = "rec_lens_conf";
 // The lens profile the Pimax (Monado) driver renders through: "default" = crystal-chovr.conf (CHOVR's camera-calibrated
-// default, FOV 98x88), "pimax" = crystal-pimax.conf (geometry captured from the Pimax compositor, FOV 98.2x87.1). Picks
+// default, FOV 98x88), "native" = crystal-pimax-native.conf (the Pimax geometry, eye axis set by a true rotation). Picks
 // which shipped lens file is used; an explicit rec_lens_conf path still wins.
 inline constexpr char kLensProfile[] = "lens_profile";
+// The user's IPD in mm (the Dashboard's Quick settings). Monado gets it as OXR_DEBUG_IPD_MM (the eye separation it
+// renders with; the driver clamps 50..80), CustomHeadsetOpenVR as its "ipd" setting. Unset = 63.
+inline constexpr char kIpdMm[] = "ipd_mm";
+inline constexpr double kIpdDefaultMm = 63.0;
 inline constexpr char kCalib[] = "rec_cam_calib";
 inline constexpr char kConnector[] = "rec_connector";
 inline constexpr char kCamDevice[] = "rec_cam_device";
@@ -102,6 +106,7 @@ struct RecSetup {
     QString roomName;             // io_room, default "home" (core/roommap_link.h)
     bool roomSaved = false;       // that room has a saved map: the session starts pibridge-roommap auto
     int refreshHz = 90;           // refresh_hz (PIMAX_FPS)
+    double ipdMm = reckey::kIpdDefaultMm; // ipd_mm (OXR_DEBUG_IPD_MM)
     // Eye tracking (eye_tracking in pibridge.conf, the dashboard's Quick-settings toggle). In an inside-out session the
     // Pimax driver owns the eye chip directly (PIMAX_EYE=1): pibridge-eyed releases it for the duration (the inside-out
     // pause marker, common/pibridge_pause.h), so there is no USB contention.

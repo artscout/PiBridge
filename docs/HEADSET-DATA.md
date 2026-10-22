@@ -50,9 +50,9 @@ The parts, in order:
 
 | part | what you do | recorded | about |
 |---|---|---|---|
-| 1. What is installed | start the client, wait for the Pimax home | versions, USB devices, display data (no USB recording) | 1 min |
+| 1. What is installed | start the client, wait for the Pimax home | versions, USB devices, display data (lens, FOV, eye poses), the client's settings (FOV level, IPD and its range, lens offsets; read only), no USB recording | 1 min |
 | 2. Start of the client | close the client fully, wait, start it again | how the client wakes the headset | 2 min |
-| 3. Settings | each refresh rate, brightness low/high, tracking mode inside-out / Lighthouse (if the client can switch it), IPD smallest/largest, sound, other settings | the command for each setting | 3-5 min |
+| 3. Settings | each refresh rate, brightness low/high, tracking mode inside-out / Lighthouse (if the client can switch it), IPD: smallest, largest and a few values in between, typing what the client shows, the IPD buttons on the headset (if it has them) and the automatic IPD (if the client has it), sound, the headset's volume buttons, other settings | the command for each setting | 3-5 min |
 | 4. Sleep and wake | standby and back, "Restart headset" if the client has it, the client closed (you tell us the LED colour) | standby, wake, restart and idle | 4 min |
 | 5. Controllers | on, battery page, unpair and pair each hand, buttons, vibration | pairing and controller traffic | 3-5 min |
 | 6. Eye tracking | wear, take off, wear again, one full eye calibration in the client | the eye tracker's traffic, then a copy of the eye tracking files | 3 min |

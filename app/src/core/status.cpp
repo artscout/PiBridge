@@ -61,6 +61,7 @@ std::optional<KeepaliveStatus> parseKeepalive(const QByteArray& json) {
     k.follow = o->value("follow").toString();
     k.followRunning = o->value("follow_running").toBool();
     k.audioOnHeadset = o->value("audio_on_headset").toBool();
+    k.lensIpdMm = o->value("lens_ipd_x100").toDouble() / 100.0;
     k.error = o->value("error").toString();
     k.ctrlId = int64(o->value("ctrl_id"));
     k.ctrlOp = o->value("ctrl_op").toString();

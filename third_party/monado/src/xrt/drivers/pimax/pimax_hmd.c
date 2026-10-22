@@ -491,6 +491,50 @@ hid_state_file_write(struct pimax_hmd *hmd, bool connected, int64_t now_ns)
  * tracked) instead of freezing silently; on return the device clock mapping restarts (the MCU may have rebooted)
  * and the fusion skips the gap instead of integrating the gyro over it.
  */
+/*!
+ * The headset's volume buttons arrive as firmware log lines on IF3 ("<info> app: vol up 1" pressed, "... 0"
+ * released; "vol down"). While Monado owns the headset, pibridge-keepalived (paused) cannot read them, so the state is
+ * handed to it in $XDG_RUNTIME_DIR/pibridge/volume-button ("<seq> <dir +1|-1> <pressed 1|0>", written atomically);
+ * keepalived changes the headset volume, with the repeat while held. Runs on the libpimax session thread.
+ */
+static void
+pimax_on_log(void *user, const char *line)
+{
+	(void)user;
+	int dir = 0;
+	int pressed = 0;
+	if (strstr(line, "app: vol up 1") != NULL) {
+		dir = 1;
+		pressed = 1;
+	} else if (strstr(line, "app: vol up 0") != NULL) {
+		dir = 1;
+	} else if (strstr(line, "app: vol down 1") != NULL) {
+		dir = -1;
+		pressed = 1;
+	} else if (strstr(line, "app: vol down 0") != NULL) {
+		dir = -1;
+	} else {
+		return;
+	}
+	static unsigned seq = 0;
+	seq++;
+	const char *rt = getenv("XDG_RUNTIME_DIR");
+	char dir_path[512];
+	snprintf(dir_path, sizeof(dir_path), "%s/pibridge", rt != NULL && rt[0] != '\0' ? rt : "/tmp");
+	(void)mkdir(dir_path, 0700);
+	char path[600];
+	char tmp[620];
+	snprintf(path, sizeof(path), "%s/volume-button", dir_path);
+	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+	FILE *f = fopen(tmp, "w");
+	if (f == NULL) {
+		return;
+	}
+	fprintf(f, "%u %d %d\n", seq, dir, pressed);
+	fclose(f);
+	(void)rename(tmp, path);
+}
+
 static void
 pimax_on_state(void *user, pimax_state state)
 {
@@ -1037,7 +1081,8 @@ pimax_hmd_create(const char *name, struct xrt_device *out_ctrls[2])
 	                      .on_imu = pimax_on_imu,
 	                      .on_state = pimax_on_state,
 	                      .on_controller = pimax_on_controller,
-	                      .on_controller_status = pimax_on_controller_status};
+	                      .on_controller_status = pimax_on_controller_status,
+	                      .on_log = pimax_on_log};
 	hmd->lib = pimax_open(&cb);
 	if (hmd->lib == NULL) {
 		HMD_ERROR(hmd, "pimax_open failed");

@@ -1,7 +1,7 @@
 # Pimax Crystal Super (Micro-OLED module, P3C10): EXPERIMENTAL. It speaks the Dream Air protocol (58 .. frames on IF0,
 # the same IMU and controller reports); every command below was seen in the Windows capture of 2026-10-17 with
 # Pimax Play 2.0.2.103 (analysis/crystal-super-capture-20261017.md, take names in `source`). Nothing here has run
-# against the headset from Linux yet. Captured but not allowed yet: the IPD motor, the eye-module power off. Camera
+# against the headset from Linux yet. Captured but not allowed yet: the eye-module power off. The IPD motor is allowed (user, 2026-10-22). Camera
 # exposure (`camera_ae`) is allowed with the Crystal's own Windows ranges (user, 2026-10-19), sent only with PIMAX_CAM_AE=1.
 # PiBridge (not in omarchyvr's copy; user, 2026-10-19 in chat): controller vibration (`haptic`), and approval lines on the
 # commands of libpimax's controller attach burst and video prepare, which Monado's Pimax driver sends through
@@ -47,8 +47,11 @@ usb_pid = 0x0561
 start_list = "user"                   # no built-in list: `pimax-eye frames` makes it from the user's own Windows capture
 
 [ipd]
-status = "unknown"
-motor = false                         # the motor exists (take ipd: 58 06 5c 05 01 <mm*100 LE>), not enabled yet
+status = "experimental"
+motor = true                          # take ipd: 58 06 5c 05 01 <mm*100 LE> (66.00, 63.19, 60.00); user, 2026-10-22
+min_mm = 58.0                         # the Dream Air's range; the take's values 60.00..66.00 lie inside
+max_mm = 72.0
+readback = "IF2 report 53 31, u16 LE at bytes 45..46, /100 mm"   # 63.19 read from Linux, 2026-10-17
 
 [cameras]
 status = "experimental"               # same UVC stream and metadata as the Dream Air (analysis/crystal-super-capture-20261017.md)
@@ -191,3 +194,12 @@ source = "not in the Crystal capture 2026-10-17 (no opcode 0x05 in any of the 14
 id = "eye_power_on"
 bytes = "58 05 3c 05 00 01"
 source = "take cold2 t=27.543 (Pimax Play powers the eye module; pimax-eye/src/power.rs sends it once per enumeration)"
+
+[[hid]]
+id = "ipd_motor"
+bytes = "58 06 5c 05 01 {ipd:u16le}"
+params = ["ipd=5800..7200"]           # mm x 100, 58-72 mm
+policy = "once_per_request"
+min_interval_ms = 1000
+approved = "user, 2026-10-22 (chat): the IPD slider moves the lens motors, as Pimax Play / EVO's IPD ADJUSTMENT"
+source = "crystal-super-capture-20261017 take ipd: 58 06 5c 05 01 <mm*100 LE> at 66.00, 63.19 and 60.00 mm (omarchyvr analysis/crystal-super-capture-20261017.md); the same frame as the Dream Air entry (Windows capture 2026-10-15 take 6, reply 4c 04 5c 05 01 07)"

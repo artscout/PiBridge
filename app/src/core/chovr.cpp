@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSaveFile>
 #include <QStandardPaths>
 
 #include "steamvr.h"
@@ -103,6 +104,37 @@ QString chovrGuiPath(const QString& confPath, const QString& home) {
 
 bool startChovrGui(Runner& runner, const QString& path) {
     return !path.isEmpty() && runner.startDetached(path, {});
+}
+
+bool chovrSetIpd(const QString& settingsFile, double mm) {
+    bool ok = false;
+    QJsonObject root = readObject(settingsFile, &ok); // missing or broken: start from an empty object
+    QStringList keys;
+    for (auto it = root.begin(); it != root.end(); ++it) {
+        if (it.key().startsWith(QLatin1String("crystalSuper")) && it.value().isObject()) {
+            keys << it.key();
+        }
+    }
+    if (keys.isEmpty()) {
+        keys << QStringLiteral("crystalSuperMicroOLED");
+    }
+    for (const QString& k : keys) {
+        QJsonObject h = root.value(k).toObject();
+        h[QStringLiteral("ipd")] = mm;
+        h[QStringLiteral("hardwareIpd")] = false;
+        root[k] = h;
+    }
+    // the old horizontal IPD offset (no longer set in PiBridge) must not shift the eyes on top of the IPD
+    QJsonObject gen = root.value(QStringLiteral("generalHeadset")).toObject();
+    gen.remove(QStringLiteral("horizontalIPDOffset"));
+    root[QStringLiteral("generalHeadset")] = gen;
+    QDir().mkpath(QFileInfo(settingsFile).absolutePath());
+    QSaveFile f(settingsFile);
+    if (!f.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    return f.commit();
 }
 
 } // namespace pibridge::app

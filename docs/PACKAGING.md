@@ -143,7 +143,7 @@ winbridge is **our** code (shipped as source). The proprietary Pimax DLLs it
 loads are **not** shipped. After installing the package, build it once:
 
 ```sh
-sh /usr/share/pibridge/winbridge-src/build-winbridge.sh   # needs mingw-w64; wine at run time
+pibridge-build-winbridge   # = sh /usr/share/pibridge/winbridge-src/build-winbridge.sh; needs mingw-w64, wine at run time
 ```
 
 It compiles, from `/usr/share/pibridge/winbridge-src/`:
@@ -154,8 +154,10 @@ g++ -O2 -std=c++20 -fPIC -shared vit_winbridge.cpp -o libpibridge_vit_winbridge.
 ```
 
 and installs the two outputs into `~/.local/share/pibridge/winbridge/`, where
-the app looks for them. See `docs/WINBRIDGE.md` for the full picture and
-`docs/INSTALL.md` for the Pimax kit.
+the app looks for them. Nothing starts it as a service: the app runs
+`wine winbridge.exe` inside each inside-out tracking session (START TRACKING)
+and stops it with the session. See `docs/WINBRIDGE.md` for the full picture and
+`docs/INSTALL.md` section 7 for the Pimax kit and the user steps.
 
 ## After install: per-user setup
 

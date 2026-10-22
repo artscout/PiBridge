@@ -5,6 +5,7 @@
 #include "pibridge_test.h"
 
 #include "pibridge/hmd/descriptor.h"
+#include "pibridge/hmd/ipd.h"
 #include "pibridge/hmd/proto.h"
 
 #include <map>
@@ -239,13 +240,13 @@ TEST(crystal_super_allows_only_its_captured_commands) {
         CHECK(g.send(*r).has_value());
         CHECK(out.size() == 65); // report id 0 + the 64-byte report
     }
-    // captured but not enabled yet: IPD motor, eye-module power off (camera exposure: its own entry with the
-    // Crystal's Windows ranges, so an all-zero exposure is out of range)
-    CHECK(!m.ipd_report(63.0f));
+    // the IPD motor is enabled (user, 2026-10-22), within the motor range; the eye-module power off is captured but
+    // not enabled yet (camera exposure: its own entry with the Crystal's Windows ranges, so an all-zero exposure is
+    // out of range)
+    CHECK(m.ipd_report(63.19f).has_value());
+    CHECK(refused(m, pad({0x58, 0x06, 0x5c, 0x05, 0x01, 0x88, 0x13})).kind == K::OutOfRange); // 50.00 mm
     CHECK(m.pair_report(Hand::Left).has_value()); // pairing: the Dream Air frame (user, 2026-10-19)
-    for (const auto& r : {pad({0x58, 0x06, 0x5c, 0x05, 0x01, 0xaf, 0x18}), pad({0x58, 0x05, 0x3c, 0x05, 0x00, 0x00})}) {
-        CHECK(refused(m, r).kind == K::NotListed);
-    }
+    CHECK(refused(m, pad({0x58, 0x05, 0x3c, 0x05, 0x00, 0x00})).kind == K::NotListed);
     CHECK(refused(m, pad({0x58, 0x19, 0x51, 0x00, 0x01, 0x32})).kind == K::OutOfRange);
     // controller vibration (user, 2026-10-19): the captured test pulse of take slam passes, AMP 0 and slot 0 do not
     {
@@ -319,6 +320,21 @@ TEST(descriptor_rules_are_enforced) {
     CHECK(!Descriptor::parse(real + "[[hid]]\nid = \"a\"\nbytes = \"58 {x:u32}\"\nparams = [\"x=1\"]\nsource = \"s\"\n"));
     CHECK(Descriptor::parse(real + "[[hid]]\nid = \"a\"\nbytes = \"58 {x:u16le}\"\nparams = [\"x=1..0x10\"]\nsource = \"s\"\n").has_value());
     CHECK(!Descriptor::parse(real + "[[hid]]\nid = \"a\"\nbytes = \"58 {x:u8}\"\nparams = [\"x=5..1\"]\nsource = \"s\"\n"));
+}
+
+TEST(ipd_motor_frame_passes_the_crystal_super_gate) {
+    // the frame of the 2026-10-17 capture take ipd: 63.19 mm = 58 06 5c 05 01 af 18
+    const auto f = ipd_motor(63.19f);
+    CHECK((std::vector<std::uint8_t>(f.begin(), f.end()) == pad({0x58, 0x06, 0x5c, 0x05, 0x01, 0xaf, 0x18})));
+    CHECK(ipd_motor(40.0f) == ipd_motor(58.0f)); // clamped to the motor range
+    const auto& m = load("crystal-super");
+    CHECK(m.caps.ipd_motor);
+    std::vector<std::uint8_t> out;
+    Gate g(m.allowlist, 0, vector_writer(out));
+    CHECK(g.send(ipd_motor(66.0f)).value_or("") == "ipd_motor");
+    CHECK(ipd::parse_request("63.5\n") == std::optional<float>(63.5f));
+    CHECK(!ipd::parse_request("abc"));
+    CHECK(!ipd::parse_request("200"));
 }
 
 PIBRIDGE_TEST_MAIN()

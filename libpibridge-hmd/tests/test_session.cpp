@@ -323,10 +323,12 @@ TEST(the_model_of_the_link_selects_its_description) {
     CHECK(s->model() && s->model()->id == "crystal-super");
     const auto seen = dev.drain_commands(MS(300));
     CHECK(!seen.empty() && seen[0] == wake());
-    // the Crystal Super does not list the IPD motor (captured, not enabled); it lists the haptic command (2026-10-19)
-    const auto h = s->send_report(*build_command(0x5c, 0x05, std::vector<std::uint8_t>{0x01, 0xaf, 0x18}));
-    CHECK(!h && h.error().code == Errc::Refused);
+    // the Crystal Super lists the IPD motor (2026-10-22) and the haptic command (2026-10-19), but not the eye-module
+    // power off (captured, not enabled)
+    CHECK(s->send_report(*build_command(0x5c, 0x05, std::vector<std::uint8_t>{0x01, 0xaf, 0x18})).has_value());
     CHECK(s->send_report(haptic_command(3, 25, 300)).has_value());
+    const auto off = s->send_report(*build_command(0x3c, 0x05, std::vector<std::uint8_t>{0x00, 0x00}));
+    CHECK(!off && off.error().code == Errc::Refused);
 }
 
 TEST(calibration_over_the_session_with_a_lost_reply) {

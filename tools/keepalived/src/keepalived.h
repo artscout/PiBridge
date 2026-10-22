@@ -66,6 +66,13 @@ inline constexpr std::chrono::seconds CONTROLLER_SEEN_FOR{10};
 inline constexpr std::chrono::milliseconds CONTROLLER_STREAM_GAP{1000};
 /// The status file is rewritten at least this often.
 inline constexpr std::chrono::seconds STATUS_EVERY{2};
+/// How often the headset's output volume is looked at (kept, or put back on a new output node).
+inline constexpr std::chrono::seconds VOLUME_EVERY{2};
+/// A held volume button repeats after this long, every VOLUME_REPEAT, and stops after VOLUME_HOLD_MAX (a lost
+/// release line must not run the volume to 0 or 100).
+inline constexpr std::chrono::milliseconds VOLUME_REPEAT_DELAY{400};
+inline constexpr std::chrono::milliseconds VOLUME_REPEAT{60};
+inline constexpr std::chrono::seconds VOLUME_HOLD_MAX{5};
 
 struct Options {
     /// Send the wake after connecting (`--no-wake` turns it off).
@@ -119,6 +126,8 @@ struct Status {
     /// Vibration test requests taken so far and the words for the last one.
     std::uint64_t haptic_seq = 0;
     std::string haptic_result;
+    /// The lens IPD the headset reports in its IMU reports, mm x 100 (0 = not seen yet).
+    int lens_ipd_x100 = 0;
     bool operator==(const Status&) const = default;
 };
 
@@ -139,6 +148,12 @@ struct Deps {
     std::filesystem::path ctrl_request;
     /// The vibration test request file; empty = $XDG_RUNTIME_DIR/pimax-haptic-request (haptics::request_path()).
     std::filesystem::path haptic_request;
+    /// The headset volume kept across audio switches and USB re-enumerations ("42%"); empty = not kept (tests).
+    /// main() sets $XDG_STATE_HOME/pibridge/headset-volume (~/.local/state/pibridge/headset-volume).
+    std::filesystem::path volume_file;
+    /// The volume button state Monado's Pimax driver hands over while it owns the headset ("<seq> <dir> <pressed>");
+    /// empty = $XDG_RUNTIME_DIR/pibridge/volume-button.
+    std::filesystem::path volume_button_file;
     /// Where the connect log line looks up the device node (sysfs, read only).
     discovery::Roots roots = discovery::Roots::from_env();
 };
@@ -173,6 +188,8 @@ public:
 
     Status status() const;
     bool busy() const;
+    /// How long the main loop may sleep: short while a volume button is held (its repeat), else 500 ms.
+    std::chrono::milliseconds poll_timeout() const;
     const Options& options() const { return opts_; }
 
     struct Events;
@@ -185,6 +202,13 @@ private:
     void audio_on();
     void audio_off();
     void write_status(Clock::time_point now, bool force);
+    /// Keep the headset volume: a new headset output node (it comes back with a new name after a USB re-enumeration,
+    /// and WirePlumber gives an unknown name 100%) gets the saved volume; a volume the user changed is saved.
+    void track_volume(Clock::time_point now);
+    /// Apply the headset's volume button presses (IF3 log lines) to its output, repeating while one is held.
+    void volume_buttons(Clock::time_point now);
+    /// While paused: take a new volume button state from the file Monado's driver writes.
+    void read_volume_button_file();
 
     Options opts_;
     Deps deps_;
@@ -198,6 +222,12 @@ private:
     /// Switch the audio when the delayed video frames go out (the order of the Rust daemon).
     bool audio_with_video_ = false;
     std::optional<audio::Before> audio_before_;
+    std::string volume_sink_;          // the headset output node track_volume() last saw
+    std::optional<Clock::time_point> volume_at_;
+    std::optional<unsigned long> button_seq_; // the last volume-button file entry seen (nullopt = none read yet)
+    int hold_dir_ = 0;                 // the volume button held now (+1 / -1), 0 = none
+    Clock::time_point hold_since_{};
+    Clock::time_point last_repeat_{};
     std::string error_;
     std::optional<Status> last_status_;
     std::optional<Clock::time_point> last_write_;

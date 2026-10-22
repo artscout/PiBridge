@@ -3,6 +3,7 @@
 
 #include <QDesktopServices>
 #include <QDir>
+#include <QFileDialog>
 #include <QFile>
 #include <QFileInfo>
 #include <QGridLayout>
@@ -57,8 +58,9 @@ QString esc(const QString& s) {
 
 } // namespace
 
-DevelopmentPage::DevelopmentPage(StateSource& source, Conf& conf, IoSessionControl& direct, QWidget* parent)
-    : QWidget(parent), source_(source), conf_(conf), direct_(direct), fake_(source.fake()) {
+DevelopmentPage::DevelopmentPage(StateSource& source, Conf& conf, IoSessionControl& direct, Actions& actions,
+                                 QWidget* parent)
+    : QWidget(parent), source_(source), conf_(conf), direct_(direct), actions_(actions), fake_(source.fake()) {
     setObjectName(QStringLiteral("page"));
     clock_.start();
     if (fake_) {
@@ -348,6 +350,23 @@ DevelopmentPage::DevelopmentPage(StateSource& source, Conf& conf, IoSessionContr
     setupView_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     setupCard->body()->addWidget(setupView_);
     right->addWidget(setupCard);
+
+    // ---- eye calibration from Windows (moved here from the Dashboard's Quick settings)
+    auto* eyeCard = new pibridge::ui::Card(QStringLiteral("Eye calibration from Windows"));
+    eyeCard->body()->addWidget(pibridge::ui::dimLabel(QStringLiteral(
+        "Reads calibration.setpm from Pimax Play / EVO under Windows and saves it as your eye profile "
+        "(pibridge-eye profile). The Dashboard's Calibrate makes one in the headset instead.")));
+    importEye_ = pibridge::ui::toolButton(QStringLiteral("Import calibration from Windows..."));
+    importEye_->setEnabled(!actions_.eyeTool().isEmpty());
+    if (actions_.eyeTool().isEmpty()) {
+        importEye_->setToolTip(QStringLiteral("pibridge-eye was not found (PATH or this build)."));
+    }
+    connect(importEye_, &QPushButton::clicked, this, &DevelopmentPage::importEyeCalibration);
+    eyeCard->body()->addWidget(importEye_, 0, Qt::AlignLeft);
+    importResult_ = pibridge::ui::dimLabel(QString());
+    importResult_->setWordWrap(true);
+    eyeCard->body()->addWidget(importResult_);
+    right->addWidget(eyeCard);
 
     tickTimer_.setInterval(100);
     connect(&tickTimer_, &QTimer::timeout, this, &DevelopmentPage::tick);
@@ -911,6 +930,28 @@ void DevelopmentPage::demoFinish() {
     offsetMs_ += 200000; // past the last step
     tick();
     tick();
+}
+
+void DevelopmentPage::importEyeCalibration() {
+    const QString file = QFileDialog::getOpenFileName(
+        this, QStringLiteral("Calibration from Pimax Play / EVO (Windows)"),
+        QStandardPaths::writableLocation(QStandardPaths::HomeLocation),
+        QStringLiteral("Pimax calibration (calibration.setpm *.setpm);;All files (*)"));
+    if (file.isEmpty()) {
+        return;
+    }
+    importEye_->setEnabled(false);
+    importResult_->setText(QStringLiteral("Importing %1...").arg(file));
+    const bool started = actions_.importProfile(file, [this](int code, const QString& out) {
+        importEye_->setEnabled(true);
+        importResult_->setText(code == 0 ? QStringLiteral("Saved to %1. Eye tracking uses it from now on.")
+                                               .arg(actions_.eyeProfileOut())
+                                         : QStringLiteral("Import failed (%1): %2").arg(code).arg(out.trimmed()));
+    });
+    if (!started) {
+        importEye_->setEnabled(true);
+        importResult_->setText(QStringLiteral("Could not start pibridge-eye."));
+    }
 }
 
 } // namespace pibridge::app

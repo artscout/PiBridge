@@ -7,6 +7,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
+#include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QStyle>
 #include <QStyleOptionSlider>
@@ -320,9 +321,10 @@ SliderRow::SliderRow(const QString& label, int min, int max, const QString& unit
     }
     slider_ = new TickSlider;
     slider_->setRange(min, max);
-    box_ = new QSpinBox;
+    box_ = new QDoubleSpinBox;
     box_->setObjectName(QStringLiteral("valuebox"));
     box_->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    box_->setDecimals(0);
     box_->setRange(min, max);
     box_->setAlignment(Qt::AlignCenter);
     box_->setFixedWidth(52);
@@ -340,13 +342,36 @@ SliderRow::SliderRow(const QString& label, int min, int max, const QString& unit
     connect(plus, &QPushButton::clicked, this, [this] { slider_->setValue(slider_->value() + 1); });
     connect(slider_, &QSlider::valueChanged, this, [this](int x) {
         const bool was = box_->blockSignals(true);
-        box_->setValue(x);
+        box_->setValue(x * step_);
         box_->blockSignals(was);
         if (!quiet_) {
             emit valueChanged(x);
+            emit realValueChanged(x * step_);
         }
     });
-    connect(box_, &QSpinBox::valueChanged, this, [this](int x) { slider_->setValue(x); });
+    connect(box_, &QDoubleSpinBox::valueChanged, this,
+            [this](double d) { slider_->setValue(static_cast<int>(std::lround(d / step_))); });
+}
+
+void SliderRow::setRealRange(double min, double max, double step, int decimals) {
+    step_ = step;
+    quiet_ = true;
+    slider_->setRange(static_cast<int>(std::lround(min / step)), static_cast<int>(std::lround(max / step)));
+    const bool was = box_->blockSignals(true);
+    box_->setDecimals(decimals);
+    box_->setSingleStep(step);
+    box_->setRange(min, max);
+    box_->setValue(slider_->value() * step_);
+    box_->blockSignals(was);
+    quiet_ = false;
+}
+
+double SliderRow::realValue() const {
+    return slider_->value() * step_;
+}
+
+void SliderRow::setRealValueQuiet(double v) {
+    setValueQuiet(static_cast<int>(std::lround(v / step_)));
 }
 
 int SliderRow::value() const {
@@ -357,7 +382,7 @@ void SliderRow::setValueQuiet(int x) {
     quiet_ = true;
     slider_->setValue(x);
     const bool was = box_->blockSignals(true);
-    box_->setValue(slider_->value());
+    box_->setValue(slider_->value() * step_);
     box_->blockSignals(was);
     quiet_ = false;
 }

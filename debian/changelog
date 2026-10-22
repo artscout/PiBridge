@@ -1,3 +1,30 @@
+pibridge (1.0.3) unstable; urgency=medium
+
+  * Crystal Super lens profiles fixed: each eye's axis is now set by a true
+    rotation. "Crystal Super Oled native" (the Pimax compositor geometry) gives
+    the right world scale and straight lines on head turns; "Crystal Super
+    Oled chovr" keeps CustomHeadsetOpenVR's lens shape with the same axis.
+    The "Like Pimax" profile is gone. The lens profile moved to the Display
+    page; an explicit rec_lens_conf now says that it overrides the profile.
+  * IPD on the Dashboard (Quick settings): 58-72 mm in 0.5 mm steps. It moves
+    the Crystal Super's lens motors (the IPD motor command of the Pimax client,
+    now allowed) and the renderers use the same value, live: Monado through
+    pibridge.conf, CustomHeadsetOpenVR through its settings.json. At start the
+    slider shows where the lenses are (read back from the headset). The old
+    "IPD horizontal offset" is gone.
+  * Headset sound: the volume is kept across switches and USB re-enumerations
+    (no more 100 % after every switch), and the headset's volume buttons work
+    (1 % steps, repeat while held) in Lighthouse and inside-out.
+  * Import calibration from Windows moved to the Development page.
+  * pibridge-build-winbridge is now installed (postinst and the docs named it,
+    the package did not have it); INSTALL.md explains winbridge for package
+    users (build once, never started by hand: the app runs it).
+  * Windows headset data kit: reads the Pimax client settings, records IPD
+    values and the headset's volume buttons. INSTALL.md points owners of other
+    Pimax headsets to it.
+
+ -- Albert Valiev <artscout@gmail.com>  Thu, 22 Oct 2026 19:30:00 +0200
+
 pibridge (1.0.2) unstable; urgency=medium
 
   * Eye tracking now starts under SteamVR + Monado (inside-out / SLAM): the

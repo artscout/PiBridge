@@ -17,6 +17,7 @@
 class QButtonGroup;
 class QHBoxLayout;
 class QPushButton;
+class QDoubleSpinBox;
 class QSpinBox;
 class QVBoxLayout;
 
@@ -146,13 +147,20 @@ public:
               QWidget* parent = nullptr);
     int value() const;
     void setValueQuiet(int v);
+    // A fractional scale: the slider moves in `step` units from `min` to `max`, the box shows `decimals` places
+    // (IPD: 58..72 in 0.5). value() / valueChanged then count steps; realValue() / realValueChanged are the value.
+    void setRealRange(double min, double max, double step, int decimals);
+    double realValue() const;
+    void setRealValueQuiet(double v);
 
 signals:
     void valueChanged(int v);
+    void realValueChanged(double v);
 
 private:
     TickSlider* slider_;
-    QSpinBox* box_;
+    QDoubleSpinBox* box_;
+    double step_ = 1.0;
     bool quiet_ = false;
 };
 

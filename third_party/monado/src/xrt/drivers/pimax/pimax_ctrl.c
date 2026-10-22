@@ -1258,6 +1258,16 @@ attach_thread(void *arg)
 		} else if (hs < 0) {
 			U_LOG_IFL_W(ctx->log_level, "PIMAX_HAPTICS: malformed test pulse request ignored");
 		}
+#ifdef PIMAX_IPD
+		// Lens IPD motor from the app's IPD slider ($XDG_RUNTIME_DIR/pibridge/ipd-request): Monado owns the headset
+		// during an inside-out session, so the request is sent from here (pibridge-keepalived does it otherwise).
+		int ipd = pimax_ipd_poll_request(ctx->lib);
+		if (ipd > 0) {
+			U_LOG_IFL_I(ctx->log_level, "PIMAX_IPD: lens motor set to %.2f mm (app request)", ipd / 100.0);
+		} else if (ipd < 0) {
+			U_LOG_IFL_W(ctx->log_level, "PIMAX_IPD: IPD request not sent (%d)", ipd);
+		}
+#endif
 		struct timespec ts = {0, 100 * 1000 * 1000};
 		nanosleep(&ts, NULL);
 	}

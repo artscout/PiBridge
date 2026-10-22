@@ -17,15 +17,18 @@
 #include <QPushButton>
 #include <QHash>
 #include <QLayoutItem>
+#include <QSaveFile>
 #include <QStandardPaths>
 #include <QStyle>
 #include <QVBoxLayout>
+#include <cmath>
 
 #include "../core/apps_runtime.h"
 #include "../core/chovr.h"
 #include "../core/inside_out.h"
 #include "../core/monado_build.h"
 #include "../core/overlay_control.h"
+#include "../core/paths.h"
 #include "../core/rec_setup.h"
 #include "../core/steamvr.h"
 #include "../ui/icons.h"
@@ -427,8 +430,44 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     el->addWidget(calibrate_);
     el->addWidget(recenter_);
     quick->body()->addWidget(pibridge::ui::settingRow(QStringLiteral("Eye tracking"), eyeToggle_, eyeLinks, false, eyeTip));
-    import_ = pibridge::ui::toolButton(QStringLiteral("Import calibration from Windows..."));
-    quick->body()->addWidget(import_, 0, Qt::AlignLeft);
+    // IPD in mm (ipd_mm): the lens motors are moved to it (as Pimax Play / EVO's IPD ADJUSTMENT) and the renderers
+    // use the same value for the eye separation - Monado (OXR_DEBUG_IPD_MM, and live from pibridge.conf) and
+    // CustomHeadsetOpenVR ("ipd", live from its settings.json). Sent 0.6 s after the last change so a drag does not
+    // run the motors step by step.
+    ipd_ = new pibridge::ui::SliderRow(QStringLiteral("IPD"), 58, 72, QStringLiteral("mm"), false,
+                                       QStringLiteral("Moves the lenses to your IPD and renders with the same eye "
+                                                      "distance, at once (Lighthouse and inside-out). Starts at the "
+                                                      "lens position the headset reports."));
+    ipd_->setRealRange(58.0, 72.0, 0.5, 1); // the motor's range and step
+    quick->body()->addWidget(ipd_);
+    ipdTimer_ = new QTimer(this);
+    ipdTimer_->setSingleShot(true);
+    ipdTimer_->setInterval(600);
+    connect(ipd_, &pibridge::ui::SliderRow::realValueChanged, ipdTimer_, qOverload<>(&QTimer::start));
+    connect(ipdTimer_, &QTimer::timeout, this, [this] {
+        const double mm = ipd_->realValue();
+        const QString v = QString::number(mm, 'f', 1);
+        const bool confOk = conf_.set(reckey::kIpdMm, v.toStdString());
+        const bool chovrOk = chovrSetIpd(chovrSettingsFile(), mm);
+        // the lens motor: whoever owns the headset (pibridge-keepalived, or Monado's driver in inside-out) takes it
+        bool motorOk = false;
+        ipdSent_.start();
+        {
+            QDir().mkpath(statusDir());
+            QSaveFile f(statusDir() + QStringLiteral("/ipd-request"));
+            if (f.open(QIODevice::WriteOnly)) {
+                f.write(v.toUtf8() + '\n');
+                motorOk = f.commit();
+            }
+        }
+        if (confOk && chovrOk && motorOk) {
+            say(QStringLiteral("IPD %1 mm: lenses moving, rendering with %1 mm.").arg(v));
+        } else {
+            say(QStringLiteral("IPD %1 mm: could not write %2.")
+                    .arg(v, !confOk ? conf_.path() : (!chovrOk ? chovrSettingsFile() : statusDir())),
+                true);
+        }
+    });
     toolResult_ = pibridge::ui::dimLabel(QString());
     quick->body()->addWidget(toolResult_);
     quick->body()->addWidget(pibridge::ui::rule());
@@ -476,24 +515,6 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     connect(recenter_, &QPushButton::clicked, this, [this] {
         setBusy(QStringLiteral("Recentering in the headset: A starts, B at the end saves, B on the grid exits..."));
         if (!actions_.recenter([this](int c, const QString& o) { toolDone(QStringLiteral("Recenter"), c, o); })) {
-            setBusy({});
-        }
-    });
-    connect(import_, &QPushButton::clicked, this, [this] {
-        const QString file = QFileDialog::getOpenFileName(
-            this, QStringLiteral("Calibration from Pimax Play / EVO (Windows)"),
-            QStandardPaths::writableLocation(QStandardPaths::HomeLocation),
-            QStringLiteral("Pimax calibration (calibration.setpm *.setpm);;All files (*)"));
-        if (file.isEmpty()) {
-            return;
-        }
-        setBusy(QStringLiteral("Importing %1...").arg(file));
-        if (!actions_.importProfile(file, [this](int c, const QString& o) {
-                toolDone(QStringLiteral("Import"), c,
-                         c == 0 ? QStringLiteral("Saved to %1. Eye tracking uses it from now on.")
-                                      .arg(actions_.eyeProfileOut())
-                                : o);
-            })) {
             setBusy({});
         }
     });
@@ -889,6 +910,13 @@ void DashboardPage::applyConf() {
     refresh_->setCurrent(conf_.refreshHz() == 72 ? 0 : 1);
     eyeToggle_->setCheckedQuiet(conf_.eyeTracking());
     audio_->setCheckedQuiet(conf_.audioToHeadset());
+    {
+        bool ok = false;
+        const double ipd = conf_.value(reckey::kIpdMm, QString()).trimmed().toDouble(&ok);
+        if (!ipdFromHeadset_) {
+            ipd_->setRealValueQuiet(ok && ipd >= 58.0 && ipd <= 72.0 ? ipd : reckey::kIpdDefaultMm);
+        }
+    }
     io_.refresh();
     updateMode();
 }
@@ -917,6 +945,22 @@ void DashboardPage::applyState() {
         say(QStringLiteral("SteamVR is running."));
     }
     const KeepaliveStatus& k = s.keepalive;
+    // The lens IPD the headset reports: at start and whenever it changes (the IPD buttons on the headset move the
+    // lenses themselves), put the slider there and render with it; the motors are not touched. Not while the user is
+    // moving the slider, nor for a few seconds after our own request (the lenses are still travelling).
+    const bool settled = !ipdTimer_->isActive() && (!ipdSent_.isValid() || ipdSent_.elapsed() > 4000);
+    if (settled && k.lensIpdMm >= 58.0 && k.lensIpdMm <= 72.0 &&
+        (!ipdFromHeadset_ || std::abs(k.lensIpdMm - lastLensIpdMm_) >= 0.25)) {
+        ipdFromHeadset_ = true;
+        lastLensIpdMm_ = k.lensIpdMm;
+        const double mm = std::round(k.lensIpdMm * 2.0) / 2.0;
+        ipd_->setRealValueQuiet(mm);
+        const QString v = QString::number(mm, 'f', 1);
+        if (conf_.value(reckey::kIpdMm, QString()).trimmed() != v) {
+            conf_.set(reckey::kIpdMm, v.toStdString());
+            chovrSetIpd(chovrSettingsFile(), mm);
+        }
+    }
     // During a live SteamVR session keepalived is paused (Monado owns the headset HID) and reports no model/serial, so
     // read the headset from what SteamVR shows instead.
     const VrDevice* hmd = nullptr;
@@ -1059,7 +1103,8 @@ void DashboardPage::applyState() {
                       (s.eyed.running && s.eyed.profile == QLatin1String("user")
                            ? QStringLiteral("\nCalibration: your profile")
                            : s.eyed.running && s.eyed.profile == QLatin1String("none")
-                                 ? QStringLiteral("\nNo calibration profile yet: import it from Windows.")
+                                 ? QStringLiteral("\nNo calibration profile yet: Calibrate, or import it from "
+                                                  "Windows on the Development page.")
                                  : QString()));
 }
 
@@ -1092,11 +1137,9 @@ void DashboardPage::toolDone(const QString& what, int code, const QString& out) 
 
 void DashboardPage::updateToolButtons() {
     const bool eyecal = !actions_.eyecalTool().isEmpty();
-    const bool eyeTool = !actions_.eyeTool().isEmpty();
     const bool idle = busy_.isEmpty();
     calibrate_->setEnabled(eyecal && idle);
     recenter_->setEnabled(eyecal && idle);
-    import_->setEnabled(eyeTool && idle);
     const QString missingCal = QStringLiteral("pibridge-eyecal was not found (PATH or this build).");
     calibrate_->setToolTip(eyecal ? QStringLiteral("Calibrates the eye tracker itself, as Pimax Play does. The headset shows a grid "
                                                    "with your gaze; A starts, follow the green dot, B saves and "
@@ -1105,9 +1148,6 @@ void DashboardPage::updateToolButtons() {
     recenter_->setToolTip(eyecal ? QStringLiteral("A quick re-centre: 5 dots, removes a constant offset. Starts and ends on the "
                                                   "gaze grid.")
                                  : missingCal);
-    import_->setToolTip(eyeTool ? QStringLiteral("Reads calibration.setpm from Pimax Play / EVO under Windows and "
-                                                 "saves your eye profile (pibridge-eye profile).")
-                                : QStringLiteral("pibridge-eye was not found (PATH, this build, or the omarchyvr build)."));
 }
 
 } // namespace pibridge::app

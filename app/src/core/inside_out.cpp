@@ -291,6 +291,8 @@ IoSessionEnv buildIoEnv(const IoSettings& io, const RecSetup& s, int refreshHz, 
     if (!s.lens.path.isEmpty()) {
         d << QStringLiteral("PIMAX_LENS_CONF=") + s.lens.path;
     }
+    // the eye separation both the SteamVR driver (ovrd_driver.cpp pimax_ipd_meters) and native OpenXR render with
+    d << QStringLiteral("OXR_DEBUG_IPD_MM=%1").arg(s.ipdMm, 0, 'f', 1);
     d << QStringLiteral("PIMAX_CAM_CALIB=") + s.calib.path << QStringLiteral("PIMAX_CAM_SOURCE=broker");
     const bool pimax = io.slamEngine == SlamEngine::Pimax;
     QString pimaxWhy;

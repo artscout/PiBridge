@@ -116,6 +116,12 @@ int pimax_haptic(pimax_t *h, uint8_t slot, float amplitude, int64_t duration_ns)
 int pimax_haptic_poll_request(pimax_t *h);
 void pimax_haptic_counts(pimax_t *h, uint64_t *sent, uint64_t *replaced);
 
+/* Lens IPD motor request file $XDG_RUNTIME_DIR/pibridge/ipd-request ("MM", e.g. 63.5): taken and sent if present
+ * (58 06 5c 05 01 <mm*100 LE>, through the model's allowlist). Returns the mm x 100 sent, 0 if none, -EINVAL if
+ * malformed, -EPERM if the gate refused it (no motor on this model) or it could not be written. */
+#define PIMAX_IPD 1
+int pimax_ipd_poll_request(pimax_t *h);
+
 /* Pure decoders (exposed for tests). Return 0 if the buffer is not that kind of report. */
 int pimax_decode_imu(const uint8_t r[PIMAX_REPORT_SIZE], pimax_imu_sample out[2]);
 int pimax_decode_controller(const uint8_t r[PIMAX_REPORT_SIZE], pimax_controller_report *out);

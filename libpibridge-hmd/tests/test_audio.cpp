@@ -94,4 +94,42 @@ TEST(pactl_missing_is_harmless) {
     CHECK(before == Before{});
 }
 
+TEST(volume_text_and_calls) {
+    CHECK(parse_volume("Volume: front-left: 27525 /  42% / -22.49 dB,   front-right: 27525 /  42% / -22.49 dB") ==
+          std::optional<std::string>("42%"));
+    CHECK(parse_volume("Volume: mono: 65536 / 100% / 0.00 dB") == std::optional<std::string>("100%"));
+    CHECK(!parse_volume("no percent here"));
+    std::vector<std::vector<std::string>> calls;
+    const Runner r = [&calls](const std::vector<std::string>& a) {
+        calls.push_back(a);
+        if (a[0] == "get-sink-volume") {
+            return std::optional<std::string>("Volume: front-left: 27525 /  42% / -22.49 dB");
+        }
+        return std::optional<std::string>("");
+    };
+    CHECK(sink_volume("hs", r) == std::optional<std::string>("42%"));
+    CHECK(set_sink_volume("hs", "55%", r));
+    CHECK((calls.back() == std::vector<std::string>{"set-sink-volume", "hs", "55%"}));
+}
+
+TEST(volume_buttons) {
+    CHECK((volume_button("[00:24:31.512,207] <info> app: vol up 1") == VolumeButton{1, true}));
+    CHECK((volume_button("[00:24:31.640,001] <info> app: vol up 0") == VolumeButton{1, false}));
+    CHECK((volume_button("[00:24:33.100,000] <info> app: vol down 1") == VolumeButton{-1, true}));
+    CHECK((volume_button("<info> app: vol down 0") == VolumeButton{-1, false}));
+    CHECK(volume_button("<error> app: tx queue full ret 0").dir == 0);
+    std::string set;
+    const Runner r = [&set](const std::vector<std::string>& a) {
+        if (a[0] == "get-sink-volume") {
+            return std::optional<std::string>("Volume: front-left: 64225 /  98% / -0.53 dB");
+        }
+        set = a[2];
+        return std::optional<std::string>("");
+    };
+    CHECK(step_sink_volume("hs", 1, r) == std::optional<std::string>("99%"));
+    CHECK(step_sink_volume("hs", 5, r) == std::optional<std::string>("100%")); // capped
+    CHECK(step_sink_volume("hs", -2, r) == std::optional<std::string>("96%"));
+    CHECK(set == "96%");
+}
+
 PIBRIDGE_TEST_MAIN()

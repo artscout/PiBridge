@@ -80,8 +80,6 @@ private:
     pibridge::ui::Toggle* anchorGlide_ = nullptr;
     QLabel* slamPreview_ = nullptr;
 
-    QComboBox* lens_ = nullptr; // lens_profile: Default (CHOVR) | Like Pimax | Pimax native (dropdown; 3 options are too wide as a segment)
-
     pibridge::ui::Segmented* camAe_ = nullptr;
     pibridge::ui::Segmented* camModel_ = nullptr;
     pibridge::ui::Toggle* camLaw_ = nullptr;

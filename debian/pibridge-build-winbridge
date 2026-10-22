@@ -1,0 +1,4 @@
+#!/bin/sh
+# pibridge-build-winbridge: build the inside-out (Pimax-engine) host winbridge from the sources the package ships in
+# /usr/share/pibridge/winbridge-src and install it for this user (~/.local/share/pibridge/winbridge/).
+exec sh /usr/share/pibridge/winbridge-src/build-winbridge.sh "$@"

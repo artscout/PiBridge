@@ -16,6 +16,7 @@ class SliderRow;
 class Segmented;
 } // namespace pibridge::ui
 
+class QComboBox;
 class QLabel;
 
 namespace pibridge::app {
@@ -32,6 +33,7 @@ private:
     void load();                    // read the CHOVR settings into the sliders
     void save();                    // write the sliders back to the CHOVR settings file
     void refreshInfo();
+    void loadLens();                // the lens profile (pibridge.conf lens_profile) into the dropdown
 
     StateSource& source_;
     Conf& conf_;
@@ -44,7 +46,8 @@ private:
     pibridge::ui::SliderRow* blackLevel_ = nullptr;
     pibridge::ui::SliderRow* gamma_ = nullptr;
     pibridge::ui::SliderRow* saturation_ = nullptr;
-    pibridge::ui::SliderRow* ipd_ = nullptr;
+    QComboBox* lens_ = nullptr;     // lens_profile: Crystal Super Oled chovr | Crystal Super Oled native
+    QLabel* lensNote_ = nullptr;    // shown while an explicit rec_lens_conf overrides the profile
     bool loading_ = false;
 };
 

@@ -13,6 +13,7 @@ add_library(pibridge_hmd STATIC
     src/descriptor.cpp
     src/haptics.cpp
     src/pairing.cpp
+    src/ipd.cpp
     src/session.cpp
     src/fake.cpp
     src/audio.cpp

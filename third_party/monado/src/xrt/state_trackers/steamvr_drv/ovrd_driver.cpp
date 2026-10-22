@@ -15,6 +15,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <sys/stat.h>
 #include <cassert>
 #include <array>
 #include <thread>
@@ -1388,6 +1389,9 @@ private:
  *
  */
 
+static void
+create_translation_rotation_matrix(struct xrt_pose *pose, struct vr::HmdMatrix34_t *res);
+
 class CDeviceDriver_Monado : public vr::ITrackedDeviceServerDriver, public vr::IVRDisplayComponent
 {
 public:
@@ -1462,6 +1466,64 @@ private:
 
 public:
 	/*!
+	 * The IPD live: PiBridge's Dashboard slider writes ipd_mm to ~/.config/pibridge/pibridge.conf (the start value
+	 * came in OXR_DEBUG_IPD_MM). Checked twice a second from RunFrame; a new value moves the eyes at once
+	 * (Prop_UserIpdMeters_Float + SetDisplayEyeToHead), as CustomHeadsetOpenVR does when its settings.json changes.
+	 */
+	void
+	UpdateIpdFromConf()
+	{
+		if (m_ulPropertyContainer == vr::k_ulInvalidPropertyContainer) {
+			return;
+		}
+		const timepoint_ns now_ns = os_monotonic_get_ns();
+		if (now_ns - m_ipd_checked_ns < 500000000LL) {
+			return;
+		}
+		m_ipd_checked_ns = now_ns;
+		char path[1024];
+		const char *cfg = getenv("XDG_CONFIG_HOME");
+		const char *home = getenv("HOME");
+		if (cfg != NULL && cfg[0] != '\0') {
+			snprintf(path, sizeof(path), "%s/pibridge/pibridge.conf", cfg);
+		} else {
+			snprintf(path, sizeof(path), "%s/.config/pibridge/pibridge.conf", home != NULL ? home : "");
+		}
+		struct stat st;
+		if (stat(path, &st) != 0 || st.st_mtime == m_ipd_conf_mtime) {
+			return;
+		}
+		m_ipd_conf_mtime = st.st_mtime;
+		FILE *f = fopen(path, "r");
+		if (f == NULL) {
+			return;
+		}
+		float mm = 0.f;
+		char line[512];
+		while (fgets(line, sizeof(line), f) != NULL) {
+			if (strncmp(line, "ipd_mm=", 7) == 0) {
+				mm = strtof(line + 7, NULL); // the last live line wins
+			}
+		}
+		fclose(f);
+		if (!(mm >= 50.f && mm <= 80.f) || fabsf(mm / 1000.f - m_flIPD) < 0.0001f) {
+			return;
+		}
+		struct xrt_vec3 ipd_vec = {mm / 1000.f, 0, 0};
+		struct xrt_space_relation head_relation;
+		xrt_device_get_view_poses(m_xdev, &ipd_vec, now_ns, XRT_VIEW_TYPE_STEREO, 2, &head_relation, m_fovs,
+		                          m_view_pose);
+		m_flIPD = -m_view_pose[0].position.x + m_view_pose[1].position.x;
+		vr::VRProperties()->SetFloatProperty(m_ulPropertyContainer, vr::Prop_UserIpdMeters_Float, m_flIPD);
+		vr::HmdMatrix34_t left;
+		create_translation_rotation_matrix(&m_view_pose[0], &left);
+		vr::HmdMatrix34_t right;
+		create_translation_rotation_matrix(&m_view_pose[1], &right);
+		vr::VRServerDriverHost()->SetDisplayEyeToHead(m_trackedDeviceIndex, left, right);
+		ovrd_log("IPD changed live (pibridge.conf ipd_mm): %f\n", m_flIPD);
+	}
+
+	/*!
 	 * vrcompositor overwrites Prop_DisplayFrequency_Float with its own idea (90 Hz) right after it starts, although
 	 * it selected the panel's 72 Hz mode and the panel was woken at PIMAX_FPS; games read that property for frame
 	 * pacing and reprojection timing. Put the device's rate back whenever it differs (checked from RunFrame).
@@ -1486,6 +1548,8 @@ public:
 private:
 	int m_displayFrequencyResets = 0;
 	float m_flIPD = -1;
+	timepoint_ns m_ipd_checked_ns = 0;
+	time_t m_ipd_conf_mtime = 0;
 
 	struct xrt_fov m_fovs[2];
 	struct xrt_pose m_view_pose[2];
@@ -2022,6 +2086,7 @@ CServerDriver_Monado::RunFrame()
 {
 	if (m_MonadoDeviceDriver) {
 		m_MonadoDeviceDriver->ReassertDisplayFrequency();
+		m_MonadoDeviceDriver->UpdateIpdFromConf();
 	}
 	if (m_left) {
 		m_left->RunFrame();

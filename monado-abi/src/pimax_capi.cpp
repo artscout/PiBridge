@@ -14,7 +14,10 @@
 
 #include "pibridge/cam/rustfmt.h"
 #include "pibridge/hmd/descriptor.h"
+
+#include <cmath>
 #include "pibridge/hmd/haptics.h"
+#include "pibridge/hmd/ipd.h"
 #include "pibridge/hmd/proto.h"
 #include "pibridge/hmd/session.h"
 
@@ -435,6 +438,24 @@ PIBRIDGE_PIMAX_ABI int pimax_haptic_poll_request(pimax_t* h) {
         const auto [slot, amp, ms] = **r;
         s.haptic(slot, hmd::haptics::Pulse{amp, ms});
         return static_cast<int>(slot);
+    });
+}
+
+/// Take an IPD motor request ($XDG_RUNTIME_DIR/pibridge/ipd-request) and send it: the mm x 100 sent, 0 when there
+/// was none, -EINVAL for a malformed request (removed), -EPERM when the gate refused it or the write failed.
+PIBRIDGE_PIMAX_ABI int pimax_ipd_poll_request(pimax_t* h) {
+    return guarded(h, [&](hmd::Session& s) {
+        const auto r = hmd::ipd::take_request(hmd::ipd::request_path());
+        if (!r) {
+            return -EINVAL;
+        }
+        if (!*r) {
+            return 0;
+        }
+        if (!s.send_report(hmd::ipd_motor(**r))) {
+            return -EPERM;
+        }
+        return static_cast<int>(std::lround(**r * 100.0f));
     });
 }
 

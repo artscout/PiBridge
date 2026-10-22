@@ -100,8 +100,9 @@ interchangeable head-tracking engines, chosen on the Tracking page:
   config PiBridge generates from the headset calibration.
 
 Controllers are found by their LEDs in the cameras (Pimax's LED engine in the same winbridge, or our
-`pibridge-ctrltrack` + IMU fusion). The lens distortion/FOV is a selectable profile (Default / like-Pimax / the raw
-Pimax compositor mesh).
+`pibridge-ctrltrack` + IMU fusion). The lens distortion/FOV is a selectable profile on the Display page (Crystal Super
+Oled native: the Pimax compositor geometry; Crystal Super Oled chovr: CustomHeadsetOpenVR's lens shape), both with
+each eye's axis set by a true rotation.
 
 Status on the Crystal Super (no faceplate), as of 2026-10-19:
 

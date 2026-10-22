@@ -6,9 +6,12 @@
 
 #include "pibridge/hmd/discovery.h"
 #include "pibridge/hmd/haptics.h"
+#include "pibridge/hmd/ipd.h"
 #include "pibridge_status.h"
 
 #include <deque>
+#include <cmath>
+#include <atomic>
 
 #include <cstdio>
 #include <cstdlib>
@@ -144,6 +147,11 @@ struct Daemon::Events {
     std::function<void(std::string_view)> say;
     /// Firmware log lines (IF3) not looked at yet (pairing verdicts); the oldest dropped beyond 64.
     std::deque<std::string> log;
+    /// Volume button presses (+1 up, -1 down) not applied yet, and the button held now (0 = none).
+    int volume_steps = 0;
+    int volume_held = 0;
+    /// The lens IPD from the IMU reports, mm x 100 (0 = none yet); written on the session thread at the IMU rate.
+    std::atomic<int> lens_ipd_x100{0};
     /// Last report / heartbeat of slot 2 and 3, and the last controller report alone.
     std::array<std::optional<Clock::time_point>, 2> heard;
     std::array<std::optional<Clock::time_point>, 2> streamed;
@@ -153,7 +161,26 @@ namespace {
 
 class H : public Handler {
 public:
-    explicit H(std::shared_ptr<Daemon::Events> ev) : ev_(std::move(ev)) {}
+    explicit H(std::shared_ptr<Daemon::Events> ev) : ev_(std::move(ev)) {
+        // PIBRIDGE_HMD_CAPTURE=<file>: append every report this daemon does not decode (IF0 replies, IF1/IF2 reports
+        // that are not IMU or controller data, IF3 log lines), one line each with milliseconds since the start, to find
+        // the format of unknown reports (the headset's volume buttons). Off without the variable.
+        if (const char* path = std::getenv("PIBRIDGE_HMD_CAPTURE"); path != nullptr && path[0] != '\0') {
+            capture_ = std::fopen(path, "a");
+            if (capture_ != nullptr) {
+                std::setvbuf(capture_, nullptr, _IOLBF, 0);
+                std::fprintf(capture_, "# pibridge-keepalived capture started\n");
+            }
+        }
+        t0_ = std::chrono::steady_clock::now();
+    }
+    ~H() override {
+        if (capture_ != nullptr) {
+            std::fclose(capture_);
+        }
+    }
+    void on_reply(const Report& d) override { capture(0, d, d.size()); }
+    void on_other(std::size_t idx, const Report& d, std::size_t len) override { capture(idx, d, len); }
     void on_state(State s) override {
         {
             std::lock_guard g(ev_->mu);
@@ -162,6 +189,22 @@ public:
         eventfd_signal(ev_->fd.get());
     }
     void on_log(std::string_view l) override {
+        if (capture_ != nullptr) {
+            std::fprintf(capture_, "%lld if3 log %.*s\n", static_cast<long long>(ms()), static_cast<int>(l.size()),
+                         l.data());
+        }
+        if (const auto b = audio::volume_button(l); b.dir != 0) {
+            {
+                std::lock_guard g(ev_->mu);
+                if (b.pressed) {
+                    ev_->volume_steps += b.dir;
+                    ev_->volume_held = b.dir;
+                } else if (ev_->volume_held == b.dir) {
+                    ev_->volume_held = 0;
+                }
+            }
+            eventfd_signal(ev_->fd.get());
+        }
         std::lock_guard g(ev_->mu);
         ev_->log.emplace_back(l);
         if (ev_->log.size() > 64) {
@@ -169,6 +212,11 @@ public:
         }
     }
     void on_status(const ControllerStatus& s) override { heard(s.slot, false); }
+    void on_imu(const ImuSample& s) override {
+        if (s.ipd_mm >= 40.0f && s.ipd_mm <= 90.0f) {
+            ev_->lens_ipd_x100.store(static_cast<int>(std::lround(s.ipd_mm * 100.0f)), std::memory_order_relaxed);
+        }
+    }
     void on_controller(const ControllerReport& r) override { heard(r.slot, true); }
     void on_link_closed(std::chrono::nanoseconds lived, std::uint64_t keepalives) override {
         char b[96];
@@ -180,6 +228,28 @@ public:
     }
 
 private:
+    long long ms() const {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0_).count();
+    }
+    void capture(std::size_t idx, const Report& d, std::size_t len) {
+        if (capture_ == nullptr) {
+            return;
+        }
+        // trailing zeros are the read buffer's padding; keep at least the first 8 bytes
+        while (len > 8 && d[len - 1] == 0) {
+            len--;
+        }
+        std::string hex;
+        char b[4];
+        for (std::size_t i = 0; i < len && i < d.size(); i++) {
+            std::snprintf(b, sizeof b, "%02x", d[i]);
+            hex += b;
+        }
+        std::fprintf(capture_, "%lld if%zu %s\n", ms(), idx, hex.c_str());
+    }
+    FILE* capture_ = nullptr;
+    std::chrono::steady_clock::time_point t0_;
+
     void heard(std::uint8_t slot, bool report) {
         if (!is_slot(slot)) {
             return;
@@ -322,7 +392,114 @@ void Daemon::go_idle() {
     audio_off();
 }
 
+void Daemon::track_volume(Clock::time_point now) {
+    if (deps_.volume_file.empty() || (volume_at_ && now - *volume_at_ < VOLUME_EVERY)) {
+        return;
+    }
+    volume_at_ = now;
+    const auto sink = audio::headset_sink(deps_.pactl);
+    if (!sink) {
+        volume_sink_.clear();
+        return;
+    }
+    std::string saved;
+    if (std::ifstream f(deps_.volume_file); f) {
+        std::getline(f, saved);
+    }
+    if (*sink != volume_sink_) {
+        volume_sink_ = *sink;
+        if (!saved.empty() && audio::sink_volume(*sink, deps_.pactl) != saved &&
+            audio::set_sink_volume(*sink, saved, deps_.pactl)) {
+            say("audio: headset volume " + saved + " put back");
+        }
+        return;
+    }
+    const auto v = audio::sink_volume(*sink, deps_.pactl);
+    if (v && *v != saved) {
+        std::error_code ec;
+        std::filesystem::create_directories(deps_.volume_file.parent_path(), ec);
+        const auto tmp = deps_.volume_file.string() + ".tmp";
+        if (std::ofstream o(tmp); o && (o << *v << '\n')) {
+            o.close();
+            std::filesystem::rename(tmp, deps_.volume_file, ec);
+        }
+    }
+}
+
+void Daemon::read_volume_button_file() {
+    std::filesystem::path p = deps_.volume_button_file;
+    if (p.empty()) {
+        const char* rt = std::getenv("XDG_RUNTIME_DIR");
+        p = std::filesystem::path(rt != nullptr && rt[0] != '\0' ? rt : "/tmp") / "pibridge/volume-button";
+    }
+    std::ifstream f(p);
+    unsigned long seq = 0;
+    int dir = 0;
+    int pressed = 0;
+    if (!(f >> seq >> dir >> pressed) || (dir != 1 && dir != -1)) {
+        return;
+    }
+    const bool first = !button_seq_;
+    if (!first && seq == *button_seq_) {
+        return;
+    }
+    button_seq_ = seq;
+    if (first) {
+        return; // an entry from before this daemon looked: not a press now
+    }
+    std::lock_guard g(ev_->mu);
+    if (pressed != 0) {
+        ev_->volume_steps += dir;
+        ev_->volume_held = dir;
+    } else if (ev_->volume_held == dir) {
+        ev_->volume_held = 0;
+    }
+}
+
+void Daemon::volume_buttons(Clock::time_point now) {
+    int steps = 0;
+    int held = 0;
+    {
+        std::lock_guard g(ev_->mu);
+        steps = std::exchange(ev_->volume_steps, 0);
+        held = ev_->volume_held;
+    }
+    if (held != hold_dir_) {
+        hold_dir_ = held;
+        hold_since_ = last_repeat_ = now;
+    } else if (held != 0 && now - hold_since_ >= VOLUME_REPEAT_DELAY && now - last_repeat_ >= VOLUME_REPEAT) {
+        if (now - hold_since_ < VOLUME_HOLD_MAX) {
+            steps += held;
+            last_repeat_ = now;
+        }
+    }
+    if (steps == 0) {
+        return;
+    }
+    const auto sink = audio::headset_sink(deps_.pactl);
+    if (!sink) {
+        say("audio: volume button, but no headset output");
+        return;
+    }
+    if (const auto v = audio::step_sink_volume(*sink, steps, deps_.pactl); v && held == 0) {
+        say("audio: headset volume " + *v + " (button)");
+    }
+}
+
+std::chrono::milliseconds Daemon::poll_timeout() const {
+    if (hold_dir_ != 0) {
+        return std::chrono::milliseconds(20);
+    }
+    // paused: the volume buttons come from Monado's file, looked at on every tick
+    return paused_ ? std::chrono::milliseconds(50) : std::chrono::milliseconds(500);
+}
+
 void Daemon::tick(Clock::time_point now) {
+    if (paused_) {
+        read_volume_button_file();
+    }
+    volume_buttons(now);
+    track_volume(now);
     if (paused_ && !stopped_) {
         controllers(now); // pair / unpair refused with the reason; the vibration file is Monado's
         write_status(now, false); // the status file stays fresh while paused
@@ -539,6 +716,7 @@ Status Daemon::status() const {
     }
     s.follow_running = follow_ && follow_running_;
     s.audio_on_headset = audio_before_ && (audio_before_->our_sink || audio_before_->our_source);
+    s.lens_ipd_x100 = ev_->lens_ipd_x100.load(std::memory_order_relaxed);
     s.error = error_;
     const bool present = session_ && session_->is_connected();
     s.headset_present = present;
@@ -602,6 +780,7 @@ void Daemon::write_status(Clock::time_point now, bool force) {
         .boolean("right_connected", s.right_connected)
         .integer("haptic_seq", static_cast<long long>(s.haptic_seq))
         .str("haptic_result", s.haptic_result)
+        .integer("lens_ipd_x100", s.lens_ipd_x100)
         .integer("pid", static_cast<long long>(::getpid()));
     w.write(deps_.status_name);
     last_status_ = s;
@@ -638,7 +817,20 @@ void Daemon::controllers(Clock::time_point now) {
     }
     pair_progress(now);
     if (paused_) {
-        return; // the vibration request is taken by Monado's Pimax driver during an inside-out session
+        return; // the vibration and IPD requests are taken by Monado's Pimax driver during an inside-out session
+    }
+    if (auto r = ipd::take_request(ipd::request_path()); !r) {
+        say("IPD request: " + r.error());
+    } else if (*r) {
+        if (!session_ || !session_->is_connected()) {
+            say("IPD request: no headset");
+        } else if (auto w = session_->send_report(ipd_motor(**r)); !w) {
+            say("IPD motor not moved: " + w.error().message());
+        } else {
+            char b[64];
+            std::snprintf(b, sizeof b, "IPD motor set to %.1f mm", static_cast<double>(**r));
+            say(b);
+        }
     }
     if (auto h = haptics::take_request(haptic_request_path()); !h) {
         haptic_seq_++;

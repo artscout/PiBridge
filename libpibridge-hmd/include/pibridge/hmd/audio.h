@@ -40,6 +40,29 @@ struct Before {
 
 /// Make the headset the default output and input; a log line and what to restore later.
 std::pair<std::string, Before> to_headset(const Runner& pactl = run_pactl);
+/// The headset's output node (`pactl list short sinks`), nullopt when there is none.
+std::optional<std::string> headset_sink(const Runner& pactl = run_pactl);
+/// A sink's volume as pactl takes it back ("42%", the first channel of `pactl get-sink-volume`); nullopt on failure.
+std::optional<std::string> sink_volume(const std::string& sink, const Runner& pactl = run_pactl);
+/// `pactl set-sink-volume <sink> <volume>`; false on failure.
+bool set_sink_volume(const std::string& sink, const std::string& volume, const Runner& pactl = run_pactl);
+/// The first "NN%" in pactl's volume text, nullopt when there is none.
+std::optional<std::string> parse_volume(std::string_view text);
+
+/// A volume button change, from the firmware log lines on IF3: "<info> app: vol up 1" (pressed), "... vol up 0"
+/// (released), the same with "vol down".
+struct VolumeButton {
+    int dir = 0;          // +1 up, -1 down, 0 = not a volume button line
+    bool pressed = false; // true: pressed, false: released
+    bool operator==(const VolumeButton&) const = default;
+};
+VolumeButton volume_button(std::string_view log_line);
+/// One volume step of the buttons, in percent.
+inline constexpr int VOLUME_STEP = 1;
+/// `pactl set-sink-volume` to the current volume +- `steps` * VOLUME_STEP, kept within 0..100 %; the new volume
+/// ("45%"), nullopt when the volume could not be read or set.
+std::optional<std::string> step_sink_volume(const std::string& sink, int steps, const Runner& pactl = run_pactl);
+
 /// Give the defaults back (each only if the headset is still the default, i.e. the user did not change it).
 std::string restore(const Before& b, const Runner& pactl = run_pactl);
 

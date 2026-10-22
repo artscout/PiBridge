@@ -168,23 +168,17 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
                          data + QStringLiteral("/slam/pimax-basalt.toml"),
                          h + QStringLiteral("/gamedev/ext/slam/pimax-basalt.toml")},
                         h, isFile);
-    // The lens profile (lens_profile, the Tracking page's selector):
-    //   "native" = crystal-pimax-native.conf (the raw Pimax PVR compositor mesh, true anisotropic distortion, ~98x93),
-    //   "pimax"  = crystal-pimax.conf        (sboys3's radial "like Pimax" fit, FOV 98.2x87.1, centre -3.59/+2.69),
+    // The lens profile (lens_profile, the Display page's selector):
+    //   "native" = crystal-pimax-native.conf (the Pimax geometry, the eye axis set by a true rotation),
     //   else       crystal-chovr.conf        (CHOVR's camera-calibrated default, FOV 98x88 = what CHOVR renders).
-    // The chosen profile is tried first, then the others, so a missing file still resolves. An explicit rec_lens_conf
+    // The chosen profile is tried first, then the other, so a missing file still resolves. An explicit rec_lens_conf
     // path still wins. crystal.conf (the raw PVR dump, inflated 101x97 port) stays last as a legacy fallback.
     const QString lensProfile = conf.value(reckey::kLensProfile, QString()).trimmed();
     QStringList lensNames;
     if (lensProfile == QLatin1String("native")) {
-        lensNames = {QStringLiteral("crystal-pimax-native.conf"), QStringLiteral("crystal-pimax.conf"),
-                     QStringLiteral("crystal-chovr.conf")};
-    } else if (lensProfile == QLatin1String("pimax")) {
-        lensNames = {QStringLiteral("crystal-pimax.conf"), QStringLiteral("crystal-chovr.conf"),
-                     QStringLiteral("crystal-pimax-native.conf")};
+        lensNames = {QStringLiteral("crystal-pimax-native.conf"), QStringLiteral("crystal-chovr.conf")};
     } else {
-        lensNames = {QStringLiteral("crystal-chovr.conf"), QStringLiteral("crystal-pimax.conf"),
-                     QStringLiteral("crystal-pimax-native.conf")};
+        lensNames = {QStringLiteral("crystal-chovr.conf"), QStringLiteral("crystal-pimax-native.conf")};
     }
     QStringList lensCandidates{env.configDir + QStringLiteral("/lens.conf")};
     for (const QString& n : lensNames) {
@@ -219,6 +213,11 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
     s.headsetPresent = pimaxHeadsetPresent(env.usbRoot);
     s.io = ioSettings(conf);
     s.refreshHz = conf.refreshHz();
+    {
+        bool ok = false;
+        const double ipd = conf.value(reckey::kIpdMm, QString()).trimmed().toDouble(&ok);
+        s.ipdMm = ok && ipd >= 50.0 && ipd <= 80.0 ? ipd : reckey::kIpdDefaultMm;
+    }
     s.eyeTracking = conf.eyeTracking();
     s.eyeCalib = env.configDir + QStringLiteral("/eye-calibration.toml");
     s.sessionsDir = env.stateHome + QStringLiteral("/pibridge/inside-out");

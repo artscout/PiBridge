@@ -9,6 +9,7 @@
 #include <cerrno>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 
 #include <poll.h>
 #include <sys/signalfd.h>
@@ -44,7 +45,15 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    keepalived::Daemon d(*opts, keepalived::Deps{});
+    keepalived::Deps deps;
+    {
+        const char* st = std::getenv("XDG_STATE_HOME");
+        const char* home = std::getenv("HOME");
+        const std::filesystem::path base = st != nullptr && st[0] != '\0' ? std::filesystem::path(st)
+                                           : std::filesystem::path(home != nullptr ? home : "") / ".local/state";
+        deps.volume_file = base / "pibridge/headset-volume";
+    }
+    keepalived::Daemon d(*opts, std::move(deps));
     for (const auto& w : settings.warnings) {
         std::printf("%s %s: %s\n", local_hms().c_str(), settings_path.c_str(), w.c_str());
     }
@@ -58,7 +67,7 @@ int main(int argc, char** argv) {
     bool run = true;
     while (run) {
         std::array<pollfd, 2> pf{pollin(sfd.get()), pollin(d.wake_fd())};
-        (void)ppoll(pf, std::chrono::milliseconds(500));
+        (void)ppoll(pf, d.poll_timeout());
         if (pf[0].revents & POLLIN) {
             signalfd_siginfo si{};
             while (::read(sfd.get(), &si, sizeof si) == static_cast<ssize_t>(sizeof si)) {

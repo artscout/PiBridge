@@ -20,6 +20,11 @@ bool chovrDriverRegistered(const QString& vrpathFile);
 // CHOVR's default). A file without any headset entry runs on the defaults and counts too; "customShader" is not a
 // headset.
 bool chovrHeadsetEnabled(const QString& settingsFile);
+// Sets the virtual-camera IPD (mm) CustomHeadsetOpenVR renders with: "ipd" in every Crystal Super entry (the
+// Micro-OLED one is made when there is none), "hardwareIpd": false and no generalHeadset.horizontalIPDOffset (CHOVR reads the hardware IPD only through
+// Pimax's Windows runtime). Takes effect the next time SteamVR starts. False when the file could not be written.
+bool chovrSetIpd(const QString& settingsFile, double mm);
+
 // Both: the Lighthouse/SteamVR mode with CustomHeadsetOpenVR as the headset's driver.
 bool chovrActive(const QString& vrpathFile, const QString& settingsFile);
 

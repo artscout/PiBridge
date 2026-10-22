@@ -8,3 +8,6 @@ winbridge/*.cpp                 usr/share/pibridge/winbridge-src/
 winbridge/*.h                   usr/share/pibridge/winbridge-src/
 winbridge/build-winbridge.sh    usr/share/pibridge/winbridge-src/
 winbridge/vit/*                 usr/share/pibridge/winbridge-src/vit/
+
+# The `pibridge-build-winbridge` command postinst and the docs name: runs the shipped build-winbridge.sh.
+debian/pibridge-build-winbridge usr/bin/

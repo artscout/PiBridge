@@ -3,6 +3,7 @@
 #include "pibridge/hmd/audio.h"
 
 #include <cerrno>
+#include <cstdlib>
 #include <fcntl.h>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -143,6 +144,65 @@ std::string restore(const Before& b, const Runner& pactl) {
         done.push_back("input " + *b.source);
     }
     return done.empty() ? "audio: nothing to give back" : "audio: back to " + join(done, ", ");
+}
+
+std::optional<std::string> headset_sink(const Runner& pactl) {
+    if (const auto l = pactl({"list", "short", "sinks"})) {
+        return pick(*l, SINK_PREFIX);
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> parse_volume(std::string_view text) {
+    const auto pct = text.find('%');
+    if (pct == std::string_view::npos) {
+        return std::nullopt;
+    }
+    std::size_t b = pct;
+    while (b > 0 && text[b - 1] >= '0' && text[b - 1] <= '9') {
+        b--;
+    }
+    if (b == pct) {
+        return std::nullopt;
+    }
+    return std::string(text.substr(b, pct - b + 1));
+}
+
+std::optional<std::string> sink_volume(const std::string& sink, const Runner& pactl) {
+    if (const auto out = pactl({"get-sink-volume", sink})) {
+        return parse_volume(*out);
+    }
+    return std::nullopt;
+}
+
+bool set_sink_volume(const std::string& sink, const std::string& volume, const Runner& pactl) {
+    return pactl({"set-sink-volume", sink, volume}).has_value();
+}
+
+VolumeButton volume_button(std::string_view log_line) {
+    for (const auto& [text, b] : {std::pair{"app: vol up 1", VolumeButton{1, true}},
+                                  std::pair{"app: vol up 0", VolumeButton{1, false}},
+                                  std::pair{"app: vol down 1", VolumeButton{-1, true}},
+                                  std::pair{"app: vol down 0", VolumeButton{-1, false}}}) {
+        if (log_line.find(text) != std::string_view::npos) {
+            return b;
+        }
+    }
+    return {};
+}
+
+std::optional<std::string> step_sink_volume(const std::string& sink, int steps, const Runner& pactl) {
+    const auto cur = sink_volume(sink, pactl);
+    if (!cur) {
+        return std::nullopt;
+    }
+    int pct = std::atoi(cur->c_str()) + steps * VOLUME_STEP;
+    pct = pct < 0 ? 0 : (pct > 100 ? 100 : pct);
+    const std::string v = std::to_string(pct) + "%";
+    if (!set_sink_volume(sink, v, pactl)) {
+        return std::nullopt;
+    }
+    return v;
 }
 
 } // namespace pibridge::hmd::audio

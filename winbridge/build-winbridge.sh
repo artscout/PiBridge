@@ -1,7 +1,7 @@
 #!/bin/sh
 # build-winbridge.sh: build winbridge from the sources next to this script.
 #
-# This script ships IN the winbridge sources dir (not on $PATH); run it from there:
+# This script ships IN the winbridge sources dir; the package runs it as `pibridge-build-winbridge`, or directly:
 #   sh /usr/share/pibridge/winbridge-src/build-winbridge.sh
 #
 # winbridge is OUR code (MIT). It is the inside-out (Pimax-engine) tracking path:
@@ -41,3 +41,4 @@ g++ -O2 -std=c++20 -fPIC -shared vit_winbridge.cpp -o libpibridge_vit_winbridge.
 mkdir -p "$OUT"
 cp -f winbridge.exe libpibridge_vit_winbridge.so "$OUT"/
 echo "winbridge built and installed to $OUT"
+echo "Nothing to start by hand: the app runs it under Wine at every START TRACKING with Head tracking engine: Pimax."

@@ -74,6 +74,8 @@ inline constexpr std::uint8_t KEEPALIVE = 0x39;
 /// Headset-local info (also part of the controller attach burst).
 inline constexpr std::uint8_t INFO = 0x50;
 inline constexpr std::uint8_t APP_UNLOCK = 0x5b;
+/// Lens IPD motor `58 06 5c 05 01 <mm*100 LE>` (reply `4c 04 5c 05 01 07`).
+inline constexpr std::uint8_t IPD = 0x5c;
 } // namespace cmd
 
 // ------------------------------------------------------------------------------------------------ models
@@ -122,6 +124,8 @@ Report sys_reset();
 Report unpair(std::uint8_t slot);
 /// Controller pairing (StartPair): `58 04 04 00 SS`.
 Report start_pair(std::uint8_t slot);
+/// The lens IPD motor to `mm` (clamped to 58..72 mm; the allowlist checks the model's range).
+Report ipd_motor(float mm);
 /// Keepalive in the exact wire form Windows uses: `58 04 39 00 RR 00` (LL = 4: the trailing zero is the high byte of
 /// the u16 rate, outside LL).
 Report keepalive(std::uint8_t rate);

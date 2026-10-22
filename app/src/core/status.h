@@ -19,6 +19,7 @@ struct KeepaliveStatus {
     bool headsetPresent = false;
     bool panelOn = false;
     int rateHz = 0;
+    double lensIpdMm = 0;    // the lens IPD the headset reports (lens_ipd_x100 / 100), 0 = not known
     QString follow;
     bool followRunning = false;
     bool audioOnHeadset = false;

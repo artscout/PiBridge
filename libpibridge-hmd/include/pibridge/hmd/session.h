@@ -58,6 +58,8 @@ public:
     virtual void on_log(std::string_view) {}
     /// Every report read from IF0.
     virtual void on_reply(const Report&) {}
+    /// A report from IF1 or IF2 that is neither IMU nor controller data (`len` bytes of it are real).
+    virtual void on_other(std::size_t, const Report&, std::size_t) {}
     /// A link ended: how long it lived and how many keepalives it sent (called after on_state(Disconnected)).
     virtual void on_link_closed(std::chrono::nanoseconds, std::uint64_t) {}
     /// The automatic logic (Config::auto_attach) scheduled an attach burst for `slot` (initial or retry).

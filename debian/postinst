@@ -24,10 +24,12 @@ PiBridge is installed. The rest is per-user and is done by the app on first run:
   - registering the PiBridge Monado SteamVR driver in openvrpaths.vrpath.
 Just launch "PiBridge" (or run `pibridge`). SteamVR is the runtime.
 
-Optional (inside-out / Pimax-engine tracking): build winbridge once with
+Optional (inside-out / Pimax-engine tracking): as your user (not root), build
+winbridge once with
   pibridge-build-winbridge
-(needs mingw-w64; wine at run time). The proprietary Pimax kit is a separate
-manual step, see /usr/share/doc/pibridge/INSTALL.md.
+(needs mingw-w64; wine at run time). You never start it yourself: the app runs
+it at each START TRACKING. The proprietary Pimax kit is a separate manual step,
+see /usr/share/doc/pibridge/INSTALL.md section 7.
 
 EOF
         ;;

@@ -10,6 +10,11 @@ Today's target: the **Pimax Crystal Super with the Lighthouse faceplate under St
 Wayland) with an RTX 5090. The steps for Arch and Fedora use the same tools; their package names are given, but they
 have not been tried on real hardware yet.
 
+**Another Pimax headset** (Crystal, Crystal Light, Dream Air SE, 8KX, 5K family, ...): PiBridge only sends a headset
+the commands its official Pimax client sends, so a model is added from a recording of that client. If you have one
+and a Windows PC with the Pimax client, please record it with the guided kit in [`windows/`](../windows/) (about 15
+minutes, read only towards the headset) and send us the bundle privately: [HEADSET-DATA.md](HEADSET-DATA.md).
+
 ## 1. Build dependencies
 
 You need CMake 3.22 or newer, Ninja, a C++23 compiler with `std::expected` (GCC 13 or newer, or Clang 17 or newer),
@@ -34,7 +39,7 @@ sudo dnf install cmake ninja-build gcc-c++ qt6-qtbase-devel openxr-devel zlib-de
 Check the compiler: `g++ --version` must say 13 or newer (Ubuntu 22.04 ships 11: install `g++-13` and add
 `-DCMAKE_CXX_COMPILER=g++-13` to the configure command below).
 
-Inside-out tracking (section 7, optional) needs more: **Wine** and, to build the Pimax engine host, **MinGW-w64**
+Inside-out tracking (section 7, optional) needs more: **Wine** and, to build the Pimax engine host once (`pibridge-build-winbridge`), **MinGW-w64**
 (`sudo apt install wine mingw-w64`; Arch `wine mingw-w64-gcc`; Fedora `wine mingw64-gcc-c++`). The open **Basalt**
 engine needs `libbasalt.so` built separately (section 7.1). None of this is needed for the tested Lighthouse path.
 
@@ -356,16 +361,33 @@ Tracking page (**Head tracking engine**):
    the `H1/` controller models. The exact table and copy commands:
    [WINBRIDGE.md, "Copying the Pimax files"](WINBRIDGE.md#copying-the-pimax-files-once-and-again-after-a-pimax-play-update).
    These files are Pimax's — personal use, they stay on this computer and are never committed.
-3. Build the engine host and the VIT bridge and put them where the app looks:
-   ```
-   cd winbridge
-   x86_64-w64-mingw32-g++ -O2 -static server.cpp -lws2_32 -o winbridge.exe
-   g++ -O2 -std=c++20 -fPIC -shared vit_winbridge.cpp -o libpibridge_vit_winbridge.so -pthread
-   mkdir -p ~/.local/share/pibridge/winbridge
-   cp winbridge.exe libpibridge_vit_winbridge.so ~/.local/share/pibridge/winbridge/
-   ```
-   (The app also finds them in the source tree and in `~/.local/lib/pibridge/winbridge/`.)
-4. On the Tracking page choose **Head tracking engine: Pimax**; it tells you in plain words what is still missing.
+3. Build the engine host (`winbridge.exe`) and the VIT bridge (`libpibridge_vit_winbridge.so`) once. They are our
+   code, shipped as source, because the `.exe` is built with MinGW on your machine.
+   - **From the package (.deb):** run
+     ```
+     pibridge-build-winbridge
+     ```
+     It builds from `/usr/share/pibridge/winbridge-src/` and installs both files to
+     `~/.local/share/pibridge/winbridge/`. Run it as your user, not with sudo: the result belongs to your home.
+   - **From the source tree:**
+     ```
+     sh winbridge/build-winbridge.sh
+     ```
+     It does the same, from `winbridge/`.
+
+   The app finds the two files in `~/.local/share/pibridge/winbridge/`, in `<prefix>/lib/pibridge/winbridge/`, or in
+   the source tree's `winbridge/`; `rec_winbridge=` and `rec_vit_winbridge=` in `pibridge.conf` name other paths.
+4. On the Tracking page choose **Head tracking engine: Pimax**; it tells you in plain words what is still missing
+   (Wine, the kit, or the two files from step 3).
+5. **There is nothing to start by hand, and no service for it.** winbridge is not a daemon and pibridge-keepalived
+   does not start it. The app runs it inside the tracking session: at every **START TRACKING** (and for Record
+   tracking / Monado directly on the Development page) it starts `wine winbridge.exe` once the camera broker is up,
+   before SteamVR / Monado, and stops it with the session. If it is still running from an earlier session it holds
+   its port and the next start is refused; end it with `pkill -f winbridge.exe`.
+   To check it ran, see `~/.local/state/pibridge/inside-out/<session>/logs/winbridge.log`. If the engine stops by
+   itself the session goes on and the head falls back to 3DoF until the next start.
+6. After a **Pimax Play update** on Windows, copy the kit again (step 2). winbridge itself needs rebuilding only after
+   a PiBridge update that changes it (run step 3 again).
 
 **B) Basalt — open source.** Monado's Basalt tracker on the two lower cameras plus the IMU. Build `libbasalt.so`
 separately (Monado's Basalt fork) and put it where the app finds it — `~/.local/lib/pibridge/`, `/usr/local/lib/`,

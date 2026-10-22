@@ -84,6 +84,11 @@ Report sys_reset() { return fixed(cmd::SYS_RESET, 0x00, {0x00}); }
 Report unpair(std::uint8_t slot) { return fixed(cmd::UNPAIR, slot, std::span<const std::uint8_t>{}); }
 
 Report start_pair(std::uint8_t slot) { return fixed(cmd::START_PAIR, 0x00, {slot}); }
+Report ipd_motor(float mm) {
+    const float c = mm < 58.0f ? 58.0f : (mm > 72.0f ? 72.0f : mm);
+    const auto v = static_cast<std::uint16_t>(std::lround(c * 100.0f));
+    return fixed(cmd::IPD, 0x05, {0x01, static_cast<std::uint8_t>(v & 0xff), static_cast<std::uint8_t>(v >> 8)});
+}
 
 Report keepalive(std::uint8_t rate) {
     Report r = fixed(cmd::KEEPALIVE, 0x00, {rate});

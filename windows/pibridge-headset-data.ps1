@@ -7,7 +7,8 @@
 #
 # READ ONLY towards the headset: this script never sends anything to the headset, the controllers or the eye tracker.
 # USBPcap only listens to the USB traffic; the files are copied, never changed; the PVR dump (kit\pimax-pvr-dump.ps1)
-# only calls "get" functions of Pimax's own client library. Nothing is installed, nothing is uploaded.
+# only calls "get" functions of Pimax's own client library, and the settings read (kit\pimax-read-settings.ps1) only
+# its "get" functions of Pimax Play's settings. Nothing is installed, nothing is uploaded.
 #
 # Every step: the script shows (and says) what to do, you do it and press Enter. Keys at every prompt:
 #   Enter = done / next      s = skip this step      q = finish now (the bundle is made from what was recorded)
@@ -412,6 +413,24 @@ function Collect-Inventory {
     if ($n -gt 0) { Say "  $n headset EDID(s) saved (serial fields cleared)" }
 }
 
+function Collect-Settings {
+    # Pimax Play's own settings (field of view level, parallel projection, lens offsets, IPD and its range), read the
+    # way Pimax Play reads them: PiPlayService.dll getters only (kit\pimax-read-settings.ps1, no setter is bound)
+    $read = Join-Path $PSScriptRoot 'kit\pimax-read-settings.ps1'
+    if (-not (Test-Path $read)) { Say 'kit\pimax-read-settings.ps1 is missing: the settings read is skipped.' Yellow; return }
+    $pvrDir = Join-Path $bundle 'pvr'
+    New-Item -ItemType Directory -Force $pvrDir | Out-Null
+    $out = Join-Path $pvrDir 'pimax-settings.txt'
+    $psExe = Join-Path $env:SystemRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path $psExe)) { $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' }
+    Say 'Reading the Pimax client settings (field of view, IPD, lens offsets; read only) ...' Cyan
+    try {
+        $p = Start-Process -FilePath $psExe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$read`" -OutFile `"$out`"" -NoNewWindow -PassThru
+        if (-not $p.WaitForExit(60000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Say 'The settings read took too long and was stopped.' Yellow }
+    } catch { Say ('The settings read could not start: ' + $_.Exception.Message) Yellow }
+    if (Test-Path $out) { Say '  settings saved' }
+}
+
 function Collect-Pvr {
     $dump = Join-Path $PSScriptRoot 'kit\pimax-pvr-dump.ps1'
     if (-not (Test-Path $dump)) { Say 'kit\pimax-pvr-dump.ps1 is missing: the PVR dump is skipped.' Yellow; return }
@@ -614,6 +633,7 @@ if (-not $script:Quit) {
     else {
         try { Collect-Inventory } catch { Say ('Inventory failed: ' + $_.Exception.Message) Yellow }
         try { Collect-Pvr } catch { Say ('PVR dump failed: ' + $_.Exception.Message) Yellow }
+        try { Collect-Settings } catch { Say ('Settings read failed: ' + $_.Exception.Message) Yellow }
         $script:Done.Add("$title : done")
     }
 }
@@ -650,11 +670,15 @@ if (-not $script:Quit) {
         $steps += @{ M = 'mode-back';       Show = 'If you normally use Lighthouse, switch back to Lighthouse now. Then Enter (or s).' }
     }
     if (Has 'ipd') {
-        $steps += @{ M = 'ipd-small'; Show = 'Set the IPD to the smallest value (the wheel on the headset, or in the client). Then Enter.' }
-        $steps += @{ M = 'ipd-large'; Show = 'Set the IPD to the largest value. Then Enter.' }
-        $steps += @{ M = 'ipd-back';  Show = 'Set the IPD back to your value. Then Enter.' }
+        # each typed value is a marker next to the motor command it caused: the frame, the range and the step
+        $steps += @{ M = 'ipd'; Free = $true; Show = 'IPD (the wheel on the headset, or the IPD slider in the client): set the smallest value and type the value the client shows (for example 58.0), Enter. Then the largest, type it, Enter. Then two or three values in between (for example 63.0, 63.5, 66.0), each typed. Last, your own value. Enter alone when done.' }
+        $steps += @{ M = 'ipd-buttons'; Show = 'If the headset has IPD buttons on it: press the WIDER button 3 times, about 2 seconds apart, wait 5 seconds, then the NARROWER button 3 times. Then set your own value again and press Enter (s if the headset has no IPD buttons).'; Min = 15 }
+        if (Has 'eye') {
+            $steps += @{ M = 'ipd-auto'; Show = 'If the client has an automatic IPD (by eye tracking): turn it on, put the headset on for about 20 seconds, take it off, and turn it back to how you had it. Then Enter (s if there is no automatic IPD).'; Max = 120 }
+        }
     }
     $steps += @{ M = 'audio';  Show = 'Sound: in the client or in the Windows sound settings, choose the headset as the sound output and play a sound for a few seconds. Change the volume once. Then Enter.' }
+    $steps += @{ M = 'volume-buttons'; Show = 'If the headset has volume buttons: press volume UP 3 times, about 2 seconds apart, wait 5 seconds, then press volume DOWN 3 times. Then Enter (s if it has no volume buttons).'; Min = 15 }
     $steps += @{ M = 'other';  Free = $true; Show = 'Other headset settings the client has (for example local dimming, colour, sharpness): change each once and back. After each, type its name and Enter. Enter alone when done.' }
     [void](Run-Part 'settings' 'Part 3 of 7: settings' 'The USB recording runs while you change the headset settings in the Pimax client, one at a time. About 3 to 5 minutes. Enter starts the recording.' $steps)
 }
@@ -730,7 +754,7 @@ $r.Add('  captures\     USB recordings (USBPcap, every root hub, whole packets):
 $r.Add('                and <time>-<part>-markers.txt with the time of every step (begin / done / skip / note).')
 $r.Add('  inventory\    software.txt (versions of the Pimax client, Tobii runtime, services, displays),')
 $r.Add('                usb-devices.csv/.txt (USB ids and product strings, serials masked), edid-*.bin (headset EDIDs, serial fields cleared).')
-if (Present 'pvr') { $r.Add('  pvr\          the display data from the Pimax client library: pimax-distortion.json (lens, FOV, eye poses), pimax-info.json (IPD, properties).') }
+if (Present 'pvr') { $r.Add('  pvr\          the display data from the Pimax client library: pimax-distortion.json (lens, FOV, eye poses), pimax-info.json (IPD, properties), pimax-settings.txt (the client settings: FOV level, IPD, lens offsets).') }
 if (Present 'eye-files') { $r.Add('  eye-files\    exact copies of the Tobii and Pimax eye tracking files, among them your eye profile calibration.setpm.') }
 if (Present 'screens') { $r.Add('  screens\      pictures of the client pages.') }
 if (Present 'client-logs') { $r.Add('  client-logs\  the Pimax client logs and settings (text files; files with private names were skipped).') }

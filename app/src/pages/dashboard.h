@@ -25,6 +25,7 @@ class Chip;
 class GazeDot;
 class HeadsetArt;
 class Segmented;
+class SliderRow;
 class Toggle;
 } // namespace pibridge::ui
 
@@ -155,7 +156,11 @@ private:
     pibridge::ui::Toggle* eyeToggle_ = nullptr;
     QPushButton* calibrate_ = nullptr;
     QPushButton* recenter_ = nullptr;
-    QPushButton* import_ = nullptr;
+    pibridge::ui::SliderRow* ipd_ = nullptr; // ipd_mm: the user's IPD in whole mm (lens motors + rendering)
+    QTimer* ipdTimer_ = nullptr;             // sends the IPD 0.6 s after the slider stops
+    bool ipdFromHeadset_ = false;            // the slider took the lens IPD the headset reported
+    double lastLensIpdMm_ = 0;               // the lens IPD last taken from the headset
+    QElapsedTimer ipdSent_;                  // since our last motor request (the lenses travel meanwhile)
     pibridge::ui::Chip* eyeChip_ = nullptr;
     QLabel* eyeLine_ = nullptr;
     QLabel* toolResult_ = nullptr;

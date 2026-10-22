@@ -179,7 +179,7 @@ MainWindow::MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder 
     stack_->addWidget(apps);
     stack_->addWidget(new PerformancePage);
     stack_->addWidget(new TrackingPage(source_, conf_, *io_));
-    auto* dev = new DevelopmentPage(source_, conf_, *direct_);
+    auto* dev = new DevelopmentPage(source_, conf_, *direct_, actions_);
     connect(dev, &DevelopmentPage::recordingActiveChanged, io_.get(), &IoSessionControl::setRecorderActive);
     connect(dev, &DevelopmentPage::recordingActiveChanged, direct_.get(), &IoSessionControl::setRecorderActive);
     const auto block = [this, dev] {

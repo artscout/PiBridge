@@ -374,6 +374,8 @@ void dispatch(Sh& sh, Handler& h, std::size_t idx, const Report& d, std::size_t 
         sh.counters.ctrl++;
         att.last_rx[c->slot] = Clock::now();
         h.on_controller(*c);
+    } else {
+        h.on_other(idx, d, len);
     }
 }
 
