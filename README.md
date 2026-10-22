@@ -58,7 +58,7 @@ pixel font, for SteamVR's chaperone file on Linux. ZoneTweak's set dressing (the
 | Headset | Tracking | Display | Eye tracking | Status |
 |---|---|---|---|---|
 | Pimax Crystal Super (micro-OLED), Lighthouse faceplate | SteamVR Lighthouse: Index controllers, base stations | CustomHeadsetOpenVR + our patches; wake, keepalive, panel 72/90 Hz; headset audio | yes, with your own Tobii profile | **works** (one headset tested) |
-| Pimax Crystal Super, inside-out (no faceplate) | SLAM on the headset cameras (Pimax Play's engine under Wine, or Basalt), controllers by their LEDs | SteamVR via our bundled Monado driver | through the Pimax driver in Monado | **experimental**: head tracking usable on a worn headset, controllers not checked live yet |
+| Pimax Crystal Super, inside-out (no faceplate) | SLAM on the headset cameras (Pimax Play's engine under Wine, or Basalt), controllers by their LEDs | SteamVR via our bundled Monado driver | through the Pimax driver in Monado | **experimental**: head tracking usable on a worn headset, controllers not checked live yet. On a USB 2.0 port or hub the tracking cameras come up as Motion-JPEG instead of YUYV (480 Mbps cannot carry the uncompressed stream), which loses the metadata block, so that path runs without device timestamps, auto-exposure and the controller cameras; a SuperSpeed port gives YUYV back. See `docs/TRACKING.md` |
 | Pimax Dream Air | | | | protocol and device description present (from omarchyvr); not tested with PiBridge |
 | Other Pimax models | | | | not supported yet: data wanted, see [docs/HEADSET-DATA.md](docs/HEADSET-DATA.md) |
 
@@ -134,12 +134,12 @@ Status on the Crystal Super (no faceplate), as of 2026-10-19:
 | SteamVR | Steam's SteamVR for Linux | PiBridge does not start or change SteamVR on its own |
 | CustomHeadsetOpenVR | upstream `4f25826` + `patches/chovr/` | or the `linux-crystal-super` branch of artscout/CustomHeadsetOpenVR |
 | Quad views layer | optional | [linux-vulkan-quadviews-openxr-layer](https://github.com/artscout/linux-vulkan-quadviews-openxr-layer) |
-| Build | CMake 3.22+, Ninja, GCC 13+ or Clang 17+, Qt 6 Widgets, OpenXR headers | zlib and IBM Plex fonts optional |
+| Build | CMake 3.22+, Ninja, GCC 13+ or Clang 17+, Qt 6 Widgets, OpenXR headers | libjpeg (the Motion-JPEG camera profile), zlib and IBM Plex fonts optional |
 
 ## Quick start (Ubuntu)
 
 ```
-sudo apt install cmake ninja-build g++ qt6-base-dev libopenxr-dev zlib1g-dev fonts-ibm-plex
+sudo apt install cmake ninja-build g++ qt6-base-dev libopenxr-dev zlib1g-dev libjpeg-dev fonts-ibm-plex
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/.local
 cmake --build build && ctest --test-dir build
 cmake --install build && systemctl --user daemon-reload

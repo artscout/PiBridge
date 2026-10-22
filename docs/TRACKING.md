@@ -23,6 +23,38 @@ Changes apply at the next start; a running session keeps the settings it started
 Why a page of its own: the Development page is the recorder (a protocol, its steps, the recordings list). The mode and
 twenty driver settings are a different job and would push the recorder off the screen; both pages share the settings.
 
+## Motion-JPEG instead of YUYV (what that path loses)
+
+The tracking cameras (`34a4:0014`) report themselves as Motion-JPEG instead of YUYV when their USB link comes up at
+480 Mbps — a USB 2.0 port, or a 2.0 hub anywhere in the chain. The same headset and the same firmware report YUYV
+again on a SuperSpeed port (checked 2026-10-22: `speed=480` gave one 1280x832 MJPEG frame, `speed=5000` gave
+1280x832 YUYV with `flags 0x1` and device timestamps), so check the link before blaming the firmware:
+
+```
+for f in /sys/bus/usb/devices/*/idVendor; do d=$(dirname "$f")
+  [ "$(cat "$f")$(cat "$d/idProduct")" = 34a40014 ] && echo "$d $(cat "$d/speed") Mbps $(cat "$d/product")"
+done
+```
+
+480 means the format is a link limit, not a firmware one: YUYV 1280x832 is 2.1 MB a frame and even 25 fps needs about
+53 MB/s, which a 480 Mbps link cannot carry, so the camera offers JPEG there. Move the cable to an SS port; a USB 2.0
+hub caps everything behind it at 480 Mbps.
+
+If it stays at 480 (or the port is 2.0 only), libpibridge-cam negotiates MJPEG, decodes each frame and uses its luma
+plane, which holds the two tracking cameras side by side (`StreamProfile::JpegTiles2`,
+`docs/libpibridge-cam.md`). The frame goes on in the usual layout, so START TRACKING works the same way — but what
+JPEG threw away cannot come back:
+
+| Lost with the metadata | What it means while tracking |
+|---|---|
+| the device timestamp of the frame | the frame is timed on the host clock, so it sits further from its IMU samples (by the USB latency) and the tracker corrects the head a little later. The mid-exposure shift cannot be computed either (no exposure), so a fixed one can be asked for with `PIMAX_SLAM_CAM_OFFSET_US=1638` (the factory half exposure) |
+| the exposure and gain of the frame | no auto-exposure (`io_cam_ae`): the camera keeps what it booted with, there is nothing to measure the result with |
+| the two controller cameras | no controller-LED images for `pibridge-ctrltrack`: the Pimax controllers keep their IMU pose only |
+| the exact metadata bytes | the frame kind comes from where its tiles start (row 96 for the tracking exposure, row 9 for the short controller one), so SLAM still gets its 30 fps of normal-exposure frames |
+
+`pibridge-cam info --source auto` shows `MJPEG/grey` and `flags 0xa` for such frames, and a `.pxcam` records the
+profile, so a replay behaves like the live stream.
+
 ## The page
 
 Each setting shows a label, one line of help, a **RECOMMENDED** mark while it has the recommended value, and, in amber,
