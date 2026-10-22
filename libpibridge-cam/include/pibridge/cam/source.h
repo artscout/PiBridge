@@ -15,6 +15,21 @@
 
 namespace pibridge::cam {
 
+/// How a firmware packs its UVC stream. Every profile delivers the canonical frame of frame.h: 2560x832 grey with
+/// four 640x480 tiles; a profile says which parts of it the device actually fills.
+enum class StreamProfile : std::uint32_t {
+    /// Raw YUYV where every byte is one grey pixel: four tiles side by side and a 96-byte metadata block in rows
+    /// 0..7 (Dream Air, the earlier Crystal firmware). Frame kind, device time and tile rows come from the metadata.
+    GreyTiles4 = 0,
+    /// Motion-JPEG 1280x832 whose luma is the two tracking cameras: tiles 0 and 1, the rest of the canonical frame
+    /// is zero (the cameras report MJPEG when their USB link runs at 480 Mbps). JPEG is lossy and keeps the luma
+    /// plane alone, so the metadata block and the controller cameras of the raw stream do not survive: tile rows
+    /// come from a scan and a frame carries no device time (camera.h FLAG_NO_DEV_TIME). The two exposure programs do survive as
+    /// two alternating readout windows, so the frame kind comes from where the tiles start (camera.h
+    /// LED_WINDOW_MAX_ROW).
+    JpegTiles2 = 1,
+};
+
 /// One raw frame as delivered by the device: FRAME_H rows of stride bytes (grey interpretation).
 struct RawFrame {
     /// Frame bytes; valid until the source advances.
@@ -43,6 +58,8 @@ public:
     virtual std::uint64_t corrupt_frames() const { return 0; }
     /// True for a recording.
     virtual bool is_replay() const { return false; }
+    /// What the frames are packed as.
+    virtual StreamProfile profile() const { return StreamProfile::GreyTiles4; }
     /// Changes whenever the frames start coming from a reopened device or a new broker (the device clock and the
     /// frame counter may have restarted). 0 for sources that never reopen.
     virtual std::uint64_t generation() const { return 0; }

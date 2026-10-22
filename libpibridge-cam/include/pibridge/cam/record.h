@@ -11,7 +11,8 @@
 //    14  u16      height = 832
 //    16  u32      stride of the stored rows (2560)
 //    20  u32      flags (bit 0: records may be zlib-compressed)
-//    24  [u8; 8]  reserved
+//    24  u32      stream profile (source.h StreamProfile: 0 = grey four tiles, 1 = Motion-JPEG two tiles)
+//    28  [u8; 4]  reserved
 //   record, 32-byte header + payload:
 //     0  u32  magic "FRAM" (0x4d415246)
 //     4  u32  flags (bit 0: payload is zlib)
@@ -23,8 +24,9 @@
 //
 // The payload is the complete frame as delivered by the driver (metadata rows, zero rows and all four tiles), so a
 // replay goes through exactly the same parsing as live capture. A truncated last record (recording killed) is
-// reported as the end of the file. Raw recordings are byte-identical to the Rust writer's; zlib payloads come from
-// zlib instead of miniz_oxide, so their compressed bytes differ (they decompress to the same frames).
+// reported as the end of the file. Raw recordings of the grey profile are byte-identical to the Rust writer's (that
+// profile is 0, in bytes the Rust writer left zero); zlib payloads come from zlib instead of miniz_oxide, so their
+// compressed bytes differ (they decompress to the same frames).
 #pragma once
 
 #include "pibridge/cam/source.h"
@@ -48,9 +50,11 @@ inline constexpr std::uint32_t PXCAM_REC_ZLIB = 1;
 /// Writer.
 class Recorder {
 public:
-    /// Create path. compress_level: nullopt = raw, 1..9 = zlib per frame.
+    /// Create path. compress_level: nullopt = raw, 1..9 = zlib per frame. profile: what the frames are packed as,
+    /// so that a replay knows it (source.h StreamProfile).
     static Result<std::unique_ptr<Recorder>> create(const std::string& path, std::size_t stride,
-                                                    std::optional<std::uint8_t> compress_level);
+                                                    std::optional<std::uint8_t> compress_level,
+                                                    StreamProfile profile = StreamProfile::GreyTiles4);
     ~Recorder();
     Recorder(const Recorder&) = delete;
     Recorder& operator=(const Recorder&) = delete;
@@ -79,7 +83,8 @@ class AsyncRecorder {
 public:
     /// Start a writer thread for path with a queue of depth frames.
     static Result<std::unique_ptr<AsyncRecorder>> start(const std::string& path, std::size_t stride,
-                                                        std::optional<std::uint8_t> compress_level, std::size_t depth);
+                                                        std::optional<std::uint8_t> compress_level, std::size_t depth,
+                                                        StreamProfile profile = StreamProfile::GreyTiles4);
     ~AsyncRecorder();
     AsyncRecorder(const AsyncRecorder&) = delete;
     AsyncRecorder& operator=(const AsyncRecorder&) = delete;
@@ -143,6 +148,8 @@ public:
     std::size_t stride = 0;
     /// File-level flags.
     std::uint32_t flags = 0;
+    /// What was recorded (a file written before this field existed reads as GreyTiles4).
+    StreamProfile profile = StreamProfile::GreyTiles4;
     /// True if the last read hit a truncated record.
     bool truncated = false;
 
@@ -160,6 +167,7 @@ public:
     Result<bool> advance(int timeout_ms) override;
     std::optional<RawFrame> current() const override;
     std::string describe() const override;
+    StreamProfile profile() const override { return reader_->profile; }
     bool finished() const override { return done_; }
     bool is_replay() const override { return true; }
 

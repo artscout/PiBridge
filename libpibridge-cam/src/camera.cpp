@@ -17,7 +17,7 @@ Result<std::unique_ptr<Camera>> Camera::open(std::string_view spec, std::uint32_
 }
 
 Result<void> Camera::start_recording(const std::string& path, std::optional<std::uint8_t> zlib) {
-    auto r = AsyncRecorder::start(path, FRAME_W, zlib, 64);
+    auto r = AsyncRecorder::start(path, FRAME_W, zlib, 64, src_->profile());
     if (!r) {
         return fail(r.error());
     }
@@ -72,9 +72,16 @@ Result<std::optional<FrameInfo>> Camera::next_frame(int timeout_ms) {
     if (recorder_) {
         recorder_->push(*raw);
     }
-    std::optional<Meta> meta = Meta::parse(raw->data.first(META_LEN));
-    if (meta && !meta->looks_valid()) {
-        meta.reset();
+    // The Motion-JPEG profile has no readable metadata block: JPEG keeps the luma plane alone and is lossy, so the
+    // 96 bytes of row 0 cannot be recovered from it. Tile rows come from a scan, every frame is a tracking frame and
+    // the frame has no device time (FLAG_NO_DEV_TIME).
+    const bool jpeg_profile = src_->profile() == StreamProfile::JpegTiles2;
+    std::optional<Meta> meta;
+    if (!jpeg_profile) {
+        meta = Meta::parse(raw->data.first(META_LEN));
+        if (meta && !meta->looks_valid()) {
+            meta.reset();
+        }
     }
     const TileRows rows = tile_rows(meta ? &*meta : nullptr, raw->data, stride);
     std::uint32_t flags = replay ? FLAG_REPLAY : 0;
@@ -96,6 +103,11 @@ Result<std::optional<FrameInfo>> Camera::next_frame(int timeout_ms) {
     if (meta) {
         flags |= FLAG_META_VALID;
         kind = m.kind();
+    } else if (jpeg_profile) {
+        flags |= FLAG_NO_DEV_TIME;
+        // The kind comes from the readout window: the short (controller-LED) exposure reads out from the top of the
+        // sensor, the tracking exposure from lower down (LED_WINDOW_MAX_ROW).
+        kind = rows.y[0] < LED_WINDOW_MAX_ROW ? FrameKind::Led : FrameKind::Tracking;
     }
     switch (kind) {
     case FrameKind::Tracking: st.tracking++; break;

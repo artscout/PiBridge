@@ -485,7 +485,8 @@ Result<int> listen(const std::string& path) {
 
 Result<ServeStats> serve(std::unique_ptr<Source> src, const ServeOptions& opts, const std::atomic<bool>& stop,
                          const std::function<void(const ServeStats&)>& on_status) {
-    const std::uint32_t flags = src->is_replay() ? FLAG_REPLAY : 0;
+    const std::uint32_t flags = (src->is_replay() ? FLAG_REPLAY : 0) |
+                                (src->profile() == StreamProfile::JpegTiles2 ? FLAG_PROFILE_JPEG2 : 0);
     auto ring = Ring::create(opts.slots, FRAME_BYTES, flags, src->describe());
     if (!ring) {
         return fail(ring.error());
