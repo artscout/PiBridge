@@ -37,7 +37,7 @@ install(TARGETS pibridge-record-mirror RUNTIME DESTINATION ${CMAKE_INSTALL_BINDI
 if(PIBRIDGE_BUILD_TESTS)
     # Our Monado fork's sources: the test also compiles the real comp_recorder_shm.h (when present) and checks that
     # both layouts agree field for field.
-    set(PIBRIDGE_MONADO_SRC_DIR "${PROJECT_SOURCE_DIR}/../pibridge-monado-src" CACHE PATH "PiBridge's Monado fork (sources)")
+    set(PIBRIDGE_MONADO_SRC_DIR "${PROJECT_SOURCE_DIR}/third_party/monado" CACHE PATH "PiBridge's Monado fork (sources)")
     add_executable(pibridge_record_fakeproducer tests/fake_producer.cpp)
     target_link_libraries(pibridge_record_fakeproducer PRIVATE pibridge_record)
     # a fake libopenvr_api.so: pibridge-record-mirror's start errors without SteamVR, EGL or a GPU
