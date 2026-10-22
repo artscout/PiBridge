@@ -7,6 +7,11 @@
  * (factory camera ids 0..3 left to right), tile rows start at a per-tile offset given in the metadata, frames
  * alternate between tracking exposure (kind 1) and controller-LED exposure (kind 2), 50 fps total.
  *
+ * A Crystal Super's tracking cameras report Motion-JPEG, and no YUYV, when their USB link runs at 480 Mbps. Its luma
+ * plane is the two tracking cameras side by side, so such a stream comes back in the same layout with tiles 0 and 1
+ * filled, tiles 2 and 3 zero, tile rows located by scanning, kind alternating between the two exposure programs as
+ * above, and PIMAX_CAM_FLAG_NO_DEV_TIME on every frame (see above).
+ *
  * Threading: a pimax_cam handle is used by one thread at a time. Errors: functions return -1 / NULL and
  * pimax_cam_last_error() gives a thread-local message.
  *
@@ -33,6 +38,12 @@ enum pimax_cam_kind
 #define PIMAX_CAM_FLAG_META_VALID 1u
 #define PIMAX_CAM_FLAG_ROWS_SCANNED 2u
 #define PIMAX_CAM_FLAG_REPLAY 4u
+/* No device timestamp for this frame: the Crystal Super's Motion-JPEG stream loses the metadata block in rows 0..7
+   (JPEG keeps the luma plane alone and is lossy). dev_ts_us and counter are then 0 and mono_ts_ns is the host
+   CLOCK_MONOTONIC time of the frame. Tiles 2 and 3 (the controller cameras of the raw stream) hold nothing but zero;
+   the firmware's two exposure programs come through as two alternating readout windows, so kind is 1 for the frames
+   that read out from the middle of the sensor and 2 for the short (controller-LED) ones starting near the top. */
+#define PIMAX_CAM_FLAG_NO_DEV_TIME 8u
 
 #define PIMAX_CAM_REPLAY_LOOP 1u
 #define PIMAX_CAM_REPLAY_REALTIME 2u

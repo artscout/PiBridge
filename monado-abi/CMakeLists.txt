@@ -60,8 +60,9 @@ set_target_properties(pibridge_pimax PROPERTIES IMPORTED_LOCATION ${pibridge_pim
     IMPORTED_LINK_INTERFACE_LANGUAGES CXX)
 add_dependencies(pibridge_pimax pibridge_pimax_archive)
 find_package(ZLIB REQUIRED)
+find_package(JPEG REQUIRED)   # the Motion-JPEG camera profile of the Crystal Super (libpibridge-cam src/jpeg.cpp)
 find_package(Threads REQUIRED)
-set_property(TARGET pibridge_pimax PROPERTY INTERFACE_LINK_LIBRARIES ZLIB::ZLIB Threads::Threads)
+set_property(TARGET pibridge_pimax PROPERTY INTERFACE_LINK_LIBRARIES ZLIB::ZLIB JPEG::JPEG Threads::Threads)
 
 if(PIBRIDGE_BUILD_TESTS)
     set(d ${CMAKE_CURRENT_SOURCE_DIR}/difftest)
@@ -77,7 +78,7 @@ if(PIBRIDGE_BUILD_TESTS)
     # only pimax_* leaves a shared object built from the whole archive
     add_library(pibridge_pimax_symcheck SHARED ${d}/empty.c)
     target_link_libraries(pibridge_pimax_symcheck PRIVATE "-Wl,--whole-archive" pibridge_pimax "-Wl,--no-whole-archive"
-                          ZLIB::ZLIB Threads::Threads)
+                          ZLIB::ZLIB JPEG::JPEG Threads::Threads)
     set_target_properties(pibridge_pimax_symcheck PROPERTIES LINKER_LANGUAGE CXX)
     add_test(NAME monado_abi_symbols COMMAND ${d}/check_symbols.sh $<TARGET_FILE:pibridge_pimax_symcheck>)
     # the PIBRIDGE_PIMAX_ABI marker survives into a shared object built from the archive (plan M9)

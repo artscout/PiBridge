@@ -147,11 +147,13 @@ if(XRT_BUILD_DRIVER_PIMAX)
 			endif()
 		endforeach()
 		find_package(ZLIB REQUIRED)
-		# C++ inside: link with the C++ linker (Monado's targets do already); zlib for the .pxcam recorder.
+		find_package(JPEG REQUIRED)
+		# C++ inside: link with the C++ linker (Monado's targets do already); zlib for the .pxcam recorder, libjpeg
+		# for the Motion-JPEG camera profile of the Crystal Super.
 		add_library(pimax_pibridge STATIC IMPORTED GLOBAL)
 		set_target_properties(
 			pimax_pibridge PROPERTIES IMPORTED_LOCATION "${PIMAX_PIBRIDGE_LIB}" IMPORTED_LINK_INTERFACE_LANGUAGES CXX
-			INTERFACE_LINK_LIBRARIES "ZLIB::ZLIB;Threads::Threads;${CMAKE_DL_LIBS};m;rt"
+			INTERFACE_LINK_LIBRARIES "ZLIB::ZLIB;JPEG::JPEG;Threads::Threads;${CMAKE_DL_LIBS};m;rt"
 			)
 		set(PIMAX_LIB_CAPI pimax_pibridge)
 		set(PIMAX_LIB_CAM pimax_pibridge)

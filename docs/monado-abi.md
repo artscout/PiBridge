@@ -64,7 +64,7 @@ entry points, M3), `pimax_lens_rs.h`, and the controller ABIs `pimax_hands.h`, `
   object (the last three compiled once more inside monado-abi with the parity flags and hidden visibility), then `objcopy --keep-global-symbol=pimax_*`. A shared object that links the whole archive
   (Monado's `driver_monado.so`) exports exactly the C ABI: no `std::` template instantiation or libstdc++ inline
   variable leaks (`-fvisibility=hidden` alone would leave ~40 of them), so nothing clashes with Monado's own C++
-  (Mercury, OpenCV). Link with the C++ linker plus zlib and pthreads (Monado already links C++).
+  (Mercury, OpenCV). Link with the C++ linker plus zlib, libjpeg and pthreads (Monado already links C++).
 - `src/abi_id.cpp` (M9): the marker string `PIBRIDGE_PIMAX_ABI 1 spec omarchyvr <commit>` (the commit from
   `spec.txt`), kept by `used`/`retain` although nothing calls it and local after the `objcopy`. A Monado binary that
   links the archive carries it, so `grep -ac PIBRIDGE_PIMAX_ABI` tells a PiBridge-linked build from a Rust-linked one.
@@ -218,6 +218,10 @@ driver C files do not change): `PIMAX_USE_PIBRIDGE` (default OFF; OFF builds exa
 one imported archive (C++ link language, plus zlib, pthreads, dl, m, rt) takes the place of the three Rust archives
 for `drv_pimax` and `pimax_ht_bench`, and all seven headers come from `PIMAX_PIBRIDGE_INCLUDE` (byte-identical copies,
 `monado_abi_headers`). Configure checks that the archive and each header exist.
+
+`pimax_cam.h` carries one PiBridge addition: `PIMAX_CAM_FLAG_NO_DEV_TIME` (8) on the frames of the Motion-JPEG camera
+profile (`docs/libpibridge-cam.md`). It is backward compatible both ways: an older archive never sets it, and an
+older driver ignores it and keeps such frames untimed (3DoF). The marker `PIBRIDGE_PIMAX_ABI 1` stays as it is.
 
 **Source**: bundled in this repository at [`third_party/monado/`](../third_party/monado) — a snapshot of our Monado
 fork (Monado plus the Pimax Crystal Super driver, with the `PIMAX_USE_PIBRIDGE` switch already applied in
