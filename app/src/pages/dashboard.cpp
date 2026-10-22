@@ -14,6 +14,7 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QHash>
 #include <QLayoutItem>
@@ -87,8 +88,8 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     reset_ = pibridge::ui::toolButton(QStringLiteral("Reset SteamVR"));
     reset_->setIcon(pibridge::ui::lineIcon(pibridge::ui::Icon::Restart, pibridge::ui::color::text));
     reset_->setToolTip(QStringLiteral(
-        "Finds what is left of SteamVR (also a stuck vrserver that holds SteamVR's socket) and closes exactly those "
-        "processes after you confirm. When no SteamVR process runs, it offers to restart Steam."));
+        "Restarts SteamVR: finds its processes (also a stuck vrserver that holds SteamVR's socket), closes exactly "
+        "those after you confirm and starts SteamVR again. When no SteamVR process runs, it offers to restart Steam."));
     // "Headset driver settings" was removed from the top bar (user 2026-10-20): the Tracking card's Settings opens it
     // in Lighthouse mode (openTrackingSettings).
     message_ = new QLabel;
@@ -155,10 +156,14 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
         const qint64 now = resetClock_.elapsed();
         if (closer_ && closer_->step(now)) {
             resetTimer_.stop();
-            say(closer_->report(), !closer_->allGone());
+            const bool gone = closer_->allGone();
+            say(closer_->report(), !gone);
             closer_.reset();
             reset_->setEnabled(true);
             source_.refresh();
+            if (std::exchange(startAfterClose_, false) && gone) {
+                startVr(); // Reset SteamVR is a restart (user 2026-10-22)
+            }
         } else if (restarter_ && restarter_->step(now)) {
             resetTimer_.stop();
             say(restarter_->message(), restarter_->state() == SteamRestarter::State::Failed);
@@ -213,6 +218,12 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
                                               "Takes effect the next time the headset wakes.");
     refresh_ = new pibridge::ui::Segmented({QStringLiteral("72 Hz"), QStringLiteral("90 Hz")});
     refresh_->setToolTip(refreshTip);
+    // the original Crystal: its rate is the display mode SteamVR picks (CustomHeadsetOpenVR reports it), not a
+    // headset command; 120 Hz is its native rate
+    refreshCrystal_ = new pibridge::ui::Segmented({QStringLiteral("72 Hz"), QStringLiteral("90 Hz"), QStringLiteral("120 Hz")});
+    refreshCrystal_->setToolTip(QStringLiteral("The display mode SteamVR runs the Crystal at. A running SteamVR is "
+                                               "restarted for it."));
+    refreshCrystal_->setVisible(false);
     auto* rlRow = new QHBoxLayout;
     rlRow->setSpacing(6);
     rlRow->setContentsMargins(0, 0, 0, 0);
@@ -220,7 +231,29 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     rlRow->addWidget(pibridge::ui::helpBadge(refreshTip));
     rlRow->addStretch(1);
     info->addLayout(rlRow, 2, 0);
-    info->addWidget(refresh_, 2, 1, Qt::AlignLeft);
+    auto* refreshBox = new QHBoxLayout;
+    refreshBox->setContentsMargins(0, 0, 0, 0);
+    refreshBox->addWidget(refresh_);
+    refreshBox->addWidget(refreshCrystal_);
+    refreshBox->addStretch(1);
+    info->addLayout(refreshBox, 2, 1);
+    // the original Crystal (standalone, on its own battery): its charge, from its head reports via pibridge-keepalived
+    hsBatteryLabel_ = pibridge::ui::capsLabel(QStringLiteral("Battery"), 13);
+    hsBatteryLabel_->setObjectName(QStringLiteral("dim"));
+    hsBattery_ = new pibridge::ui::Battery;
+    hsBatteryText_ = new QLabel;
+    auto* batRow = new QHBoxLayout;
+    batRow->setSpacing(8);
+    batRow->setContentsMargins(0, 0, 0, 0);
+    batRow->addWidget(hsBattery_);
+    batRow->addWidget(hsBatteryText_);
+    batRow->addStretch(1);
+    info->addWidget(hsBatteryLabel_, 3, 0);
+    info->addLayout(batRow, 3, 1);
+    for (QWidget* w : {static_cast<QWidget*>(hsBatteryLabel_), static_cast<QWidget*>(hsBattery_),
+                       static_cast<QWidget*>(hsBatteryText_)}) {
+        w->setVisible(false);
+    }
     info->setColumnStretch(1, 1);
     right->addLayout(info);
     right->addStretch(1);
@@ -244,24 +277,25 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     roomBtn_->setCursor(Qt::PointingHandCursor);
     roomBtn_->setIcon(pibridge::ui::lineIcon(pibridge::ui::Icon::Room, pibridge::ui::color::text));
     roomBtn_->setIconSize({18, 18});
-    // QUICK ROOM SETUP: the quick circle setup straight away (posture -> size -> finish), skipping the in-VR mode menu
-    quickRoomBtn_ = pibridge::ui::toolButton(QStringLiteral("QUICK ROOM SETUP"));
-    quickRoomBtn_->setMinimumHeight(40);
-    quickRoomBtn_->setMinimumWidth(150);
-    quickRoomBtn_->setFont(pibridge::ui::labelFont(14, QFont::DemiBold));
-    quickRoomBtn_->setCursor(Qt::PointingHandCursor);
-    quickRoomBtn_->setIcon(pibridge::ui::lineIcon(pibridge::ui::Icon::Room, pibridge::ui::color::text));
-    quickRoomBtn_->setIconSize({18, 18});
+    // QUICK ROOM SETUP is in the SteamVR dashboard tab (pibridge-overlay) only, where it is used (user 2026-10-22)
     ioRow->addWidget(ioStart_);
     ioRow->addWidget(roomBtn_);
-    ioRow->addWidget(quickRoomBtn_);
+    // the original Crystal only: it is switched on with its own button, switched off from here (shutDown) or there
+    crystalOffBtn_ = pibridge::ui::toolButton(QStringLiteral("SWITCH OFF"));
+    crystalOffBtn_->setMinimumHeight(40);
+    crystalOffBtn_->setMinimumWidth(130);
+    crystalOffBtn_->setFont(pibridge::ui::labelFont(14, QFont::DemiBold));
+    crystalOffBtn_->setCursor(Qt::PointingHandCursor);
+    crystalOffBtn_->setToolTip(QStringLiteral("Switches the Crystal off. It is switched on with its own power button."));
+    crystalOffBtn_->setVisible(false);
+    ioRow->addWidget(crystalOffBtn_);
     ioRow->addStretch(1);
     hs->body()->addLayout(ioRow);
     vrStatus_ = pibridge::ui::dimLabel(QString()); // "VR running 1h 5m   Resolution: 5376 x 4972"
     hs->body()->addWidget(vrStatus_);
     connect(ioStart_, &QPushButton::clicked, this, [this] {
         conf_.reload();
-        const bool inside = ioSettings(conf_).mode == TrackingMode::InsideOut;
+        const bool inside = monadoSession();
         const bool running = inside ? io_.active() : source_.state().steamvrRunning;
         if (running) {
             // the same button is red STOP VR while running; no confirmation (user 2026-10-20)
@@ -270,41 +304,29 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
             } else if (!source_.fake() && !closer_ && !restarter_) {
                 closeSteamVr(scanSteamVr().targets()); // Lighthouse: close SteamVR straight away
             }
-            return;
-        }
-        if (inside) {
-            io_.refresh();
-            if (!io_.start()) {
-                say(QStringLiteral("VR could not start: %1")
-                        .arg(io_.readiness().blocking.isEmpty() ? io_.message() : io_.readiness().blocking.join(QLatin1Char(' '))),
-                    true);
-                return;
+            if (crystalOn() && !source_.fake()) {
+                // the original Crystal runs on its battery: STOP VR switches it off too (user 2026-10-22)
+                say(actions_.crystalShutdown(statusDir()) ? QStringLiteral("Closing SteamVR and switching the Crystal off...")
+                                                          : QStringLiteral("Could not write the request to pibridge-keepalived."),
+                    false);
             }
-            say(QStringLiteral("Starting VR: SteamVR with the Monado driver..."));
             return;
         }
-        const bool steamUp = source_.fake() || steamClientRunning();
-        const bool started = actions_.launchSteamVR();
-        if (!started) {
-            say(QStringLiteral("Could not start Steam. Is it installed?"), true);
-        } else if (!steamUp) {
-            say(QStringLiteral("Steam is not running — starting it first; SteamVR will launch once Steam is up "
-                               "(press START VR again if it does not)."));
-        } else {
-            say(QStringLiteral("Starting SteamVR..."));
-        }
-        waitingForSteamVr_ = started;
-        if (started) {
-            messageTimer_.start(120000);
-        }
+        startVr();
     });
     connect(roomBtn_, &QPushButton::clicked, this, [this] {
         say(QStringLiteral("Starting room setup in the headset..."));
         emit startRoomSetup();
     });
-    connect(quickRoomBtn_, &QPushButton::clicked, this, [this] {
-        say(QStringLiteral("Starting quick room setup in the headset..."));
-        emit startQuickRoomSetup();
+    connect(crystalOffBtn_, &QPushButton::clicked, this, [this] {
+        if (QMessageBox::question(this, QStringLiteral("Switch off the Crystal"),
+                                  QStringLiteral("Switch the headset off? Switch it on again with its power button.")) !=
+            QMessageBox::Yes) {
+            return;
+        }
+        say(actions_.crystalShutdown(statusDir()) ? QStringLiteral("Switching the Crystal off...")
+                                                  : QStringLiteral("Could not write the request to pibridge-keepalived."),
+            false);
     });
     grid->addWidget(hs, 0, 0, 1, 2);
     connect(refresh_, &pibridge::ui::Segmented::activated, this, [this](int i) {
@@ -315,6 +337,19 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
             return;
         }
         say(QStringLiteral("Refresh rate set to %1 Hz.").arg(hz));
+    });
+    connect(refreshCrystal_, &pibridge::ui::Segmented::activated, this, [this](int i) {
+        const int hz = i == 0 ? 72 : i == 1 ? 90 : 120;
+        if (!chovrSetCrystalRefresh(chovrSettingsFile(), hz)) {
+            say(QStringLiteral("Could not write %1").arg(chovrSettingsFile()), true);
+            return;
+        }
+        // SteamVR reads the rate at its start: a running one is restarted (pibridge-keepalived does it)
+        if (source_.state().steamvrRunning && !source_.fake() && actions_.crystalRestartSteamVr(statusDir())) {
+            say(QStringLiteral("Crystal: %1 Hz, restarting SteamVR...").arg(hz));
+        } else {
+            say(QStringLiteral("Crystal: %1 Hz from the next SteamVR start.").arg(hz));
+        }
     });
 
     // ---- controllers card (live from SteamVR, core/steamvr.h)
@@ -529,6 +564,15 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     trModeSel_->setToolTip(QStringLiteral("Lighthouse: SteamVR base stations (works today). Inside-out: the headset's "
                                           "own cameras (SLAM, experimental)."));
     connect(trModeSel_, &pibridge::ui::Segmented::activated, this, [this](int i) {
+        if (source_.state().keepalive.crystalPresent) {
+            // the original Crystal switches its own tracking (Lighthouse faceplate / its inside-out), in the headset
+            say(actions_.setCrystalTracking(i == 0)
+                    ? (i == 0 ? QStringLiteral("Crystal: switching to Lighthouse (about 10 s)...")
+                              : QStringLiteral("Crystal: switching to its own inside-out tracking..."))
+                    : QStringLiteral("Could not write %1").arg(conf_.path()),
+                false);
+            return;
+        }
         conf_.set(iokey::kMode, i == 1 ? "inside-out" : "lighthouse");
         io_.refresh();
         updateMode();
@@ -658,7 +702,7 @@ void DashboardPage::resetSteamVr() {
     if (m.mode == ResetDialogModel::Mode::RestartSteam) {
         restartSteam();
     } else {
-        closeSteamVr(scan.targets()); // exactly the PIDs the dialog listed
+        closeSteamVr(scan.targets(), true); // exactly the PIDs the dialog listed, then start it again
     }
 }
 
@@ -709,9 +753,39 @@ bool DashboardPage::confirmReset(const ResetDialogModel& m) {
     return dlg.exec() == QDialog::Accepted;
 }
 
-void DashboardPage::closeSteamVr(std::vector<SteamVrProc> targets) {
+void DashboardPage::startVr() {
+    const bool inside = monadoSession();
+    if (inside) {
+        io_.refresh();
+        if (!io_.start()) {
+            say(QStringLiteral("VR could not start: %1")
+                    .arg(io_.readiness().blocking.isEmpty() ? io_.message() : io_.readiness().blocking.join(QLatin1Char(' '))),
+                true);
+            return;
+        }
+        say(QStringLiteral("Starting VR: SteamVR with the Monado driver..."));
+        return;
+    }
+    const bool steamUp = source_.fake() || steamClientRunning();
+    const bool started = actions_.launchSteamVR();
+    if (!started) {
+        say(QStringLiteral("Could not start Steam. Is it installed?"), true);
+    } else if (!steamUp) {
+        say(QStringLiteral("Steam is not running — starting it first; SteamVR will launch once Steam is up "
+                           "(press START VR again if it does not)."));
+    } else {
+        say(QStringLiteral("Starting SteamVR..."));
+    }
+    waitingForSteamVr_ = started;
+    if (started) {
+        messageTimer_.start(120000);
+    }
+}
+
+void DashboardPage::closeSteamVr(std::vector<SteamVrProc> targets, bool startAfter) {
     reset_->setEnabled(false);
-    say(QStringLiteral("Closing SteamVR..."));
+    startAfterClose_ = startAfter;
+    say(startAfter ? QStringLiteral("Restarting SteamVR: closing it...") : QStringLiteral("Closing SteamVR..."));
     closer_ = std::make_unique<SteamVrCloser>(std::move(targets), realProcSignals());
     resetClock_.start();
     closer_->begin(resetClock_.elapsed());
@@ -793,8 +867,24 @@ void DashboardPage::updateFixCaps() {
     fixCaps_->setVisible(need);
 }
 
+bool DashboardPage::crystalOn() const {
+    return source_.state().keepalive.crystalPresent;
+}
+
+bool DashboardPage::insideOutNow() const {
+    const KeepaliveStatus& k = source_.state().keepalive;
+    if (k.crystalPresent && !k.crystalLighthouse.isEmpty()) {
+        return k.crystalLighthouse != QLatin1String("1");
+    }
+    return ioSettings(conf_).mode == TrackingMode::InsideOut;
+}
+
+bool DashboardPage::monadoSession() const {
+    return !crystalOn() && ioSettings(conf_).mode == TrackingMode::InsideOut;
+}
+
 void DashboardPage::updateVrStatus() {
-    const bool inside = ioSettings(conf_).mode == TrackingMode::InsideOut;
+    const bool inside = monadoSession();
     const bool running = inside ? io_.active() : source_.state().steamvrRunning;
     if (running && vrStartMs_ == 0) {
         vrStartMs_ = QDateTime::currentMSecsSinceEpoch();
@@ -829,13 +919,15 @@ void DashboardPage::updateVrStatus() {
 
 void DashboardPage::updateMode() {
     updateVrStatus();
-    const IoSettings io = ioSettings(conf_);
-    const bool inside = io.mode == TrackingMode::InsideOut;
+    const bool inside = insideOutNow();
     if (trModeSel_ != nullptr) {
-        trModeSel_->setCurrent(inside ? 1 : 0); // reflect the saved mode (programmatic: does not emit activated)
+        trModeSel_->setCurrent(inside ? 1 : 0); // reflect the mode (programmatic: does not emit activated)
     }
     const bool active = io_.active();
-    if (direct_.active()) {
+    if (crystalOn()) {
+        trMode_->setText(inside ? QStringLiteral("Mode: Inside-out, tracked by the Crystal itself (SteamVR).")
+                                : QStringLiteral("Mode: Lighthouse (SteamVR and the base stations)."));
+    } else if (direct_.active()) {
         trMode_->setText(QStringLiteral("\"Monado directly\" runs (Development page). %1").arg(direct_.message()));
     } else if (!inside) {
         trMode_->setText(QStringLiteral("Mode: Lighthouse (SteamVR and the base stations)."));
@@ -846,20 +938,23 @@ void DashboardPage::updateMode() {
     }
     const RecReadiness& r = io_.readiness();
     const bool steamvr = source_.state().steamvrRunning;
-    const bool running = inside ? active : steamvr; // the same button toggles: blue START VR / red STOP VR
+    const bool session = monadoSession();
+    const bool running = session ? active : steamvr; // the same button toggles: blue START VR / red STOP VR
     ioStart_->setVisible(true);
+
     if (running) {
         ioStart_->setText(QStringLiteral("STOP VR"));
         ioStart_->setStyleSheet(QStringLiteral("QPushButton { background: #c0392b; color: #ffffff; border: none; "
                                                "border-radius: 4px; } QPushButton:hover { background: #d64533; }"));
-        ioStart_->setEnabled(inside ? io_.state() != RecState::Stopping : true);
-        ioStart_->setToolTip(inside ? QStringLiteral("Stops the inside-out tracking session.")
-                                    : QStringLiteral("Closes SteamVR (the Reset flow)."));
+        ioStart_->setEnabled(session ? io_.state() != RecState::Stopping : true);
+        ioStart_->setToolTip(session      ? QStringLiteral("Stops the inside-out tracking session.")
+                             : crystalOn() ? QStringLiteral("Closes SteamVR and switches the Crystal off.")
+                                           : QStringLiteral("Closes SteamVR (the Reset flow)."));
     } else {
         ioStart_->setText(QStringLiteral("START VR"));
         ioStart_->setStyleSheet(QString()); // back to the accent (blue) style
-        ioStart_->setEnabled(inside ? r.ready() : true);
-        ioStart_->setToolTip(inside ? (r.ready() ? QStringLiteral("Starts the camera broker, the controller tracker and "
+        ioStart_->setEnabled(session ? r.ready() : true);
+        ioStart_->setToolTip(session ? (r.ready() ? QStringLiteral("Starts the camera broker, the controller tracker and "
                                                                   "SteamVR with the Monado driver and the Tracking "
                                                                   "page's settings.")
                                                  : r.blocking.join(QLatin1Char('\n')))
@@ -945,6 +1040,39 @@ void DashboardPage::applyState() {
         say(QStringLiteral("SteamVR is running."));
     }
     const KeepaliveStatus& k = s.keepalive;
+    // the original Crystal: battery, switch-off button, IPD by its own buttons only, the tracking selector shows its mode
+    const bool crystal = k.crystalPresent;
+    const bool batKnown = crystal && k.crystalBattery >= 0;
+    hsBattery_->set(batKnown ? k.crystalBattery : -1, false);
+    hsBatteryText_->setText(batKnown ? QStringLiteral("%1 %").arg(k.crystalBattery) : QString());
+    for (QWidget* w : {static_cast<QWidget*>(hsBatteryLabel_), static_cast<QWidget*>(hsBattery_),
+                       static_cast<QWidget*>(hsBatteryText_)}) {
+        w->setVisible(batKnown);
+    }
+    crystalOffBtn_->setVisible(crystal);
+    refresh_->setVisible(!crystal);
+    refreshCrystal_->setVisible(crystal);
+    if (crystal && !wasCrystalRefresh_) {
+        const int hz = chovrCrystalRefresh(chovrSettingsFile());
+        refreshCrystal_->setCurrent(hz == 72 ? 0 : hz == 120 ? 2 : 1); // 0 / absent: CHOVR reports 90
+    }
+    wasCrystalRefresh_ = crystal;
+    if (crystal && !crystalChovrChecked_) {
+        crystalChovrChecked_ = true; // once per app start
+        bool changed = false;
+        if (chovrEnableCrystalOg(chovrSettingsFile(), &changed) && changed) {
+            say(QStringLiteral("Enabled the original Crystal in CustomHeadsetOpenVR (%1).").arg(chovrSettingsFile()));
+        }
+    }
+    ipd_->setEnabled(!crystal);
+    ipd_->setToolTip(crystal ? QStringLiteral("The Crystal's IPD is set with the buttons on the headset; the slider "
+                                              "follows them and the picture uses the same value.")
+                             : QStringLiteral("Moves the lenses to your IPD and renders with the same eye distance, at "
+                                              "once (Lighthouse and inside-out). Starts at the lens position the "
+                                              "headset reports."));
+    if (crystal && !k.crystalLighthouse.isEmpty()) {
+        trModeSel_->setCurrent(insideOutNow() ? 1 : 0);
+    }
     // The lens IPD the headset reports: at start and whenever it changes (the IPD buttons on the headset move the
     // lenses themselves), put the slider there and render with it; the motors are not touched. Not while the user is
     // moving the slider, nor for a few seconds after our own request (the lenses are still travelling).
@@ -972,15 +1100,20 @@ void DashboardPage::applyState() {
             }
         }
     }
-    const bool present = (k.running && k.headsetPresent) || hmd != nullptr || direct_.active();
-    const QString model = (k.running && !k.model.isEmpty()) ? k.model
-                          : (hmd != nullptr && !hmd->model.isEmpty()) ? hmd->model
-                                                                      : QStringLiteral("Headset");
+    const bool present = (k.running && k.headsetPresent) || k.crystalPresent || hmd != nullptr || direct_.active();
+    // the original Crystal: SteamVR shows its Lighthouse module ("REF-HMD"), keepalived knows the headset
+    const QString model = k.crystalPresent                               ? QStringLiteral("Pimax Crystal")
+                          : (k.running && !k.model.isEmpty())             ? k.model
+                          : (hmd != nullptr && !hmd->model.isEmpty())    ? hmd->model
+                                                                         : QStringLiteral("Headset");
     hsTitle_->setText(present ? model : QStringLiteral("No headset"));
-    // The tracking mode we can tell (from the settings); the faceplate we cannot, so we never claim one.
-    const bool insideOut = ioSettings(conf_).mode == TrackingMode::InsideOut;
-    hsSub_->setText(QStringLiteral("%1 · SteamVR")
-                        .arg(insideOut ? QStringLiteral("Inside-out") : QStringLiteral("Lighthouse")));
+    // The tracking mode: the original Crystal's own, else the settings (the Super's faceplate we cannot tell).
+    const bool insideOut = insideOutNow();
+    // the original Crystal: its own inside-out without a pose right now (covered cameras, a dark room, just switched)
+    const bool poseLost = k.crystalPresent && insideOut && !k.crystalTracked;
+    hsSub_->setText(QStringLiteral("%1%2 · SteamVR")
+                        .arg(insideOut ? QStringLiteral("Inside-out") : QStringLiteral("Lighthouse"),
+                             poseLost ? QStringLiteral(" · tracking lost") : QString()));
     // The chip: during a live session show the panel state, not keepalived's internal "paused".
     hsChip_->set(hmd != nullptr ? ChipText{QStringLiteral("SCREEN ON"), ChipKind::Info} : headsetChip(k));
     hsHint_->setText(headsetHint(k, s.steamvrRunning));
@@ -1010,11 +1143,12 @@ void DashboardPage::applyState() {
     // Serial: from the SteamVR headset during a session; keepalived does not report one yet. "—" when unknown.
     const QString hsSerial = (hmd != nullptr && !hmd->serial.isEmpty()) ? hmd->serial : QString();
     hsSerial_->setText(hsSerial.isEmpty() ? QStringLiteral("—") : hsSerial);
-    // Room setup and the sound tests need a live SteamVR session; grey them out until it runs.
-    roomBtn_->setEnabled(s.steamvrRunning);
-    if (quickRoomBtn_ != nullptr) {
-        quickRoomBtn_->setEnabled(s.steamvrRunning);
-    }
+    // Room setup and the sound tests need a live SteamVR session; grey them out until it runs. Room setup builds the
+    // inside-out room map: in Lighthouse mode SteamVR's own Room Setup does that job (user 2026-10-22).
+    const bool roomInside = insideOutNow();
+    roomBtn_->setEnabled(s.steamvrRunning && roomInside);
+    roomBtn_->setToolTip(roomInside ? QStringLiteral("Room setup in the headset (floor, boundary, room map).")
+                                    : QStringLiteral("Lighthouse: SteamVR's own Room Setup sets up the room."));
     if (soundPanel_ != nullptr) {
         soundPanel_->setVrRunning(s.steamvrRunning);
     }

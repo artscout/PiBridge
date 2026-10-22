@@ -69,7 +69,7 @@ struct SteamFiles {
         vrsettings = h.path(QStringLiteral("steam/config/steamvr.vrsettings"));
         state = h.path(QStringLiteral("xdg_state_home/pibridge/steamvr-drivers.json"));
         ours = h.path(QStringLiteral("pibridge-monado-build/steamvr-monado"));
-        other = h.path(QStringLiteral("omarchyvr/monado/steamvr-monado"));
+        other = h.path(QStringLiteral("other/monado/steamvr-monado"));
         chovr = h.path(QStringLiteral("ext/CustomHeadsetOpenVR"));
         writeAll(ours + QStringLiteral("/driver.vrdrivermanifest"), "{\n\t\"alwaysActivate\": false,\n\t\"name\" : \"monado\"\n}\n");
         writeAll(other + QStringLiteral("/driver.vrdrivermanifest"), "{ \"name\" : \"monado\" }\n");
@@ -654,22 +654,25 @@ TEST(headset_card_words_while_monado_directly_runs) {
 // ---------------------------------------------------------------- the Monado build
 
 TEST(monado_build_markers_and_kind) {
-    static const char kRust[] = "\x7f" "ELF\0\0\0\0PIMAX_SLAM\0PIMAX_ANCHOR\0PIMAX_EYE x PIMAX_CTRL_TRACK\0"
-                                "pose held from the tracker\0PIMAX_AE_MODEL\0PIMAX_SLAM_DRIFT_HOLD\0";
-    const QByteArray rust(kRust, sizeof kRust - 1);
-    MonadoBuildInfo b = scanMonadoBinary(rust, QStringLiteral("/b/monado-service"));
-    CHECK(b.ok() && b.kind == BuildKind::Rust && b.abiText.isEmpty());
-    CHECK(buildSummary(b).startsWith(QStringLiteral("Rust:")));
+    // a binary with every required marker but without the PIBRIDGE_PIMAX_ABI marker: not libpibridge_pimax.a
+    static const char kPlain[] = "\x7f" "ELF\0\0\0\0PIMAX_SLAM\0PIMAX_ANCHOR\0PIMAX_EYE x PIMAX_CTRL_TRACK\0"
+                                 "pose held from the tracker\0PIMAX_AE_MODEL\0PIMAX_SLAM_DRIFT_HOLD\0";
+    const QByteArray plain(kPlain, sizeof kPlain - 1);
+    MonadoBuildInfo b = scanMonadoBinary(plain, QStringLiteral("/b/monado-service"));
+    CHECK(b.ok() && b.kind == BuildKind::Unknown && b.abiText.isEmpty());
+    CHECK(buildKindWords(b.kind) == QStringLiteral("unknown"));
+    CHECK(buildSummary(b).startsWith(QStringLiteral("Unknown build: no PIBRIDGE_PIMAX_ABI marker")));
     CHECK(buildSummary(b).endsWith(QStringLiteral("All 7 required markers present.")));
     CHECK(buildBlockingReason(b).isEmpty());
-    QByteArray pibridge = rust;
-    pibridge += QByteArray("pibridge_pimax_abi_check\0PIBRIDGE_PIMAX_ABI\0", 38);
-    pibridge += QByteArray("PIBRIDGE_PIMAX_ABI 1 spec omarchyvr 5ffbcc5\0", 41);
+    // PiBridge's build: the marker as a symbol name (ignored) and as the whole string (monado-abi/src/abi_id.cpp)
+    static const char kAbi[] = "pibridge_pimax_abi_check\0PIBRIDGE_PIMAX_ABI\0PIBRIDGE_PIMAX_ABI 1 spec omarchyvr 5ffbcc5\0";
+    const QByteArray pibridge = plain + QByteArray(kAbi, sizeof kAbi - 1);
     b = scanMonadoBinary(pibridge);
-    CHECK(b.kind == BuildKind::PiBridge && b.abiText == QStringLiteral("PIBRIDGE_PIMAX_ABI 1 spec omarchyvr 5ffbcc5"));
+    CHECK(b.ok() && b.kind == BuildKind::PiBridge && b.abiText == QStringLiteral("PIBRIDGE_PIMAX_ABI 1 spec omarchyvr 5ffbcc5"));
     CHECK(buildKindWords(b.kind) == QStringLiteral("C++ (PiBridge)"));
-    CHECK(buildSummary(b).startsWith(QStringLiteral("C++ (PiBridge): PIBRIDGE_PIMAX_ABI 1 spec omarchyvr 5ffbcc5.")));
-    QByteArray old = rust;
+    CHECK(buildSummary(b) ==
+          QStringLiteral("C++ (PiBridge): PIBRIDGE_PIMAX_ABI 1 spec omarchyvr 5ffbcc5. All 7 required markers present."));
+    QByteArray old = pibridge;
     old.replace("PIMAX_AE_MODEL", "XXXXX_XX_XXXXX");
     old.replace("PIMAX_SLAM_DRIFT_HOLD", "XXXXXXXXXXXXXXXXXXXXX");
     b = scanMonadoBinary(old, QStringLiteral("/old/monado-service"));
@@ -684,7 +687,7 @@ TEST(monado_build_markers_and_kind) {
     CHECK(!monadoBuildInfo(h.path(QStringLiteral("none"))).checked);
     // the app's way: never on the calling thread; "checking" until the worker filled the cache
     const QString svc2 = h.path(QStringLiteral("b2/monado-service"));
-    writeAll(svc2, QByteArray(3 << 20, 'y') + rust);
+    writeAll(svc2, QByteArray(3 << 20, 'y') + pibridge);
     std::atomic<bool> done{false};
     MonadoBuildInfo a = monadoBuildInfoAsync(svc2, [&done] { done = true; });
     CHECK(a.checking && !a.checked);
@@ -703,13 +706,16 @@ TEST(monado_build_markers_and_kind) {
 
 TEST(monado_build_choices_and_driver_dir) {
     const auto c = monadoBuildChoices(QStringLiteral("/h"));
-    CHECK(c.size() == 3 && c[0].id == QStringLiteral("auto") && c[0].service.isEmpty());
-    CHECK(c[1].service == QStringLiteral("/h/gamedev/ovr-build/monado/src/xrt/targets/service/monado-service"));
-    CHECK(c[2].service == QStringLiteral("/h/gamedev/pibridge-monado-build/src/xrt/targets/service/monado-service"));
+    CHECK(c.size() == 2 && c[0].id == QStringLiteral("auto") && c[0].service.isEmpty());
+    CHECK(c[1].id == QStringLiteral("pibridge") && c[1].label == QStringLiteral("C++ (PiBridge)"));
+    CHECK(c[1].service == QStringLiteral("/h/gamedev/pibridge-monado-build/src/xrt/targets/service/monado-service"));
     CHECK(monadoBuildChoiceOf({}, QStringLiteral("/h")) == QStringLiteral("auto"));
     CHECK(monadoBuildChoiceOf(QStringLiteral("~/gamedev/pibridge-monado-build/src/xrt/targets/service/monado-service"),
                               QStringLiteral("/h")) == QStringLiteral("pibridge"));
-    CHECK(monadoBuildChoiceOf(c[1].service, QStringLiteral("/h")) == QStringLiteral("rust"));
+    CHECK(monadoBuildChoiceOf(c[1].service, QStringLiteral("/h")) == QStringLiteral("pibridge"));
+    // the dropped Rust-linked build's path is just another binary now
+    CHECK(monadoBuildChoiceOf(QStringLiteral("/h/gamedev/ovr-build/monado/src/xrt/targets/service/monado-service"),
+                              QStringLiteral("/h")) == QStringLiteral("other"));
     CHECK(monadoBuildChoiceOf(QStringLiteral("/opt/monado-service"), QStringLiteral("/h")) == QStringLiteral("other"));
     Home h;
     const QString svc = h.path(QStringLiteral("b/src/xrt/targets/service/monado-service"));
@@ -717,7 +723,7 @@ TEST(monado_build_choices_and_driver_dir) {
     CHECK(steamVrDriverDirFor(svc).isEmpty());
     writeAll(h.path(QStringLiteral("b/steamvr-monado/driver.vrdrivermanifest")), "{\"name\": \"monado\"}");
     CHECK(steamVrDriverDirFor(svc) == h.path(QStringLiteral("b/steamvr-monado")));
-    // an installed omarchyvr build: <lib>/monado/bin/monado-service next to <lib>/monado/steamvr-monado
+    // an installed build: <lib>/monado/bin/monado-service next to <lib>/monado/steamvr-monado
     const QString inst = h.path(QStringLiteral("lib/monado/bin/monado-service"));
     writeAll(inst, "");
     writeAll(h.path(QStringLiteral("lib/monado/steamvr-monado/driver.vrdrivermanifest")), "{\"name\": \"monado\"}");

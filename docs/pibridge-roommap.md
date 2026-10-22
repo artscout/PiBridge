@@ -44,19 +44,10 @@ Not ported / different:
 - The live paths (`--source broker`, `floor touch/follow`, `auto` against a running Monado) are the same code paths
   as offline but were not run against a live Monado here (agents do not touch a running session).
 
-## Difftests (`ctest -R "pibridge_(room|roommap|anchor)_diff"`)
+## Tests
 
-Against the Rust tools built from the pin, stdout + stderr (masked: durations, ring age, tool name) and the files
-written, byte for byte (`monado-abi/difftest/run_difftest.sh`, `tests/rm_run.sh`, `tests/dump_map.sh`; wall-clock
-fields `created`/`when` masked). Lab data (read only, skip 77 without): the Crystal calibration, the worn take
-`recordings/20261019-070409` with its Basalt run `slam/study3/runs/L`, the desk take `slamrec/euroc_20261019052737`
-with `slam/study2/runs/L`, `cam/ctrl1.pxcam`. Outputs with the headset's own values are compared by hash.
+The difftests against the Rust tools (`pibridge_{anchor,room,roommap}_diff_*`: stdout, stderr and the files written,
+byte for byte, on synthetic input and the lab takes) were removed with the oracle once the port was finished
+(2026-10-22). The libraries are tested by `ctest -R "pibridge_(anchor|roommap)_"` (`docs/libpibridge-roommap.md`,
+`docs/libpibridge-anchor.md`).
 
-- pibridge-anchor: 13 (status with config/offset/rings old, empty, fresh, short, env paths; clear).
-- pibridge-room: 23 (demo; build on both takes; reloc of one take in the other's map and of a take in its own map with
-  `--save`; info; anchors set/list/rm; 11 errors).
-- pibridge-roommap: 28 (build worn with loop closure and the floor, `--refine`, desk `--no-loops`; relocalize a take in
-  its own map with the window fits, a take in another map (not recognised); floor detect (map, recording + map),
-  drift with the CSV, set; export, view; info; apply dry and written (offset + lease files); cycle; light on a
-  `.pxcam` (stretch, darkened, no stretch); setup show; auto without a map and without Monado; setup without a feed;
-  6 errors).

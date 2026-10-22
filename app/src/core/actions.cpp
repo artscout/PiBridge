@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "actions.h"
+
+#include <QSaveFile>
 #include "paths.h"
 
 #include <QDir>
@@ -36,7 +38,8 @@ void Actions::systemctl(const QStringList& args, Done done) {
 
 // The daemons read the conf at start and on SIGHUP (docs/CONVENTIONS.md). A stopped unit just ignores it.
 void Actions::reload(const QString& unit) {
-    systemctl({QStringLiteral("kill"), QStringLiteral("--signal=HUP"), unit}, {});
+    // the main process only: not whatever else runs in the unit's cgroup
+    systemctl({QStringLiteral("kill"), QStringLiteral("--kill-whom=main"), QStringLiteral("--signal=HUP"), unit}, {});
 }
 
 bool Actions::launchSteamVR() {
@@ -82,6 +85,34 @@ bool Actions::setAudioToHeadset(bool on, Done done) {
         done(0, {});
     }
     return true;
+}
+
+bool Actions::setCrystalTracking(bool lighthouse) {
+    if (!conf_.set("crystal_tracking", lighthouse ? "lighthouse" : "slam")) {
+        return false;
+    }
+    reload(kKeepalive);
+    return true;
+}
+
+bool Actions::crystalShutdown(const QString& statusDir) {
+    QDir().mkpath(statusDir);
+    QSaveFile f(statusDir + QStringLiteral("/crystal-request"));
+    if (!f.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    f.write("shutdown\n");
+    return f.commit();
+}
+
+bool Actions::crystalRestartSteamVr(const QString& statusDir) {
+    QDir().mkpath(statusDir);
+    QSaveFile f(statusDir + QStringLiteral("/crystal-request"));
+    if (!f.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    f.write("restart-steamvr\n");
+    return f.commit();
 }
 
 QString Actions::eyecalTool() const {

@@ -19,6 +19,11 @@ struct KeepaliveStatus {
     bool headsetPresent = false;
     bool panelOn = false;
     int rateHz = 0;
+    bool crystalPresent = false;    // the original Crystal (P3B) is on USB
+    QString crystalStage;           // connecting | switching | ready
+    QString crystalLighthouse;      // how it tracks now: "1" Lighthouse / "0" its own inside-out / "" (not known yet)
+    bool crystalTracked = false;    // its own inside-out has a pose right now
+    int crystalBattery = -1;        // %, -1 = not known
     double lensIpdMm = 0;    // the lens IPD the headset reports (lens_ipd_x100 / 100), 0 = not known
     QString follow;
     bool followRunning = false;

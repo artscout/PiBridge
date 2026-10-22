@@ -39,16 +39,15 @@ Environment (unchanged names): `PIMAX_LENS_CONF`, `XDG_CONFIG_HOME`/`HOME` (`oma
 |---|---|
 | `pibridge_lens_config`, `_model`, `_lut`, `_mask`, `_png`, `_font`, `_grid`, `_lens` | twins of the 58 Rust unit tests of config/model/lut/mask/png/font/grid/lib (same cases, same expected values), plus Path helper checks; the LUT tests read omarchyvr's public fixture `rust/pimax-lens/tests/data/pvr-dump-sub.json` (skipped without the checkout) |
 | `monado_abi_lens_capi` | twins of the 3 `capi.rs` tests through `libpibridge_pimax.a` |
-| `monado_abi_diff_lens_synth` | the difftest's 72 synthetic scenarios against the Rust `libpimax_lens.a`: the reference profile, code defaults, every key, every bad-line warning (CRLF, NUL, invalid UTF-8, odd numbers), the environment overrides, valid and 14 kinds of corrupt LUT files, relative / `~/` / absolute LUT paths, the debug grid (dirs, divisors, unwritable places), NULL handles, odd aspects |
-| `monado_abi_diff_lens_crystal` | `../ext/lens/crystal.conf` + `crystal-lut.bin` (lab data, skipped without): a 513 x 513 grid per eye, masks, the debug grid |
-| `monado_abi_diff_lens_reference` | the shipped Dream Air profile as a file: 513 x 513 per eye, masks, debug grid |
 
-The difftest output is byte-identical except where noted below.
+The difftests against the Rust `libpimax_lens.a` (synthetic scenarios, the Crystal conf + LUT, the reference
+profile; all byte-identical except where noted below) were removed with the oracle once the port was finished
+(2026-10-22).
 
 ## Differences from the Rust code (intended)
 
 - The PNG deflate stream is zlib's, not miniz_oxide's: the files differ in their IDAT bytes; the scanlines (filter
-  bytes and pixels) are identical, which is what the difftest compares.
+  bytes and pixels) are identical (what the former difftest compared).
 - `png::decode` returns an error on a chunk whose CRC lies past the end (the Rust code panics); `png::encode` throws
   `std::invalid_argument("pixel buffer size")` where the Rust code panics.
 - No exception leaves the C ABI (create returns NULL, the mask call -1); the Rust functions would abort on a panic.

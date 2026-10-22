@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # pibridge-keepalived: keeps the headset awake while the followed VR runtime runs (port of `omarchyvr keepalived`).
 
-add_library(pibridge_keepalived_core STATIC src/keepalived.cpp)
+add_library(pibridge_keepalived_core STATIC src/keepalived.cpp src/crystal.cpp)
 target_include_directories(pibridge_keepalived_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(pibridge_keepalived_core PUBLIC pibridge_hmd pibridge_common)
 

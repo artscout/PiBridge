@@ -6,11 +6,11 @@ keeps the headset awake while SteamVR runs, `pibridge-eyed` runs the eye tracker
 This guide installs PiBridge for your user only (into `~/.local`). Root is needed for three things only, each said where
 it comes: the udev rule, the NVIDIA module (Crystal Super) and the package installs.
 
-Today's target: the **Pimax Crystal Super with the Lighthouse faceplate under SteamVR**, tested on Ubuntu 26.04 (KDE
-Wayland) with an RTX 5090. The steps for Arch and Fedora use the same tools; their package names are given, but they
+Today's targets: the **Pimax Crystal Super with the Lighthouse faceplate** and the **original Pimax Crystal** (5.5) under
+SteamVR, tested on Ubuntu 26.04 (KDE Wayland) with an RTX 5090. The steps for Arch and Fedora use the same tools; their package names are given, but they
 have not been tried on real hardware yet.
 
-**Another Pimax headset** (Crystal, Crystal Light, Dream Air SE, 8KX, 5K family, ...): PiBridge only sends a headset
+**Another Pimax headset** (Crystal Light, Dream Air SE, 8KX, 5K family, ...): PiBridge only sends a headset
 the commands its official Pimax client sends, so a model is added from a recording of that client. If you have one
 and a Windows PC with the Pimax client, please record it with the guided kit in [`windows/`](../windows/) (about 15
 minutes, read only towards the headset) and send us the bundle privately: [HEADSET-DATA.md](HEADSET-DATA.md).
@@ -81,7 +81,7 @@ units then go to `/usr/local/share/systemd/user/`, also on systemd's user search
 
 ## 3. Access to the headset (root, once)
 
-The headset's HID interfaces (vendor `34a4`) and the eye chip (`2104:0561`) must be readable and writable by you.
+The headset's HID interfaces (vendor `34a4`) and the eye chip (`2104:0561`; `2104:0220` on the original Crystal) must be readable and writable by you.
 The rule gives the logged-in user access (`uaccess`):
 ```
 sudo cp ~/.local/share/pibridge/udev/70-pibridge.rules /etc/udev/rules.d/
@@ -152,7 +152,7 @@ manifest to `~/.local/share/vulkan/implicit_layer.d/`.
 (`/usr/share/vulkan/implicit_layer.d/VK_LAYER_PIBRIDGE_record.json`) — a root step, done through the app's pkexec
 prompt. Full detail (capture sources, encoders, options) is in [record.md](record.md).
 
-## 5. Pimax Crystal Super (Lighthouse faceplate)
+## 5. Pimax Crystal Super (Lighthouse faceplate) and the original Crystal
 
 Who does what in this setup:
 
@@ -162,7 +162,7 @@ Who does what in this setup:
 | The headset display in SteamVR (render size, lens distortion, IPD) | CustomHeadsetOpenVR (sboys3) with our patches (5.3) |
 | Wake, keepalive, panel on, sound switch | `pibridge-keepalived` |
 | Eye tracking for OpenXR apps (`XR_EXT_eye_gaze_interaction`) | `pibridge-eyed` -> `/dev/shm/pibridge-eye-gaze` -> CustomHeadsetOpenVR |
-| 7104x3840 at 90 Hz over DSC on RTX 50 | driver 615.71.09+ works as-is; only older branches (595.x) need the NVIDIA patch + EDID override (5.2) |
+| 7104x3840 at 90 Hz over DSC on RTX 50 | driver 615.71.09+ needs no patched module; older branches (595.x) do. The EDID override (5.2) is for every driver |
 | Headset speakers and microphone | USB audio, with the WirePlumber rule (5.4) |
 
 The files are in `patches/` of the source tree; `patches/README.md` says where each comes from and its licence.
@@ -171,14 +171,47 @@ The files are in `patches/` of the source tree; `patches/README.md` says where e
 Switch the Lighthouse faceplate on (its switch). The Valve devices (`28de:2300`, and `28de:2101` dongles) appear on
 their own; pair the controllers in SteamVR as usual.
 
-### 5.2 NVIDIA driver (RTX 50 / Blackwell; root)
+### 5.2 NVIDIA driver (root)
+#### The EDID override (every Pimax headset, every driver version)
+NVIDIA's driver needs an EDID override for the headset's output, made from the headset's own EDID:
+- the "VR headset" flag (a Microsoft VSDB): without it the desktop extends onto the headset (the original Crystal
+  shows the KDE desktop) instead of leaving it to SteamVR;
+- 8 bits per colour: the Crystal Super's EDID says "colour depth undefined", and DSC refuses the 6 bpc NVIDIA then
+  uses, so it gets no picture at all.
+
+One script does it for the Crystal Super, the original Crystal and the Crystal Light (the Light untested). The headset
+must be on. The Crystal Super is switched on by software: PiBridge running, or `pibridge-keepalived --no-follow
+--video 90` in a terminal with the service stopped. The Crystal Light is switched on by software too (Pimax Play on
+Windows), which PiBridge does not do for it yet. The original Crystal is switched on with its own power button:
+```
+/usr/share/pibridge/edid/pibridge-headset-edid status           # card1-DP-6 DP-4 desktop: no override yet
+sudo /usr/share/pibridge/edid/pibridge-headset-edid apply        # then reboot
+```
+(From the source tree: `tools/headset-edid/pibridge-headset-edid`.) It finds the output itself and writes
+`/etc/pibridge/pimax-edid.bin`, `/etc/pibridge/nvidia-modeset.conf` (`override.[<GPU>].<output>=...`) and
+`/etc/modprobe.d/pibridge-nvidia.conf` (`options nvidia-modeset config_file=...`). The driver reads them once, when it
+loads, so a reboot is needed; `status` then says `vr`. When nvidia-modeset loads from the initramfs, the script also
+installs an initramfs hook and rebuilds it (Ubuntu/Debian initramfs-tools; on Arch / Fedora add the two files by hand:
+`FILES=` in `/etc/mkinitcpio.conf`, `install_items+=` in a `/etc/dracut.conf.d/` file).
+
+- The override belongs to the GPU output, not to the headset. Plugged into another DisplayPort, the headset needs
+  `apply` and a reboot again. An overridden output counts as connected even when empty, and a monitor plugged into it
+  would get the headset's EDID: `sudo pibridge-headset-edid forget DP-4` (or its DRM name, `card1-DP-6`) takes one
+  output back, `remove` all of them.
+- One override serves every Pimax: it carries the timings of all headsets the script knows
+  (`/usr/share/pibridge/edid/known/`) and of each one it has seen here (`/var/lib/pibridge/edid/`), so swapping the
+  Crystal Super and the original Crystal on the same output needs nothing more.
+- Older installs under the omarchyvr names (`/etc/omarchyvr/`, `omarchyvr-nvidia.conf`, the `omarchyvr-edid` hook)
+  are taken over by `apply` and removed.
+
+#### The patched modules (driver branches older than 615.71.09, Crystal Super on RTX 50)
 > **Driver 615.71.09 and newer (RTX 5090): no patch needed.** The Blackwell DSC/display fixes are upstream, so the
-> stock open module drives the Crystal Super on its own. On Ubuntu just install the packaged open module
-> (`sudo apt install linux-modules-nvidia-615-open-generic nvidia-dkms-615-open` or the `-open` metapackage) — it is
-> Canonical-signed, so it loads under Secure Boot with no MOK step. If you had the hand-built patched module from an
-> older branch, remove that override first (e.g. `sudo mv /lib/modules/$(uname -r)/updates/omarchyvr-nvidia
-> ~/nvidia-override.bak && sudo depmod -a`) so the packaged 615 module takes over, then reboot. The hand-patched steps
-> below are only for **older driver branches (e.g. 595.x)** that lack the upstream fix.
+> stock open module drives the Crystal Super on its own (with the EDID override above). On Ubuntu just install the
+> packaged open module (`sudo apt install linux-modules-nvidia-615-open-generic nvidia-dkms-615-open` or the `-open`
+> metapackage): it is Canonical-signed, so it loads under Secure Boot with no MOK step. If you had the hand-built
+> patched module from an older branch, `sudo /path/to/pibridge/patches/nvidia/blackwell/uninstall-nvidia.sh` removes
+> it (and the override: run `apply` again afterwards), then reboot. **Never install patched modules of another
+> version than the NVIDIA libraries:** the desktop loses its GPU; `install-nvidia.sh` refuses that.
 
 Without the patch on an older branch the driver lists no mode for the headset ("DP Bandwidth check failed"). Why, and
 what the patch changes: `patches/nvidia/README.md`. The install script is written for Ubuntu/Debian (initramfs-tools).
@@ -195,9 +228,10 @@ On an RTX 20/30/40 the Crystal Super would need the 2Heads1OR patches in `patche
    ```
    The five modules are then in `kernel-open/`: `nvidia.ko`, `nvidia-modeset.ko`, `nvidia-drm.ko`, `nvidia-uvm.ko`,
    `nvidia-peermem.ko`.
-2. A signing key (Secure Boot). The install script checks the key's name, so keep it exactly:
+2. A signing key (Secure Boot). The install script checks the key's name, so keep it exactly (the name is from
+   omarchyvr, so keys made for it work too):
    ```
-   mkdir -p ~/crystal-nvidia/{modules,mok,edid}
+   mkdir -p ~/crystal-nvidia/{modules,mok}
    cd ~/crystal-nvidia/mok
    openssl req -new -x509 -newkey rsa:2048 -nodes -days 36500 -outform DER \
        -keyout MOK.priv -out MOK.der -subj "/CN=omarchyvr local NVIDIA module signing/"
@@ -212,49 +246,39 @@ On an RTX 20/30/40 the Crystal Super would need the 2Heads1OR patches in `patche
        /lib/modules/$(uname -r)/build/scripts/sign-file sha256 ~/crystal-nvidia/mok/MOK.priv ~/crystal-nvidia/mok/MOK.der "$m"
    done
    ```
-4. The EDID override (the headset's EDID says "colour depth undefined", and DSC refuses the 6 bpc that NVIDIA then
-   uses). The headset must be awake: stop the service and keep it awake by hand in a terminal while you do this:
-   ```
-   systemctl --user stop pibridge-keepalived
-   pibridge-keepalived --no-follow --video 90        # leave it running; Ctrl+C when done
-   ```
-   In a second terminal, find the headset's connector (its EDID starts with the vendor bytes `42 d2`, "PVR") and make
-   the override:
-   ```
-   for f in /sys/class/drm/card*-DP-*/edid; do [ "$(od -An -tx1 -j8 -N2 "$f" | tr -d ' ')" = 42d2 ] && echo "$f"; done
-   python3 /path/to/pibridge/patches/nvidia/blackwell/make_crystal_edid.py /sys/class/drm/cardX-DP-N/edid ~/crystal-nvidia/edid/crystal-edid.bin
-   ```
-5. Install (headset still awake: the script reads the headset's output name from the driver) and reboot:
+4. Install, with the headset on (the script runs `pibridge-headset-edid apply` for the override), and reboot:
    ```
    sudo /path/to/pibridge/patches/nvidia/blackwell/install-nvidia.sh ~/crystal-nvidia
    ```
-   Then stop the hand-started `pibridge-keepalived` (Ctrl+C), `systemctl --user start pibridge-keepalived`, and reboot.
-   `--debug` (nvidia-modeset `debug=1` at every boot) is for diagnosing a rejected mode only; running the script
-   again without it removes `debug=1`.
-   Undo: `sudo /path/to/pibridge/patches/nvidia/blackwell/uninstall-nvidia.sh`, then reboot. If a boot hangs, pick another kernel
-   in GRUB's "Advanced options" and run `uninstall-nvidia.sh <the hung kernel's version>` there.
+   It puts the modules into `/lib/modules/<kernel>/updates/pibridge-nvidia` and rebuilds the initramfs. `--no-edid`:
+   modules only. `--debug` (nvidia-modeset `debug=1` at every boot) is for diagnosing a rejected mode only; running
+   the script again without it removes `debug=1`.
+   Undo: `sudo /path/to/pibridge/patches/nvidia/blackwell/uninstall-nvidia.sh`, then reboot. If a boot hangs, pick
+   another kernel in GRUB's "Advanced options" and run `uninstall-nvidia.sh <the hung kernel's version>` there.
 
-Arch and Fedora: steps 1 to 4 are the same; the script's initramfs step uses Ubuntu's `update-initramfs`. Install by
-hand instead: the signed modules into `/lib/modules/$(uname -r)/updates/`, `depmod -a`, the EDID file and
-`options nvidia-modeset config_file=...` as the script writes them, and add both files to the initramfs
-(`FILES=` in `/etc/mkinitcpio.conf` on Arch, `install_items+=` in a `/etc/dracut.conf.d/` file on Fedora). A driver
-update needs the module build and signing again.
+Arch and Fedora: steps 1 to 3 are the same; the script's initramfs step uses Ubuntu's `update-initramfs`. Install by
+hand instead: the signed modules into `/lib/modules/$(uname -r)/updates/`, `depmod -a`, and the EDID override as
+above. A driver update needs the module build and signing again.
 
 ### 5.3 CustomHeadsetOpenVR (the SteamVR display driver)
-[CustomHeadsetOpenVR](https://github.com/sboys3/CustomHeadsetOpenVR) by sboys3, with two Linux patches: the direct
-USB connection (no Pimax runtime on Linux) and the gaze from shared memory. Either use the branch that has them:
+[CustomHeadsetOpenVR](https://github.com/sboys3/CustomHeadsetOpenVR) by sboys3, with PiBridge's Linux patches
+(`patches/chovr/`): the direct USB connection (no Pimax runtime on Linux), the gaze from shared memory, the
+"Pimax Builtin (from dump)" lens profile, and the original Crystal (its Lighthouse and its own inside-out, the
+refresh rate). For the Crystal Super the branch with the first two is enough:
 ```
 git clone --recurse-submodules --branch linux-crystal-super https://github.com/artscout/CustomHeadsetOpenVR.git
 ```
-or apply them to upstream commit `4f25826` (direct-usb first):
+or apply them to upstream commit `4f25826` (in this order; the original Crystal needs all four):
 ```
 git clone --recurse-submodules https://github.com/sboys3/CustomHeadsetOpenVR.git
 cd CustomHeadsetOpenVR && git checkout 4f25826 && git submodule update --init --recursive
 git apply /path/to/pibridge/patches/chovr/chovr-linux-direct-usb.patch
 git apply /path/to/pibridge/patches/chovr/chovr-linux-eye-gaze.patch
+git apply /path/to/pibridge/patches/chovr/chovr-linux-pimax-dump-profile.patch
+git apply /path/to/pibridge/patches/chovr/chovr-linux-crystal.patch
 cd ..
 ```
-(A pull request with both is pending upstream.) Build it and register it with SteamVR:
+(The changes are offered upstream.) Build it and register it with SteamVR:
 ```
 cd CustomHeadsetOpenVR/CustomHeadsetOpenVR
 mkdir -p build && cd build
@@ -279,6 +303,42 @@ systemctl --user restart wireplumber
 ```
 The **Default audio output** switch in the app (on by default) makes the headset the default output while SteamVR
 runs.
+
+### 5.5 The original Pimax Crystal
+The original Crystal (USB `34a4:0012`, "P3B") is a standalone headset with its own Snapdragon XR2: it is switched on
+with its power button, runs on its battery, tracks itself (inside-out) and switches to Lighthouse tracking by a
+command, with no faceplate swap. It needs the same parts as the Crystal Super (5.2 EDID override, 5.3
+CustomHeadsetOpenVR with **all four** patches, the udev rule of section 3) and no NVIDIA module patch.
+
+Who does what:
+
+| Part | Who |
+|---|---|
+| Connecting when it is switched on, the tracking mode, switching it off | `pibridge-keepalived`: the frames Pimax Play sends (`screen_state`, `video 120`, `EnableLighthouse` / `LighthouseTakeEffect`, `shutDown`, `setTobiiEyeDeviceEnable`), byte for byte from a Windows recording |
+| Head and controller poses in its own inside-out | the headset; `pibridge-keepalived` writes them to `/dev/shm/pibridge-crystal-pose`, CustomHeadsetOpenVR's SLAM headset hands them to SteamVR |
+| Head and controllers in Lighthouse mode | SteamVR's Lighthouse driver (its built-in Lighthouse module, Index controllers) |
+| Display | CustomHeadsetOpenVR (`crystalOG`, enabled by the app); 72, 90 or 120 Hz from the Dashboard |
+| Eye tracking | its Tobii chip `2104:0220`, switched on by `pibridge-keepalived`, read by `pibridge-eyed` |
+| Sound | over DisplayPort (the GPU's audio, the port named "Pimax"); its USB audio is the microphone |
+
+Use:
+1. Switch it on with its power button. `pibridge-keepalived` connects within a few seconds, switches it to the
+   tracking mode chosen on the Dashboard, waits ~10 s for its DisplayPort to settle, then starts SteamVR and PiBridge.
+2. The Dashboard shows its battery, **SWITCH OFF**, and the tracking it really runs (from its reports; "tracking lost"
+   when its inside-out has no position). The IPD is set with the buttons on the headset; the slider follows them.
+3. **Lighthouse / Inside-out** on the Dashboard switches the headset; a running SteamVR is closed and started again,
+   since SteamVR picks its headset device at its start. The refresh rate (72 / 90 / 120 Hz) restarts it the same way.
+4. **STOP VR** closes SteamVR and switches the headset off. **Reset SteamVR** restarts SteamVR.
+
+Notes:
+- The EDID override (5.2) is what keeps the desktop off the headset: without it KDE uses it as a monitor.
+- Started before its DisplayPort settles, SteamVR gets only the 72 Hz mode and the headset never shows the picture
+  (`pibridge-keepalived` logs `video link 1`); the wait above avoids that. `video link 2` means the panel shows the
+  PC's picture.
+- Its sound output exists only while SteamVR drives its display; `pibridge-keepalived` makes it the default output as
+  soon as it appears.
+- Not yet: controller vibration, its own controller models (they are drawn as Quest 2 controllers), the floor height in
+  inside-out (its origin is where its tracking started).
 
 ## 6. Eye tracking
 

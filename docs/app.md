@@ -347,7 +347,7 @@ link). The editing is libpibridge-room's `Editor`, the same one the headset tool
 
 ### Development: Monado build and Monado directly
 
-- **Monado build**: the A/B selector (Auto / Rust-linked (live) / C++ (PiBridge)) on `rec_monado_service`; the build
+- **Monado build**: the selector (Auto / C++ (PiBridge)) on `rec_monado_service`; the build
   (`PIBRIDGE_PIMAX_ABI` marker), the required markers (a missing one blocks every start), the SteamVR driver dir,
   cap_sys_nice and **Fix permissions** (`pkexec setcap cap_sys_nice=ep`, only after a dialog). [DEVELOPMENT.md](DEVELOPMENT.md).
 - **Monado directly (debug / A-B)**: START MONADO / Stop, the home scene switch; while it runs own apps start on it and

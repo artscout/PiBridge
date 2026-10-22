@@ -67,8 +67,8 @@ the fit) the C++ aborts the process, as a Rust panic inside an `extern "C"` func
 
 The fixtures (`ctrl_buttons_hub2.rec.gz`, `p82.rec.gz`, `p83.rec.gz`, `ctrl_marks.json`, `inhand_*.csv.gz`) are read
 from the omarchyvr checkout (`PIBRIDGE_OMARCHYVR_DIR/rust/fixtures`, read only); the tests that need them exit 77
-(skipped) without it. Every test runs with `HOME` and `XDG_RUNTIME_DIR` in the build tree. Byte-for-byte parity
-with the Rust library is the difftest of `docs/monado-abi.md` (`monado_abi_diff_hands_*`).
+(skipped) without it. Every test runs with `HOME` and `XDG_RUNTIME_DIR` in the build tree. (The byte-for-byte
+difftests against the Rust library were removed with the oracle once the port was finished, 2026-10-22.)
 
 Not ported: `tests/driver_glue.rs` (`#[ignore]` in Rust: it links the object `pimax_ctrl.c.o` of a built Monado tree
 with the hands patch); its job, the real driver glue over this archive, is the Monado switch (M9).
@@ -106,7 +106,7 @@ A/B switches: `PIBRIDGE_CTRL_INS_MS`, `PIBRIDGE_CTRL_INS_TAU_MS`, `PIBRIDGE_CTRL
 `PIBRIDGE_CTRL_TILT`, `PIBRIDGE_CTRL_KEEP_S`, `PIBRIDGE_CTRL_GRAV_DEG`.
 
 The C ABI is unchanged. `Config{}` keeps the Rust defaults, so the Rust twins are unchanged. `pibridge_ctrl_fuse_pibridge`
-tests the new paths. The hands difftests and `monado_abi_hands_capi` run with `PIBRIDGE_CTRL_PARITY=1`.
+tests the new paths. `monado_abi_hands_capi` runs with `PIBRIDGE_CTRL_PARITY=1`.
 
 ## Tracker (M7)
 

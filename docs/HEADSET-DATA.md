@@ -116,7 +116,7 @@ delete the bundle when the model is done, or earlier if you ask.
 |---|---|---|
 | Crystal Super micro-OLED | captures and a device description (`devices/crystal-super.toml`), tested with the Lighthouse faceplate | **supported** (alpha) |
 | Crystal Super QLED 57 PPD / 50 PPD, Crystal Super UW | the micro-OLED's description may fit, not tested | data wanted |
-| Crystal (original, software-switched Lighthouse mode) | nothing yet | data wanted |
+| Crystal (original, software-switched Lighthouse mode) | Windows recording 2026-10-22: its HID protocol (`libpibridge-hmd` `p3b.h`), Lighthouse and its own inside-out, eye tracking, sound | **supported** (alpha, one headset tested) |
 | Crystal Light | description from omarchyvr (no captures, USB id not verified), untested | data wanted |
 | Dream Air | description from omarchyvr (`devices/dream-air.toml`, from Pimax Play captures; works with omarchyvr's Monado stack), untested in PiBridge | description from omarchyvr, untested |
 | Dream Air SE | description from omarchyvr (no captures, USB id not verified), untested | data wanted |

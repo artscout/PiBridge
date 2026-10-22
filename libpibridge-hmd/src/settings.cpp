@@ -126,6 +126,15 @@ Settings Settings::parse(std::string_view text) {
             s.eye_profile = std::string(val);
         } else if (key == "eye_flip_x") {
             boolean(s.eye_flip_x);
+        } else if (key == "crystal_tracking") {
+            if (val == "lighthouse" || val == "slam" || val == "keep") {
+                s.crystal_tracking = std::string(val);
+            } else {
+                s.warnings.push_back(where + "crystal_tracking=" + std::string(val) +
+                                     " is not lighthouse, slam or keep, kept " + s.crystal_tracking);
+            }
+        } else if (key == "crystal_autostart_steamvr") {
+            boolean(s.crystal_autostart_steamvr);
         }
         // unknown keys are ignored (other parts and newer apps add their own)
     }

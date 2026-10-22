@@ -329,7 +329,7 @@ Live test (SteamVR + driver_monado, Crystal): after MAP THE ROOM the floor was w
   `$XDG_RUNTIME_DIR/pibridge/steamvr-stage`; when the session pid is a vrserver, pibridge-roommap uses its standing height
   for the floor and composes its yaw and horizontal origin on top, so the floor lands on SteamVR's standing y = 0
   and the centre / forward on its origin / -Z (libpibridge-roommap `floor.h` `SteamVrStage`; without the file: raw
-  y = 0, with a note). monado-service sessions keep the 1.6 m rule (Rust parity, difftests unchanged).
+  y = 0, with a note). monado-service sessions keep the 1.6 m rule (Rust parity).
 - **The table.** The fast setup took a desk 0.76 m below the head as the floor (the Rust gate is 0.4 m). The fast
   setup is done standing, so a points floor less than 1.0 m below the head is set aside (`floor.toml.rejected`), the
   map is searched again with `floor detect --min-below 1.0`, and with no such layer the controller touch is asked

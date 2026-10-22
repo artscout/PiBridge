@@ -68,4 +68,3 @@ computes sin/cos per ray); `-fno-math-errno`.
 | `pibridge_roommap_roommap` | 28 twins: omarchyvr-roommap tests.rs (9), floor.rs (6), setup.rs (9), light.rs (4) |
 | `pibridge_roommap_probe_room` | probe of the synthetic room through the reference calibration (8721 lines: pattern, LUTs, ray tables, renders, undistortion, raw ORB, features, stereo; float bits) = the oracle's (SHA-256 in `tests/golden/room_probe.sha256`) |
 | `pibridge_roommap_probe_trace` | 2000 ray traces of the synthetic room = the oracle's (`tests/golden/trace_probe.txt.gz`) |
-| `pibridge_room_diff_*`, `pibridge_roommap_diff_*` (tools/roommap) | the tools against the Rust tools on the Crystal takes, `docs/pibridge-roommap.md` |

@@ -9,3 +9,6 @@ windll/
 winbridge/*.so
 winbridge/winbridge-client
 winbridge/vit-replay
+
+# Python bytecode (tools/headset-edid imports make_crystal_edid)
+__pycache__/

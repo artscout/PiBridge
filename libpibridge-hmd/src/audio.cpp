@@ -54,8 +54,22 @@ std::optional<std::string> run_pactl(const std::vector<std::string>& args) {
         argv.push_back(s.data());
     }
     argv.push_back(nullptr);
+    // the C locale: `pactl list cards` is parsed by its English keys
+    std::vector<std::string> env_store;
+    for (char** e = environ; *e != nullptr; e++) {
+        const std::string_view v(*e);
+        if (!v.starts_with("LC_ALL=") && !v.starts_with("LANGUAGE=")) {
+            env_store.emplace_back(v);
+        }
+    }
+    env_store.emplace_back("LC_ALL=C");
+    std::vector<char*> envp;
+    for (auto& e : env_store) {
+        envp.push_back(e.data());
+    }
+    envp.push_back(nullptr);
     pid_t pid = 0;
-    const int rc = posix_spawnp(&pid, "pactl", &fa, nullptr, argv.data(), environ);
+    const int rc = posix_spawnp(&pid, "pactl", &fa, nullptr, argv.data(), envp.data());
     posix_spawn_file_actions_destroy(&fa);
     ::close(pipefd[1]);
     if (rc != 0) {
@@ -105,6 +119,73 @@ std::optional<std::string> pick(std::string_view list, std::string_view prefix) 
     return std::nullopt;
 }
 
+std::string DpPort::sink() const {
+    constexpr std::string_view card_prefix = "alsa_card.";
+    constexpr std::string_view profile_prefix = "output:";
+    const std::string_view c = std::string_view(card).starts_with(card_prefix)
+                                   ? std::string_view(card).substr(card_prefix.size()) : std::string_view(card);
+    const std::string_view p = std::string_view(profile).starts_with(profile_prefix)
+                                   ? std::string_view(profile).substr(profile_prefix.size()) : std::string_view(profile);
+    return "alsa_output." + std::string(c) + "." + std::string(p);
+}
+
+std::optional<DpPort> parse_dp_port(std::string_view list) {
+    // Card blocks: "\tName: <card>", "\tActive Profile: <p>", then "\tPorts:" with a port per "\t\t<port>: ...", its
+    // "\t\t\t\tdevice.product.name = \"<monitor>\"" and "\t\t\tPart of profile(s): <p>, <p>".
+    std::string card, active;
+    bool in_ports = false, pimax = false;
+    const std::string want = "device.product.name = \"" + std::string(DP_MONITOR_NAME) + "\"";
+    while (!list.empty()) {
+        const auto nl = list.find('\n');
+        std::string_view line = list.substr(0, nl);
+        list = nl == std::string_view::npos ? std::string_view{} : list.substr(nl + 1);
+        std::size_t depth = 0;
+        while (depth < line.size() && line[depth] == '\t') {
+            depth++;
+        }
+        const std::string_view t = line.substr(depth);
+        if (depth == 0) {
+            card.clear();
+            active.clear();
+            in_ports = pimax = false;
+        } else if (depth == 1) {
+            in_ports = t == "Ports:";
+            if (t.starts_with("Name: ")) {
+                card = trim(std::string(t.substr(6)));
+            } else if (t.starts_with("Active Profile: ")) {
+                active = trim(std::string(t.substr(16)));
+            }
+        } else if (in_ports && depth == 2) {
+            pimax = false;
+        } else if (in_ports && depth >= 3 && trim(std::string(t)) == want) {
+            pimax = true;
+        } else if (in_ports && pimax && t.starts_with("Part of profile(s): ")) {
+            std::string first = trim(std::string(t.substr(20)));
+            first = first.substr(0, first.find(','));
+            if (!card.empty() && !first.empty()) {
+                // the card's Active Profile line comes before its ports
+                return DpPort{card, trim(first), active};
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+namespace {
+
+std::optional<DpPort> dp_port(const Runner& pactl) {
+    if (const auto l = pactl({"list", "cards"})) {
+        return parse_dp_port(*l);
+    }
+    return std::nullopt;
+}
+
+bool has_node(const std::optional<std::string>& list, const std::string& name) {
+    return list && pick(*list, name) == name;
+}
+
+} // namespace
+
 std::pair<std::string, Before> to_headset(const Runner& pactl) {
     Before b;
     b.sink = pactl({"get-default-sink"});
@@ -113,9 +194,22 @@ std::pair<std::string, Before> to_headset(const Runner& pactl) {
     if (const auto l = pactl({"list", "short", "sinks"})) {
         sink = pick(*l, SINK_PREFIX);
     }
+    if (!sink) {
+        if (const auto dp = dp_port(pactl)) {
+            if (dp->active_profile == dp->profile || pactl({"set-card-profile", dp->card, dp->profile})) {
+                b.card = dp->card;
+                b.card_profile = dp->active_profile;
+                b.our_card_profile = dp->profile;
+                sink = dp->sink();
+            }
+        }
+    }
     std::optional<std::string> source;
     if (const auto l = pactl({"list", "short", "sources"})) {
         source = pick(*l, SOURCE_PREFIX);
+        if (!source) {
+            source = pick(*l, CRYSTAL_SOURCE_PREFIX);
+        }
     }
     std::vector<std::string> done;
     if (sink && pactl({"set-default-sink", *sink})) {
@@ -134,6 +228,12 @@ std::pair<std::string, Before> to_headset(const Runner& pactl) {
 std::string restore(const Before& b, const Runner& pactl) {
     std::vector<std::string> done;
     const auto cur_sink = pactl({"get-default-sink"});
+    if (b.card && b.card_profile && b.our_card_profile && *b.card_profile != *b.our_card_profile) {
+        if (const auto dp = dp_port(pactl); dp && dp->card == *b.card && dp->active_profile == *b.our_card_profile &&
+                                            pactl({"set-card-profile", *b.card, *b.card_profile})) {
+            done.push_back("card " + *b.card_profile);
+        }
+    }
     if (b.sink && b.our_sink && cur_sink == b.our_sink && *b.sink != *b.our_sink &&
         pactl({"set-default-sink", *b.sink})) {
         done.push_back("output " + *b.sink);
@@ -147,8 +247,14 @@ std::string restore(const Before& b, const Runner& pactl) {
 }
 
 std::optional<std::string> headset_sink(const Runner& pactl) {
-    if (const auto l = pactl({"list", "short", "sinks"})) {
-        return pick(*l, SINK_PREFIX);
+    const auto l = pactl({"list", "short", "sinks"});
+    if (l) {
+        if (auto s = pick(*l, SINK_PREFIX)) {
+            return s;
+        }
+    }
+    if (const auto dp = dp_port(pactl); dp && has_node(l, dp->sink())) {
+        return dp->sink();
     }
     return std::nullopt;
 }

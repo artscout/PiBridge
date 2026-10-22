@@ -55,7 +55,7 @@ Each part has `CMakeLists.txt` (the root adds it when present), `include/` or `s
 
 ## Files and formats (keep compatible with what is deployed today)
 - Gaze shared memory: `/dev/shm/pibridge-eye-gaze`, 136 bytes, magic "OVEG", seqlock, layout of
-  `pimax-eye/src/shm.rs` and `~/gamedev/omarchyvr/linux/crystal-super/omarchyvr_eye_gaze.h` (CustomHeadsetOpenVR
+  `libpibridge-eye/include/pibridge/eye/shm.h` and `patches/chovr/pibridge_eye_gaze.h` (CustomHeadsetOpenVR
   reads it). Byte-identical.
 - Frame lists (`eye-start-*.txt`), the eye profile body (`eye-profile-*.bin`), `eye-calibration.toml`: same formats
   as the Rust code. Default paths: `~/.config/pibridge/`, falling back to `~/.config/pimax-linux/` (PiBridge's earlier name)

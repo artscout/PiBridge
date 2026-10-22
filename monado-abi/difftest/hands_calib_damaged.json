@@ -1,1 +1,0 @@
-{"format": "pimax-ctrl-imu", "left": { "c": [1e-3, 0, 0], "bias_lsb": [1,2,3] }, "right": { "bias_lsb": [1,2,3], "c": [1,0,0,0,1,0,0,0,x,1] }

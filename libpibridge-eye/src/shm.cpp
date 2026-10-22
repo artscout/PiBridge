@@ -143,14 +143,6 @@ Result<Publisher> Publisher::create(const std::filesystem::path& path) {
         ::close(fd);
         return std::unexpected(Error::os(e, path.string()));
     }
-    // CHOVR binary compat: the installed CustomHeadsetOpenVR reads the old name /dev/shm/omarchyvr-eye-gaze. Point it
-    // at our new file with a best-effort symlink so an unmodified CHOVR still finds the gaze (no rebuild). Only for the
-    // real default path (not test/temp paths).
-    if (path == default_path()) {
-        const char* legacy = "/dev/shm/omarchyvr-eye-gaze";
-        ::unlink(legacy);
-        (void)::symlink("pibridge-eye-gaze", legacy);
-    }
     // continue after what is there, so a reader never sees the same sequence number for other data
     std::array<std::uint8_t, 8> old{};
     if (!read_exact_at(fd, old.data(), old.size(), 128)) {

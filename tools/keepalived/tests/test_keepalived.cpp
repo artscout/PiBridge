@@ -3,6 +3,9 @@
 // Nothing here opens a device, runs pactl or reads the real /proc for the followed process. The status file goes to
 // a temporary XDG_RUNTIME_DIR.
 #include "keepalived.h"
+#include "crystal.h"
+
+#include <algorithm>
 #include "pibridge_pause.h"
 #include "pibridge_status.h"
 #include "pibridge_test.h"
@@ -47,6 +50,7 @@ static std::string slurp(const std::filesystem::path& p) {
 /// pactl over a tiny in-memory PipeWire.
 struct FakePactl {
     std::mutex mu;
+    std::atomic<bool> headset_sink{true}; // the headset's output node exists (the original Crystal: once it is driven)
     std::string sink = "desk-speakers";
     std::string source = "desk-mic";
     std::vector<std::string> calls;
@@ -60,7 +64,10 @@ struct FakePactl {
             calls.push_back(c);
             if (c == "get-default-sink") return sink;
             if (c == "get-default-source") return source;
-            if (c == "list short sinks") return std::string("1\tdesk-speakers\tPipeWire\n2\talsa_output.usb-Pimax_Corporation_CS.pro-output-1\tPipeWire\n");
+            if (c == "list short sinks") {
+                return std::string("1\tdesk-speakers\tPipeWire\n") +
+                       (headset_sink ? "2\talsa_output.usb-Pimax_Corporation_CS.pro-output-1\tPipeWire\n" : "");
+            }
             if (c == "list short sources") return std::string("3\tdesk-mic\tPipeWire\n4\talsa_input.usb-Pimax_Corporation_CS.pro-input-0\tPipeWire\n");
             if (a.size() == 2 && a[0] == "set-default-sink") return sink = a[1], std::string{};
             if (a.size() == 2 && a[0] == "set-default-source") return source = a[1], std::string{};
@@ -78,7 +85,8 @@ struct Rig {
     std::unique_ptr<Daemon> d;
     std::filesystem::path rate;
 
-    Rig(bool running_at_start, Options o, const char* model = "crystal-super")
+    Rig(bool running_at_start, Options o, const char* model = "crystal-super",
+        const std::function<void(Deps&)>& more = {})
         : running(running_at_start), dev(nullptr) {
         auto [be, device] = fake::pair();
         dev = device;
@@ -98,6 +106,11 @@ struct Rig {
         };
         deps.allowlist = allow(model);
         deps.roots = discovery::Roots{g_tmp / "no-sysfs", g_tmp / "no-dev"}; // never the real sysfs
+        deps.crystal_find = [] { return std::optional<std::filesystem::path>{}; }; // nor a real original Crystal
+        deps.crystal_lighthouse_module = [] { return true; };
+        if (more) {
+            more(deps);
+        }
         d = std::make_unique<Daemon>(o, deps);
         CHECK(d->start(std::move(be), steady_clock::now()).has_value());
     }
@@ -575,4 +588,317 @@ int main(int argc, char** argv) {
     const int rc = pibridge::test::run_all(argc, argv);
     std::filesystem::remove_all(g_tmp);
     return rc;
+}// ------------------------------------------------------------------------------------------------ original Crystal
+
+namespace {
+struct FakeP3b : pibridge::keepalived::P3bLink {
+    std::vector<std::string> sent; // command names, from the frames written
+    std::vector<pibridge::hmd::p3b::Rpc> pending;
+    bool up = true;
+    bool write(const pibridge::hmd::p3b::Report& r) override {
+        const auto d = pibridge::hmd::p3b::decode(r);
+        sent.push_back(d ? d->name + (d->value.empty() ? "" : " " + d->value) : "?");
+        return true;
+    }
+    std::vector<pibridge::hmd::p3b::Rpc> take_replies() override { return std::exchange(pending, {}); }
+    bool alive() const override { return up; }
+    std::optional<pibridge::hmd::p3b::Head> last_head() const override { return head; }
+    std::optional<pibridge::hmd::p3b::Head> head;
+};
+struct CrystalRig {
+    FakeP3b* link = nullptr;
+    bool on_usb = true;
+    bool lhr = true; // the headset's Lighthouse module on USB
+    int steamvr = 0;
+    int app = 0;
+    std::vector<int> signals; // sent to SteamVR
+    bool vrserver = false;
+    std::vector<std::string> lines;
+    std::unique_ptr<pibridge::keepalived::Crystal> c;
+    explicit CrystalRig(std::string tracking, std::filesystem::path request = {}) {
+        pibridge::keepalived::Crystal::Deps d;
+        d.request = std::move(request);
+        d.find = [this]() -> std::optional<std::filesystem::path> {
+            return on_usb ? std::optional<std::filesystem::path>("/dev/hidraw9") : std::nullopt;
+        };
+        d.open = [this](const std::filesystem::path&, std::string*) {
+            auto l = std::make_unique<FakeP3b>();
+            link = l.get();
+            return std::unique_ptr<pibridge::keepalived::P3bLink>(std::move(l));
+        };
+        d.process_running = [this](std::string_view) { return vrserver; };
+        d.start_steamvr = [this] { steamvr++; return true; };
+        d.lighthouse_module = [this] { return lhr; };
+        d.start_app = [this] { app++; return true; };
+        d.signal_steamvr = [this](int sig) { signals.push_back(sig); };
+        d.say = [this](std::string_view m) { lines.emplace_back(m); };
+        c = std::make_unique<pibridge::keepalived::Crystal>(std::move(d));
+        c->set({std::move(tracking), true});
+    }
+};
+using CClock = pibridge::keepalived::Crystal::Clock;
+} // namespace
+
+TEST(crystal_connects_switches_to_lighthouse_and_starts_steamvr) {
+    CrystalRig r("lighthouse");
+    auto t = CClock::time_point{} + std::chrono::hours(1);
+    r.c->tick(t); // found and opened
+    CHECK(r.c->present() && r.link && r.link->sent.empty());
+    r.c->tick(t += std::chrono::seconds(2)); // connect frames, as Pimax Play
+    CHECK((r.link->sent == std::vector<std::string>{"setprop screen_state 1", "setprop control_signal_restart_runtime 0",
+                                                    "piPcSwicthIoctl video 120"}));
+    r.c->tick(t += std::chrono::seconds(1)); // property reads, then the eye tracker on (as Pimax Play, after the getters)
+    CHECK(r.link->sent.size() == 6 && r.link->sent[4] == "persist.sys.pmx.lighthouse.enable" &&
+          r.link->sent[5] == "setTobiiEyeDeviceEnable 1");
+    r.link->pending = {{0x3b, "persist.sys.pmx.lighthouse.support", "1"}, {0x3b, "persist.sys.pmx.lighthouse.enable", "0"}};
+    r.c->tick(t += std::chrono::milliseconds(200));
+    CHECK(r.link->sent.back() == "EnableLighthouse 1");
+    r.c->tick(t += std::chrono::seconds(7));
+    CHECK(std::find(r.link->sent.begin(), r.link->sent.end(), "LighthouseTakeEffect 1") == r.link->sent.end()); // 8 s
+    r.c->tick(t += std::chrono::seconds(1));
+    CHECK(std::find(r.link->sent.begin(), r.link->sent.end(), "LighthouseTakeEffect 1") != r.link->sent.end());
+    r.c->tick(t += std::chrono::seconds(2));
+    CHECK(r.steamvr == 0); // the Lighthouse module comes up first
+    r.c->tick(t += std::chrono::seconds(4));
+    CHECK(r.steamvr == 1 && r.app == 1 && r.c->stage() == "ready"); // the app comes with SteamVR
+    r.c->tick(t += std::chrono::seconds(20));
+    CHECK(r.steamvr == 1 && r.app == 1); // once per connection
+    CHECK(std::count(r.link->sent.begin(), r.link->sent.end(), "piPcSwicthIoctl getConnectState") >= 2);
+    r.link->up = false; // switched off
+    r.c->tick(t += std::chrono::seconds(1));
+    CHECK(!r.c->present());
 }
+
+TEST(crystal_starts_steamvr_only_after_the_lighthouse_module_is_on_usb) {
+    CrystalRig r("lighthouse");
+    r.lhr = false;
+    auto t = CClock::time_point{} + std::chrono::hours(1);
+    r.c->tick(t);
+    r.c->tick(t += std::chrono::seconds(2));
+    r.c->tick(t += std::chrono::seconds(1));
+    r.link->pending = {{0x3b, "persist.sys.pmx.lighthouse.enable", "1"}}; // kept from the last session: no switch
+    r.c->tick(t += std::chrono::milliseconds(200));
+    r.c->tick(t += std::chrono::seconds(5));
+    CHECK(r.steamvr == 0 && r.c->stage() == "ready");
+    r.lhr = true;
+    r.c->tick(t += std::chrono::seconds(1)); // just appeared
+    CHECK(r.steamvr == 0);
+    r.c->tick(t += std::chrono::seconds(3)); // 3 s with the module, and 10 s after video 120
+    CHECK(r.steamvr == 1);
+}
+
+TEST(crystal_starts_steamvr_anyway_when_the_lighthouse_module_never_comes) {
+    CrystalRig r("lighthouse");
+    r.lhr = false;
+    auto t = CClock::time_point{} + std::chrono::hours(1);
+    r.c->tick(t);
+    r.c->tick(t += std::chrono::seconds(2));
+    r.c->tick(t += std::chrono::seconds(1));
+    r.link->pending = {{0x3b, "persist.sys.pmx.lighthouse.enable", "1"}};
+    r.c->tick(t += std::chrono::milliseconds(200));
+    r.c->tick(t += std::chrono::seconds(29));
+    CHECK(r.steamvr == 0);
+    r.c->tick(t += std::chrono::seconds(2));
+    CHECK(r.steamvr == 1);
+}
+
+TEST(crystal_finds_the_lighthouse_module_in_sysfs) {
+    const auto root = std::filesystem::temp_directory_path() / ("pb-lhr-" + std::to_string(::getpid()));
+    std::filesystem::create_directories(root / "3-5.2.1");
+    std::ofstream(root / "3-5.2.1" / "idVendor") << "28de\n";
+    std::ofstream(root / "3-5.2.1" / "idProduct") << "2101\n"; // a Watchman dongle
+    CHECK(!pibridge::keepalived::lighthouse_module_present(root));
+    std::filesystem::create_directories(root / "3-5.2.2");
+    std::ofstream(root / "3-5.2.2" / "idVendor") << "28de\n";
+    std::ofstream(root / "3-5.2.2" / "idProduct") << "2300\n";
+    CHECK(pibridge::keepalived::lighthouse_module_present(root));
+    std::filesystem::remove_all(root);
+}
+
+TEST(crystal_takes_the_sound_while_it_is_on) {
+    FakeP3b* link = nullptr;
+    Rig r(false, crystal_opts(), "crystal-super", [&link](Deps& d) {
+        d.crystal_find = [] { return std::optional<std::filesystem::path>("/dev/hidraw9"); };
+        d.crystal_open = [&link](const std::filesystem::path&, std::string*) {
+            auto l = std::make_unique<FakeP3b>();
+            link = l.get();
+            return std::unique_ptr<pibridge::keepalived::P3bLink>(std::move(l));
+        };
+        d.start_steamvr = [] { return true; };
+        d.start_app = [] { return true; };
+    });
+    auto t = steady_clock::now();
+    r.d->tick(t);
+    r.d->tick(t += std::chrono::seconds(2));
+    r.d->tick(t += std::chrono::seconds(1));
+    CHECK(link != nullptr && r.pactl.sink == "desk-speakers"); // not yet: connecting
+    link->pending = {{0x3b, "persist.sys.pmx.lighthouse.enable", "1"}};
+    r.d->tick(t += std::chrono::milliseconds(200));
+    r.d->tick(t += std::chrono::milliseconds(100));
+    CHECK(r.pactl.sink == "alsa_output.usb-Pimax_Corporation_CS.pro-output-1");
+    link->up = false; // switched off
+    r.d->tick(t += std::chrono::seconds(1));
+    CHECK(r.pactl.sink == "desk-speakers");
+}
+
+TEST(crystal_sound_output_is_taken_once_it_shows_up) {
+    FakeP3b* link = nullptr;
+    Rig r(false, crystal_opts(), "crystal-super", [&link](Deps& d) {
+        d.crystal_find = [] { return std::optional<std::filesystem::path>("/dev/hidraw9"); };
+        d.crystal_open = [&link](const std::filesystem::path&, std::string*) {
+            auto l = std::make_unique<FakeP3b>();
+            link = l.get();
+            return std::unique_ptr<pibridge::keepalived::P3bLink>(std::move(l));
+        };
+        d.start_steamvr = [] { return true; };
+        d.start_app = [] { return true; };
+    });
+    r.pactl.headset_sink = false; // not driven yet: no DisplayPort sound
+    auto t = steady_clock::now();
+    r.d->tick(t);
+    r.d->tick(t += std::chrono::seconds(2));
+    r.d->tick(t += std::chrono::seconds(1));
+    link->pending = {{0x3b, "persist.sys.pmx.lighthouse.enable", "1"}};
+    r.d->tick(t += std::chrono::milliseconds(200));
+    r.d->tick(t += std::chrono::milliseconds(100));
+    CHECK(r.pactl.sink == "desk-speakers" && r.pactl.source == "alsa_input.usb-Pimax_Corporation_CS.pro-input-0");
+    r.pactl.headset_sink = true; // SteamVR drives the display
+    r.d->tick(t += std::chrono::seconds(1));
+    CHECK(r.pactl.sink == "desk-speakers"); // looked for every 3 s
+    r.d->tick(t += std::chrono::seconds(3));
+    CHECK(r.pactl.sink == "alsa_output.usb-Pimax_Corporation_CS.pro-output-1");
+    link->up = false;
+    r.d->tick(t += std::chrono::seconds(1));
+    CHECK(r.pactl.sink == "desk-speakers" && r.pactl.source == "desk-mic"); // both back
+}
+
+TEST(crystal_restarts_steamvr_for_a_tracking_change) {
+    CrystalRig r("lighthouse");
+    r.vrserver = true; // SteamVR runs (Lighthouse session)
+    auto t = CClock::time_point{} + std::chrono::hours(1);
+    r.c->tick(t);
+    r.c->tick(t += std::chrono::seconds(2));
+    r.c->tick(t += std::chrono::seconds(1));
+    r.link->pending = {{0x3b, "persist.sys.pmx.lighthouse.enable", "1"}};
+    r.c->tick(t += std::chrono::milliseconds(200));
+    r.c->tick(t += std::chrono::seconds(10));
+    CHECK(r.steamvr == 0 && r.signals.empty()); // already ran
+    r.c->set({"slam", true}); // the dashboard's Inside-out
+    r.c->tick(t += std::chrono::milliseconds(100));
+    CHECK((r.signals == std::vector<int>{SIGTERM}));
+    r.link->pending = {{0x3b, "persist.sys.pmx.lighthouse.enable", "1"}};
+    r.c->tick(t += std::chrono::milliseconds(100));
+    CHECK(r.link->sent.back() == "EnableLighthouse 0"); // the headset switches meanwhile
+    r.c->tick(t += std::chrono::seconds(11)); // SteamVR still running after 10 s
+    CHECK((r.signals == std::vector<int>{SIGTERM, SIGKILL}) && r.steamvr == 0);
+    r.vrserver = false; // closed
+    r.c->tick(t += std::chrono::milliseconds(100));
+    r.c->tick(t += std::chrono::milliseconds(100));
+    CHECK(r.steamvr == 1); // started again, its SLAM headset this time
+}
+
+TEST(crystal_restarts_steamvr_on_the_apps_request) {
+    const auto req = g_tmp / "crystal-request-restart";
+    CrystalRig r("lighthouse", req);
+    r.vrserver = true;
+    auto t = CClock::time_point{} + std::chrono::hours(1);
+    r.c->tick(t);
+    r.c->tick(t += std::chrono::seconds(2));
+    r.c->tick(t += std::chrono::seconds(1));
+    r.link->pending = {{0x3b, "persist.sys.pmx.lighthouse.enable", "1"}};
+    r.c->tick(t += std::chrono::milliseconds(200));
+    r.c->tick(t += std::chrono::seconds(10));
+    std::ofstream(req) << "restart-steamvr\n"; // the dashboard's 120 Hz
+    r.c->tick(t += std::chrono::milliseconds(100));
+    r.c->tick(t += std::chrono::milliseconds(100));
+    CHECK((r.signals == std::vector<int>{SIGTERM}) && !std::filesystem::exists(req));
+    r.vrserver = false;
+    r.c->tick(t += std::chrono::milliseconds(100));
+    r.c->tick(t += std::chrono::seconds(3)); // Lighthouse: the module seen for 3 s again
+    CHECK(r.steamvr == 1);
+}
+
+TEST(crystal_reports_how_it_tracks_from_its_live_head_reports) {
+    CrystalRig r("lighthouse");
+    r.vrserver = true;
+    auto t = CClock::time_point{} + std::chrono::hours(1);
+    r.c->tick(t);
+    r.c->tick(t += std::chrono::seconds(2));
+    r.c->tick(t += std::chrono::seconds(1));
+    r.link->pending = {{0x3b, "persist.sys.pmx.lighthouse.enable", "1"}};
+    r.c->tick(t += std::chrono::milliseconds(200));
+    CHECK(r.c->lighthouse() == "1" && !r.c->tracked()); // the property, before any head report
+    pibridge::hmd::p3b::Head h;
+    h.tracking = 3; // the headset tracks itself (switched from its own menu, or the switch took effect)
+    h.tracked = true;
+    r.link->head = h;
+    CHECK(r.c->lighthouse() == "0" && r.c->tracked());
+    r.link->head->tracked = false; // its inside-out lost the pose
+    CHECK(r.c->lighthouse() == "0" && !r.c->tracked());
+    r.link->head->tracked = true;
+    r.link->head->tracking = 1; // orientation only (just started, or blind): still its own inside-out
+    CHECK(r.c->lighthouse() == "0" && !r.c->tracked());
+    r.link->head->tracking = 0;
+    CHECK(r.c->lighthouse() == "1" && !r.c->tracked());
+}
+
+TEST(crystal_in_slam_switches_lighthouse_off_and_starts_steamvr) {
+    CrystalRig r("slam");
+    r.lhr = false; // no Lighthouse module in inside-out: not waited for
+    auto t = CClock::time_point{} + std::chrono::hours(1);
+    r.c->tick(t);
+    r.c->tick(t += std::chrono::seconds(2));
+    r.c->tick(t += std::chrono::seconds(1));
+    r.link->pending = {{0x3b, "persist.sys.pmx.lighthouse.enable", "1"}};
+    r.c->tick(t += std::chrono::milliseconds(200));
+    CHECK(r.link->sent.back() == "EnableLighthouse 0");
+    r.c->tick(t += std::chrono::seconds(2));
+    CHECK(r.steamvr == 0); // the headset switches its tracking first
+    r.c->tick(t += std::chrono::seconds(4));
+    CHECK(r.steamvr == 0); // the DisplayPort replug after video 120 is not over before 10 s
+    r.c->tick(t += std::chrono::seconds(3));
+    CHECK(r.steamvr == 1 && r.app == 1); // CustomHeadsetOpenVR's SLAM headset reads the pose file
+    CHECK(std::find(r.link->sent.begin(), r.link->sent.end(), "LighthouseTakeEffect 1") == r.link->sent.end());
+}
+
+TEST(crystal_already_in_lighthouse_sends_no_switch) {
+    CrystalRig r("lighthouse");
+    r.vrserver = true;
+    auto t = CClock::time_point{} + std::chrono::hours(1);
+    r.c->tick(t);
+    r.c->tick(t += std::chrono::seconds(2));
+    r.c->tick(t += std::chrono::seconds(1));
+    r.link->pending = {{0x3b, "persist.sys.pmx.lighthouse.enable", "1"}};
+    r.c->tick(t += std::chrono::milliseconds(200));
+    r.c->tick(t += std::chrono::seconds(1));
+    CHECK(std::find_if(r.link->sent.begin(), r.link->sent.end(),
+                       [](const std::string& x) { return x.starts_with("EnableLighthouse"); }) == r.link->sent.end());
+    CHECK(r.steamvr == 0); // SteamVR already runs
+}
+
+TEST(crystal_switches_when_the_app_changes_the_tracking) {
+    CrystalRig r("lighthouse");
+    r.vrserver = true;
+    auto t = CClock::time_point{} + std::chrono::hours(1);
+    r.c->tick(t);
+    r.c->tick(t += std::chrono::seconds(2));
+    r.c->tick(t += std::chrono::seconds(1));
+    r.link->pending = {{0x3b, "persist.sys.pmx.lighthouse.support", "1"}, {0x3b, "persist.sys.pmx.lighthouse.enable", "1"}};
+    r.c->tick(t += std::chrono::milliseconds(200));
+    r.c->tick(t += std::chrono::seconds(1));
+    CHECK(r.c->stage() == "ready");
+    r.c->set({"slam", true}); // the dashboard's Inside-out
+    r.c->tick(t += std::chrono::milliseconds(100));
+    CHECK(r.link->sent.back() == "persist.sys.pmx.lighthouse.enable");
+    r.link->pending = {{0x3b, "persist.sys.pmx.lighthouse.enable", "1"}};
+    r.c->tick(t += std::chrono::milliseconds(200));
+    CHECK(r.link->sent.back() == "EnableLighthouse 0");
+    CHECK(std::count(r.link->sent.begin(), r.link->sent.end(), "setTobiiEyeDeviceEnable 1") == 1); // not again
+    pibridge::hmd::p3b::Head h;
+    h.battery = 71;
+    h.ipd_mm = 63.1875f;
+    r.link->head = h;
+    CHECK(r.c->battery() == 71 && r.c->ipd_x100() == 6319);
+}
+
+

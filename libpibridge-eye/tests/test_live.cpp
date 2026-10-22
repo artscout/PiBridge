@@ -666,6 +666,143 @@ TEST(real_device_does_not_take_a_chip_a_kernel_driver_owns) {
     fs::remove_all(dir);
 }
 
+// ------------------------------------------------------------------------------------------------ original Crystal
+
+// One gaze notification of the original Crystal's tracker 2104:0220 as captured (Windows, take ipd-buttons of
+// 2026-10-22, device address 97, 20:29:24.386, headset worn): a whole 1242-byte IN transfer, both eyes tracked.
+constexpr std::string_view P3B_GAZE_HEX =
+    "01000000da0400000000005300000000000000000000050500000000000004ba0000050000000400230bb8050000000400020bb90200"
+    "0000040000000106000000080000000002ee1f76050000000400020bb9020000000400000002050000000400031f420300000004001a"
+    "a8ed0300000004fffaaa0f0300000004ffe2e1a2050000000400020bb902000000040000000302000000040000000105000000040002"
+    "0bb9020000000400000004050000000400031f42030000000400002d840300000004ffffeef303000000040000fb5705000000040002"
+    "0bb9020000000400000005020000000400000001050000000400020bb902000000040000000603000000040004607705000000040002"
+    "0bb9020000000400000007030000000400010000050000000400020bb9020000000400000010050000000400021f4004000000080000"
+    "020e58c400000400000008000002f0e5d00000050000000400020bb9020000000400000017050000000400021f430300000004000093"
+    "a603000000040000b9cf050000000400020bb9020000000400000016020000000400000001050000000400020bb90200000004000000"
+    "1e020000000400000001050000000400020bb902000000040000001f020000000400000000050000000400020bb90200000004000000"
+    "08050000000400031f420300000004ffe420d30300000004fffb28ba0300000004ffe3fd5a050000000400020bb90200000004000000"
+    "09020000000400000001050000000400020bb902000000040000000a050000000400031f420300000004ffffe1750300000004000003"
+    "f103000000040000fe23050000000400020bb902000000040000000b020000000400000001050000000400020bb90200000004000000"
+    "0c030000000400047a5d050000000400020bb902000000040000000d030000000400010000050000000400020bb90200000004000000"
+    "11050000000400021f40040000000800000214035400000400000008000002d428a40000050000000400020bb9020000000400000019"
+    "050000000400021f4303000000040000742e03000000040000b16b050000000400020bb9020000000400000018020000000400000001"
+    "050000000400020bb9020000000400000020020000000400000001050000000400020bb9020000000400000021020000000400000000"
+    "050000000400020bb902000000040000000e0200000004000fffff050000000400020bb902000000040000000f020000000400001589"
+    "050000000400020bb9020000000400000012050000000400031f4203000000040000078b0300000004fffff96003000000040000ffcd"
+    "050000000400020bb9020000000400000013020000000400000001050000000400020bb9020000000400000014050000000400031f42"
+    "0300000004ffff5f200300000004fffae9720300000004ffe36f9c050000000400020bb9020000000400000015020000000400000001"
+    "050000000400020bb902000000040000001a020000000400000000050000000400020bb902000000040000001b020000000400000000"
+    "050000000400020bb902000000040000001d0300000004ffff0000050000000400020bb902000000040000001c020000000400000000"
+    "050000000400020bb90200000004000000220300000004ffff0000050000000400020bb9020000000400000023020000000400000000";
+
+TEST(p3b_gaze_notification_of_the_capture_decodes_with_both_eyes) {
+    Bytes b;
+    for (std::size_t i = 0; i + 1 < P3B_GAZE_HEX.size(); i += 2) {
+        b.push_back(static_cast<std::uint8_t>(std::stoi(std::string(P3B_GAZE_HEX.substr(i, 2)), nullptr, 16)));
+    }
+    CHECK(b.size() == 1242);
+    std::vector<pibridge::eyemath::Sample> got;
+    Pipeline pipe(fast_cfg(), [&](const pibridge::eyemath::Sample& s) { got.push_back(s); });
+    CHECK(pipe.push(b).empty());
+    CHECK(pipe.parse_errors == 0 && pipe.framing_errors == 0 && got.size() == 1);
+    if (got.size() != 1) {
+        return;
+    }
+    // default conversion: z flipped, mm to m, device eye A (x > 0) is the right eye
+    const auto& s = got[0];
+    const auto near = [](float x, double want) { return std::fabs(x - want) < 1e-4; };
+    const auto& r = s.eyes[1];
+    const auto& l = s.eyes[0];
+    CHECK(r.origin_valid && r.direction_valid && l.origin_valid && l.direction_valid);
+    CHECK(near(r.origin[0], 0.026665) && near(r.origin[1], -0.005331) && near(r.origin[2], 0.029120));
+    CHECK(near(r.direction[0], 0.177795) && near(r.direction[1], -0.066605) && near(r.direction[2], -0.981796));
+    CHECK(near(l.origin[0], -0.027872) && near(l.direction[0], -0.119308) && near(l.direction[2], -0.992722));
+    CHECK(std::fabs(r.pupil_mm - 4.3768f) < 1e-3f);
+    CHECK(r.openness == 1.0f && l.openness == 1.0f); // provided by this chip (-1 on the Dream Air)
+    CHECK(s.gaze && s.gaze->eyes == 0b11);
+    CHECK(s.ipd_mm == -1.0f); // field 34 is -1 here (to_shm / the shared memory carry 0: unknown)
+    CHECK(s.device_ts_us == 0x2ee1f76);
+}
+
+TEST(a_p3b_chip_runs_on_its_own_start_list) {
+    auto cfg = fast_cfg();
+    cfg.frames = std::make_shared<const std::string>(frames::base_list()); // a 2104:0561 list (e.g. the Super's file)
+    cfg.profile = std::make_shared<const Bytes>(Bytes(64, 1));
+    cfg.with_cal = true;
+    const auto p = for_chip(cfg, replay::EYE_PID_P3B);
+    CHECK(p.frames && *p.frames == frames::p3b_list() && !p.profile && !p.with_cal);
+    const auto same = for_chip(cfg, replay::EYE_PID);
+    CHECK(same.frames == cfg.frames && same.profile == cfg.profile && same.with_cal);
+
+    // a link on it: exactly the captured requests, the subscribe, the lens configuration, then the unsubscribe
+    std::stop_source stop;
+    std::size_t n = 0;
+    Pipeline pipe(p, [&](const pibridge::eyemath::Sample&) {
+        if (++n >= 20) {
+            stop.request_stop();
+        }
+    });
+    auto c = chip();
+    CHECK(run_link(c, p, stop.get_token(), pipe, {}, {}).has_value());
+    const std::vector<std::uint32_t> want = {0x3e8, 0x640, 0x58c, 0x532, 0x546, 0x547, 0x5d2, 0x686,
+                                             0x4b0, 0x596, 0x578, 0x672, 0x4c4, 0x5be, 0x4ce};
+    CHECK(sent_ops(c) == want);
+    CHECK(n >= 20);
+    std::size_t controls = 0;
+    for (const auto& x : c.sent) {
+        if (const auto* ctl = std::get_if<fake::SentControl>(&x)) {
+            controls++;
+            CHECK(ctl->setup[0] != 0x41 || ctl->setup[1] != 48); // the vendor write stays skipped by default
+        }
+    }
+    CHECK(controls == 11); // 0xc1/48, 9 x 0xc1/70, 0x41/65
+}
+
+TEST(the_tracker_uses_the_p3b_list_for_a_2104_0220) {
+    auto cfg = fast_cfg();
+    std::mutex mu;
+    std::vector<std::string> log;
+    std::shared_ptr<fake::FakeChip> last;
+    auto tr = Tracker::start_with(
+        cfg,
+        [&](const Config&, std::stop_token) -> std::expected<std::unique_ptr<Transport>, std::string> {
+            return std::make_unique<fake::FakeChip>(chip());
+        },
+        [&](std::string_view m) {
+            std::lock_guard l(mu);
+            log.emplace_back(m);
+        },
+        replay::EYE_PID_P3B);
+    CHECK(wait_for([&] { return tr->state() == State::Streaming; }, 5s));
+    tr->stop();
+    std::lock_guard l(mu);
+    CHECK(std::ranges::find(log, "original Crystal eye tracker (2104:0220): its own captured start list") != log.end());
+}
+
+TEST(real_device_takes_a_2104_0220_only_when_asked) {
+    const auto dir = testutil::temp_dir("live-p3b");
+    const auto usb = dir / "usb";
+    usb_device(usb, "3-4", "2104", "0220", "12");
+    RealDevice dev(nullptr, usb, dir / "dev");
+    auto cfg = fast_cfg();
+    const auto r = dev.open(cfg, {});
+    CHECK(!r.has_value() && r.error() == "no EyeChip (2104:0561) on the USB bus");
+    cfg.p3b = true;
+    // found: the node is opened (here a temporary path that does not exist)
+    const auto r2 = dev.open(cfg, {});
+    CHECK(!r2.has_value() && r2.error().starts_with("open " + (dir / "dev/003/012").string()));
+    CHECK(dev.pid() == replay::EYE_PID_P3B);
+    // a 2104:0561 is preferred
+    usb_device(usb, "3-2", "2104", "0561", "13");
+    const auto r3 = dev.open(cfg, {});
+    CHECK(!r3.has_value() && r3.error().starts_with("open " + (dir / "dev/003/013").string()));
+    CHECK(dev.pid() == replay::EYE_PID);
+    fs::remove_all(usb / "3-2");
+    fs::remove_all(usb / "3-4");
+    CHECK(dev.open(cfg, {}).error() == "no eye chip (2104:0561 or 2104:0220) on the USB bus");
+    fs::remove_all(dir);
+}
+
 TEST(the_tracker_logs_each_line_once_and_keeps_the_last) {
     std::vector<std::string> log;
     std::mutex mu;

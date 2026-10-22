@@ -2,10 +2,10 @@
 // One "Record tracking" session: start the three programs, wait for data, run the guided steps, stop exactly what it
 // started, check the dataset.
 //
-// Start (the order of omarchyvr's crystal-6dof.sh):
-//   1. pimax-cam broker --source <camera> --socket $XDG_RUNTIME_DIR/omarchyvr-cam-broker.sock; wait (10 s at most)
+// Start:
+//   1. pibridge-cam broker --source <camera> --socket $XDG_RUNTIME_DIR/omarchyvr-cam-broker.sock; wait (10 s at most)
 //      until the socket exists;
-//   2. pimax-ctrltrack live --source broker:<socket> --factory;
+//   2. pibridge-ctrltrack live --source broker:<socket> --factory;
 //   3. monado-service with the Pimax driver's settings (monadoEnv()) and PIMAX_SLAM_RECORD=<folder>; Monado writes
 //      <folder>/euroc_<datetime>/mav0/{cam0,cam1,imu0}. The steps start once IMU data comes in (30 s at most).
 // The display lease can fail (the desktop does not hand over the headset's connector: "Connector ... withdrawn",

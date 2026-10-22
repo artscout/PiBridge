@@ -157,6 +157,7 @@ std::expected<pibridge::eye::live::Config, std::string> make_config(const Option
                                                                const std::function<void(std::string_view)>& say,
                                                                std::string& profile_kind) {
     profile_kind = "none";
+    cfg.p3b = true; // the original Crystal's eye tracker too
     if (opts.frames) {
         const std::string f = opts.frames->string();
         bool missing = false;
@@ -173,7 +174,8 @@ std::expected<pibridge::eye::live::Config, std::string> make_config(const Option
         // the list's own profile upload is this user's Pimax Play eye profile
         cfg.with_cal = !opts.no_profile;
     } else {
-        say("no start list file: the built-in base list (the Dream Air's start)");
+        say("no start list file: the built-in base list (the Dream Air's start; the original Crystal's 2104:0220 "
+            "has its own)");
     }
     if (opts.profile && !opts.no_profile) {
         const std::string f = opts.profile->string();

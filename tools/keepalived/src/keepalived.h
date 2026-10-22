@@ -34,6 +34,8 @@
 #include "pibridge/hmd/session.h"
 #include "pibridge/hmd/settings.h"
 
+#include "crystal.h"
+
 #include <chrono>
 #include <expected>
 #include <filesystem>
@@ -87,6 +89,9 @@ struct Options {
     bool audio = false;
     /// The settings file the defaults came from (`--settings`).
     std::filesystem::path settings_path;
+    /// The original Crystal (P3B): the tracking to switch it to, and whether to start SteamVR when it connects.
+    std::string crystal_tracking = "lighthouse";
+    bool crystal_autostart_steamvr = true;
 };
 
 /// $XDG_RUNTIME_DIR/pimax-rate (/tmp/pimax-rate without it): the file omarchyvr uses, so both stacks agree.
@@ -128,6 +133,12 @@ struct Status {
     std::string haptic_result;
     /// The lens IPD the headset reports in its IMU reports, mm x 100 (0 = not seen yet).
     int lens_ipd_x100 = 0;
+    /// The original Crystal: on USB, its stage (connecting | switching | ready) and its Lighthouse switch ("0"/"1").
+    bool crystal_present = false;
+    std::string crystal_stage;
+    std::string crystal_lighthouse;
+    bool crystal_tracked = false;
+    int crystal_battery = -1;
     bool operator==(const Status&) const = default;
 };
 
@@ -154,6 +165,14 @@ struct Deps {
     /// The volume button state Monado's Pimax driver hands over while it owns the headset ("<seq> <dir> <pressed>");
     /// empty = $XDG_RUNTIME_DIR/pibridge/volume-button.
     std::filesystem::path volume_button_file;
+    /// The original Crystal (P3B): where it is, how it is opened, how SteamVR is started. Unset = the real ones
+    /// (sysfs, hidraw, `steam steam://rungameid/250820`); tests replace them.
+    std::function<std::optional<std::filesystem::path>()> crystal_find;
+    std::function<std::unique_ptr<P3bLink>(const std::filesystem::path&, std::string*)> crystal_open;
+    std::function<bool()> start_steamvr;
+    std::function<bool()> crystal_lighthouse_module;
+    std::function<bool()> start_app;
+    std::function<void(int)> signal_steamvr;
     /// Where the connect log line looks up the device node (sysfs, read only).
     discovery::Roots roots = discovery::Roots::from_env();
 };
@@ -222,6 +241,9 @@ private:
     /// Switch the audio when the delayed video frames go out (the order of the Rust daemon).
     bool audio_with_video_ = false;
     std::optional<audio::Before> audio_before_;
+    bool crystal_audio_ = false; // the sound moved to the original Crystal by it being on
+    Clock::time_point crystal_audio_retry_{}; // its output is looked for again then (it comes with the display)
+    std::unique_ptr<Crystal> crystal_;
     std::string volume_sink_;          // the headset output node track_volume() last saw
     std::optional<Clock::time_point> volume_at_;
     std::optional<unsigned long> button_seq_; // the last volume-button file entry seen (nullopt = none read yet)

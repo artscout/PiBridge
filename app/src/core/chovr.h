@@ -20,10 +20,20 @@ bool chovrDriverRegistered(const QString& vrpathFile);
 // CHOVR's default). A file without any headset entry runs on the defaults and counts too; "customShader" is not a
 // headset.
 bool chovrHeadsetEnabled(const QString& settingsFile);
-// Sets the virtual-camera IPD (mm) CustomHeadsetOpenVR renders with: "ipd" in every Crystal Super entry (the
+// Sets the virtual-camera IPD (mm) CustomHeadsetOpenVR renders with: "ipd" in every Crystal entry (the
 // Micro-OLED one is made when there is none), "hardwareIpd": false and no generalHeadset.horizontalIPDOffset (CHOVR reads the hardware IPD only through
 // Pimax's Windows runtime). Takes effect the next time SteamVR starts. False when the file could not be written.
 bool chovrSetIpd(const QString& settingsFile, double mm);
+
+// Enables CustomHeadsetOpenVR's entry for the original Crystal ("crystalOG", off by default in its builds): its own
+// profile (2880x2880 per eye, 120 Hz, eye rotation 5 deg, "Crystal OG Default" distortion) then draws the picture in
+// Lighthouse mode. `changed`: whether the file was written (SteamVR then needs a restart to pick it up).
+bool chovrEnableCrystalOg(const QString& settingsFile, bool* changed = nullptr);
+
+// The original Crystal's display refresh rate (Hz) SteamVR picks the display mode by: "refreshRate" in the
+// "crystalOG" entry (our CHOVR patch; 0 or absent = the tracked device's own, 90 Hz). Read at SteamVR's start.
+int chovrCrystalRefresh(const QString& settingsFile);
+bool chovrSetCrystalRefresh(const QString& settingsFile, int hz);
 
 // Both: the Lighthouse/SteamVR mode with CustomHeadsetOpenVR as the headset's driver.
 bool chovrActive(const QString& vrpathFile, const QString& settingsFile);

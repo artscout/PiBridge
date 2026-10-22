@@ -24,10 +24,10 @@ target_compile_features(pibridge_anchor PUBLIC cxx_std_23)
 target_link_libraries(pibridge_anchor PUBLIC pibridge_ctrltrack pibridge_cam)
 
 if(PIBRIDGE_BUILD_TESTS)
-    # Monado's own hook (pimax_anchor.h, included from the omarchyvr checkout, not copied) as the other side of the
+    # Monado's own hook (pimax_anchor.h, included from third_party/monado, not copied) as the other side of the
     # files: it writes the head ring and reads the offset this library writes. Built with stub headers for the few
-    # Monado helpers it calls (math, clock, log); skipped when the checkout is not next to PiBridge.
-    set(anchor_monado_dir "${PIBRIDGE_OMARCHYVR_DIR}/forks/monado/src/xrt")
+    # Monado helpers it calls (math, clock, log).
+    set(anchor_monado_dir "${PROJECT_SOURCE_DIR}/third_party/monado/src/xrt")
     set(anchor_test_defs)
     set(anchor_test_libs)
     if(EXISTS "${anchor_monado_dir}/drivers/pimax/pimax_anchor.h")

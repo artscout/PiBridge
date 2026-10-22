@@ -103,8 +103,8 @@ recentre/drift hook. Log lines go through a callback, each line only once in a r
 - Eye profile body (`eye-profile-*.bin`): the bytes after the 16-byte `calibration.setpm` header; `with_profile`
   replaces every 0x456 step (header seq/status/aux kept, 4087-byte frame bodies as Windows splits it). A list with a
   replaced profile needs `Guard::make_with(steps, false)` (the pinned guard only accepts the built-in blob).
-- Gaze shared memory: byte-identical to omarchyvr `shm.rs` and `linux/crystal-super/omarchyvr_eye_gaze.h` (a test
-  compares against a copy of that C struct). `shm::default_path()` is `/dev/shm/pibridge-eye-gaze`, the path the
+- Gaze shared memory: byte-identical to `patches/chovr/pibridge_eye_gaze.h` (a test compares
+  against a copy of that C struct). `shm::default_path()` is `/dev/shm/pibridge-eye-gaze`, the path the
   deployed daemon and the SteamVR driver use: tests write only to temporary files.
 
 ## Build and test

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // "Record tracking" (Development page): what a recording needs and whether it can start.
 //
-// A recording runs, in order, the camera broker (`pimax-cam broker`), the controller tracker (`pimax-ctrltrack live`)
+// A recording runs, in order, the camera broker (`pibridge-cam broker`), the controller tracker (`pibridge-ctrltrack live`)
 // and `monado-service` with the Pimax driver's 6DoF settings plus PIMAX_SLAM_RECORD=<folder>, which makes Monado
 // write a EuRoC dataset (cameras + IMU) into <folder>/euroc_<datetime>/mav0 (core/rec_session.h). This file finds the
 // programs and files for that (pibridge.conf keys first, then the usual places), the headset's display connector (the
@@ -154,8 +154,8 @@ bool pimaxHeadsetPresent(const QString& usbRoot);
 struct RecSystem {
     bool vrserver = false;   // SteamVR
     bool monado = false;     // another monado-service
-    bool camBroker = false;  // a pimax-cam (another broker holds the camera)
-    bool ctrltrack = false;  // a pimax-ctrltrack
+    bool camBroker = false;  // a pibridge-cam (another broker holds the camera)
+    bool ctrltrack = false;  // a pibridge-ctrltrack
     bool winbridge = false;  // a winbridge.exe (holds the port the session's would need)
     bool steamClient = true; // Steam's client runs (SteamVR + Monado needs it before SteamVR starts)
 };

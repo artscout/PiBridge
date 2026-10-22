@@ -4,7 +4,7 @@
 // pimax_cam_track_*) replayed on a recorded IMU stream and a recorded tracker trajectory, with the numbers that tell
 // whether a change to the output layer makes head tracking better (docs/research/head-tracking-improvements.md).
 //
-// The replay is the one of monado-abi's difftest (`slam_difftest replay`): every IMU sample is pushed, each tracker
+// The replay (as monado-abi's former SLAM difftest did it): every IMU sample is pushed, each tracker
 // pose is handed over `latency` after its frame time with a causal velocity, a Mahony 3DoF filter gives the 3DoF
 // orientation, tracker resets the supervisor asks for are emulated by rebasing the rest of the trajectory, and the
 // head pose is queried at 90 Hz for the display time `now + predict`. The output layer reads its switches from the

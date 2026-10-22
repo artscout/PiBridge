@@ -1,0 +1,75 @@
+# Start list of the original Pimax Crystal's eye tracker (Tobii 2104:0220, platform VR4PIMAXP3B; public, compiled in as
+# frames::p3b_list()). Made by `pibridge-eye frames` from the Windows capture 20261022-202727-crystal-cold-hub2.pcap
+# (G:/omarchyvr-windows/crystal-session-20261022-202713, device address 97, Pimax Play's own start of the chip, which
+# came up 1.6 s after setTobiiEyeDeviceEnable 1 to the headset), every byte as captured.
+# Same TTP protocol as the EyeChip 2104:0561, but a much shorter start: no auth pair (0x76c / 0x777), no platform
+# config (0x852), no eye profile upload (0x456). It holds nothing of the user or the headset (the serial is only in
+# the chip's answers). Step 26 (0x5be) is the lens configuration of that moment (Pimax re-sends it on every IPD change;
+# this list sends only the captured one).
+
+STEP 1 | C | CTRL OUT bmRT=0x41 bReq=48 wValue=0 wIndex=0 wLength=24 data=010000000000000001000000040000000000000000000000 (t=70.05)
+
+STEP 2 | R | CTRL IN  bmRT=0xc1 bReq=48 wValue=0 wIndex=0 wLength=512 (t=70.06)
+
+STEP 3 | R | CTRL IN  bmRT=0xc1 bReq=70 wValue=1 wIndex=0 wLength=8 (t=70.07)
+
+STEP 4 | C | CTRL OUT bmRT=0x41 bReq=65 wValue=0 wIndex=0 wLength=0 (t=70.07)
+
+STEP 5 | C | seq=1 op=0x3e8 hello / capability list? (t=70.08)
+  BULK_OUT ep=0x05 len=79 0000000047000000000000510000000100000000000003e8000000000000002f0000170000002800000009000100000001000100010002000100030001000400010005000100060001000700010008
+
+STEP 6 | C | seq=2 op=0x640 get (three zero ints)? (t=70.08)
+  BULK_OUT ep=0x05 len=32 0000000018000000000000510000000200000000000006400000000000000000
+
+STEP 7 | C | seq=3 op=0x58c get ids (serial, platform, firmware) (t=70.08)
+  BULK_OUT ep=0x05 len=32 00000000180000000000005100000003000000000000058c0000000000000000
+
+STEP 8 | C | seq=4 op=0x532 get platform properties (t=70.08)
+  BULK_OUT ep=0x05 len=32 0000000018000000000000510000000400000000000005320000000000000000
+
+STEP 9 | C | seq=5 op=0x546 get settings dump? (t=70.08)
+  BULK_OUT ep=0x05 len=32 0000000018000000000000510000000500000000000005460000000000000000
+
+STEP 10 | C | seq=6 op=0x547 get settings dump? (t=70.08)
+  BULK_OUT ep=0x05 len=32 0000000018000000000000510000000600000000000005470000000000000000
+
+STEP 11 | C | seq=7 op=0x5d2 get settings dump? (t=70.09)
+  BULK_OUT ep=0x05 len=32 0000000018000000000000510000000700000000000005d20000000000000000
+
+STEP 12 | C | seq=8 op=0x686 get supported gaze rates (t=70.09)
+  BULK_OUT ep=0x05 len=32 0000000018000000000000510000000800000000000006860000000000000000
+
+STEP 13 | C | seq=9 op=0x4b0 get feature list (t=70.09)
+  BULK_OUT ep=0x05 len=32 0000000018000000000000510000000900000000000004b00000000000000000
+
+STEP 14 | C | seq=10 op=0x596 get table (zeros)? (t=70.09)
+  BULK_OUT ep=0x05 len=32 0000000018000000000000510000000a00000000000005960000000000000000
+
+STEP 15 | C | seq=11 op=0x578 get table (zeros)? (t=70.09)
+  BULK_OUT ep=0x05 len=32 0000000018000000000000510000000b00000000000005780000000000000000
+
+STEP 16 | C | seq=12 op=0x672 get gaze rate (t=70.09)
+  BULK_OUT ep=0x05 len=32 0000000018000000000000510000000c00000000000006720000000000000000
+
+STEP 17 | R | CTRL IN  bmRT=0xc1 bReq=70 wValue=1 wIndex=0 wLength=8 (t=70.55)
+
+STEP 18 | R | CTRL IN  bmRT=0xc1 bReq=70 wValue=1 wIndex=0 wLength=8 (t=70.56)
+
+STEP 19 | R | CTRL IN  bmRT=0xc1 bReq=70 wValue=1 wIndex=0 wLength=8 (t=70.56)
+
+STEP 20 | R | CTRL IN  bmRT=0xc1 bReq=70 wValue=1 wIndex=0 wLength=8 (t=70.57)
+
+STEP 21 | R | CTRL IN  bmRT=0xc1 bReq=70 wValue=1 wIndex=0 wLength=8 (t=70.57)
+
+STEP 22 | R | CTRL IN  bmRT=0xc1 bReq=70 wValue=1 wIndex=0 wLength=8 (t=70.58)
+
+STEP 23 | R | CTRL IN  bmRT=0xc1 bReq=70 wValue=1 wIndex=0 wLength=8 (t=70.58)
+
+STEP 24 | R | CTRL IN  bmRT=0xc1 bReq=70 wValue=1 wIndex=0 wLength=8 (t=70.59)
+
+STEP 25 | C | seq=13 op=0x4c4 subscribe stream (t=70.59)
+  BULK_OUT ep=0x05 len=52 000000002c000000000000510000000d00000000000004c400000000000000140000020000000400000505170000000400000000
+
+STEP 26 | C | seq=14 op=0x5be set eye offsets (+IPD/2,0,0,-IPD/2,0,0 mm) (t=70.6)
+  BULK_OUT ep=0x05 len=130 000000007a000000000000510000000e00000000000005be00000000000000620000050000000400031f41040000000800007860008000000400000008000000000000000004000000080000000000000000050000000400031f410400000008ffff879fff8000000400000008000000000000000004000000080000000000000000
+

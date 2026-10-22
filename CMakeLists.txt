@@ -56,3 +56,7 @@ endforeach()
 # internal: no headers or archives are installed.
 install(DIRECTORY devices/ DESTINATION ${CMAKE_INSTALL_DATADIR}/pibridge/devices FILES_MATCHING PATTERN "*.toml")
 install(FILES udev/70-pibridge.rules DESTINATION ${CMAKE_INSTALL_DATADIR}/pibridge/udev)
+# The NVIDIA EDID override scripts (run by hand with sudo, docs/INSTALL.md 5.2) and the Pimax EDIDs they merge.
+install(PROGRAMS tools/headset-edid/pibridge-headset-edid tools/headset-edid/make_crystal_edid.py
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/pibridge/edid)
+install(DIRECTORY tools/headset-edid/known/ DESTINATION ${CMAKE_INSTALL_DATADIR}/pibridge/edid/known FILES_MATCHING PATTERN "*.bin")

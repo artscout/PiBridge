@@ -1,18 +1,16 @@
 // SPDX-License-Identifier: MIT
 // Which Monado build a start uses (Development page, "Monado build"), what it is, and whether it may realtime.
 //
-// Two builds are A/B'd (docs/monado-abi.md, "The PiBridge-linked Monado (M9)"): the live one that links omarchyvr's Rust
-// archives (~/gamedev/ovr-build/monado) and the one that links PiBridge's C++ libpibridge_pimax.a
-// (~/gamedev/pibridge-monado-build). The choice is the existing key rec_monado_service (the monado-service binary); the
-// SteamVR driver dir (steamvr-monado/) and the OpenXR runtime file derive from it. Record tracking, "Monado
-// directly" and the Tracking page's SteamVR + Monado start all use it.
+// The Monado build is PiBridge's own: third_party/monado built in ~/gamedev/pibridge-monado-build, linking PiBridge's
+// C++ libpibridge_pimax.a (docs/monado-abi.md). The choice is the existing key rec_monado_service (the monado-service
+// binary; empty = auto); the SteamVR driver dir (steamvr-monado/) and the OpenXR runtime file derive from it. Record
+// tracking, "Monado directly" and the Tracking page's SteamVR + Monado start all use it.
 //
 // What the build is comes from the binary itself:
-//   - the PIBRIDGE_PIMAX_ABI marker string ("PIBRIDGE_PIMAX_ABI 1 spec omarchyvr 5ffbcc5") is only in the PiBridge-linked
-//     build: "C++ (PiBridge)"; without it "Rust";
-//   - the required markers of omarchyvr's preflight (omarchyvr-gui-core builds.rs / preflight.rs, plus the two the
-//     Crystal settings need): a build that lost one is refused in plain words (omarchyvr lesson 2026-10-15: a build
-//     configured from scratch had the Pimax driver off).
+//   - the PIBRIDGE_PIMAX_ABI marker string (e.g. "PIBRIDGE_PIMAX_ABI 1 spec omarchyvr 5ffbcc5", monado-abi/src/abi_id.cpp)
+//     says it links libpibridge_pimax.a: "C++ (PiBridge)"; without it "unknown";
+//   - the required markers (the Pimax driver's switches, plus the two the Crystal settings need): a build that lost one
+//     is refused in plain words (lesson 2026-10-15: a build configured from scratch had the Pimax driver off).
 // Scanning a 200+ MB binary takes a moment, so the result is cached by path, size and modification time.
 //
 // cap_sys_nice: monado-service raises its compositor threads to realtime priority; without the capability it runs
@@ -31,12 +29,12 @@
 
 namespace pibridge::app {
 
-// The markers every Monado build must carry (omarchyvr's preflight list, plus PIMAX_AE_MODEL and
+// The markers every Monado build must carry (the Pimax driver's switches, plus PIMAX_AE_MODEL and
 // PIMAX_SLAM_DRIFT_HOLD for the Crystal Super's camera exposure and drift-hold switches).
 QStringList requiredMonadoMarkers();
 inline constexpr char kPiBridgeAbiMarker[] = "PIBRIDGE_PIMAX_ABI";
 
-enum class BuildKind { Unknown, Rust, PiBridge };
+enum class BuildKind { Unknown, PiBridge };
 
 struct MonadoBuildInfo {
     bool checked = false;     // the binary was read (false: not found / not readable / not looked at)
@@ -44,7 +42,7 @@ struct MonadoBuildInfo {
     QString path;             // monado-service
     QString error;            // why it could not be read
     BuildKind kind = BuildKind::Unknown;
-    QString abiText;          // the whole PIBRIDGE_PIMAX_ABI string, "" in a Rust build
+    QString abiText;          // the whole PIBRIDGE_PIMAX_ABI string, "" without the marker
     QStringList missing;      // required markers not in the binary
     bool ok() const { return checked && missing.isEmpty(); }
 };
@@ -57,27 +55,27 @@ MonadoBuildInfo monadoBuildInfo(const QString& monadoService);
 // path at a time) and the result says `checking` until the cache has it (`done` runs on that thread then). Used by
 // the app so a 200+ MB binary is never read on the UI thread.
 MonadoBuildInfo monadoBuildInfoAsync(const QString& monadoService, std::function<void()> done = {});
-// "C++ (PiBridge)", "Rust", "unknown".
+// "C++ (PiBridge)", "unknown".
 QString buildKindWords(BuildKind k);
 // One plain line for the page: "C++ (PiBridge): PIBRIDGE_PIMAX_ABI 1 spec omarchyvr 5ffbcc5. All 7 required markers present."
 QString buildSummary(const MonadoBuildInfo& b);
 // The blocking reason when a required marker is missing ("" when the build is fine or was not checked).
 QString buildBlockingReason(const MonadoBuildInfo& b);
 
-// ---------------------------------------------------------------- the A/B choice
+// ---------------------------------------------------------------- the choice
 
 struct MonadoBuildChoice {
-    QString id;      // "auto" | "rust" | "pibridge"
-    QString label;   // "Rust-linked (live)" ...
+    QString id;      // "auto" | "pibridge"
+    QString label;   // "Auto", "C++ (PiBridge)"
     QString service; // the monado-service of that build ("" for auto)
 };
-// The builds the selector offers under `home`: auto (the key cleared), the live Rust-linked build and the
-// PiBridge-linked one (each with its monado-service path, whether it exists or not).
+// The builds the selector offers under `home`: auto (the key cleared) and PiBridge's build (its monado-service path,
+// whether it exists or not).
 std::vector<MonadoBuildChoice> monadoBuildChoices(const QString& home);
 // Which choice a rec_monado_service value is ("" = auto; a path of one of the builds; anything else: "other").
 QString monadoBuildChoiceOf(const QString& confValue, const QString& home);
 // The Monado build folder that holds `monadoService` (<build>/src/xrt/targets/service/monado-service, or an installed
-// <prefix>/bin/monado-service -> <prefix>/lib/omarchyvr/monado or the prefix): the first of it and up to four
+// <prefix>/bin/monado-service -> <prefix>/lib/<name>/monado or the prefix): the first of it and up to four
 // folders above that has steamvr-monado/; "" when none.
 QString steamVrDriverDirFor(const QString& monadoService);
 

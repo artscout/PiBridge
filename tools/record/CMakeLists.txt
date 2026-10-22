@@ -57,10 +57,4 @@ if(PIBRIDGE_BUILD_TESTS)
     add_dependencies(pibridge_record_tool_tests pibridge-record pibridge-record-mirror pibridge_record_fakeproducer pibridge_record_fake_openvr)
     add_test(NAME pibridge_record_tool COMMAND pibridge_record_tool_tests)
     set_tests_properties(pibridge_record_tool PROPERTIES ENVIRONMENT "LC_ALL=de_DE.UTF-8;LC_NUMERIC=de_DE.UTF-8")
-    # Parity with the Rust omarchyvr-record (the oracle): args, settings file, status text, the ffmpeg command line
-    # of a whole recording (fake producer + fake ffmpeg). Skipped (exit 77) without the oracle binary.
-    add_test(NAME pibridge_record_difftest COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/difftest.sh
-             ${CMAKE_CURRENT_BINARY_DIR}/difftest "${PIBRIDGE_RUST_ORACLE_DIR}/omarchyvr-record" $<TARGET_FILE:pibridge-record>
-             $<TARGET_FILE:pibridge_record_fakeproducer> ${CMAKE_CURRENT_SOURCE_DIR}/tests/fake_ffmpeg.sh)
-    set_tests_properties(pibridge_record_difftest PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 endif()

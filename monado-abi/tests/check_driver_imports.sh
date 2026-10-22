@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 # Every pimax_* function of the ABI headers that the Monado Pimax driver objects import is defined (T) in the archive
-# (twin of pimax-capi tests/abi.rs monado_driver_objects_resolve_against_the_rust_library). Read only.
+# (the Monado tree: third_party/monado, built in PIBRIDGE_MONADO_DRIVER_BUILD_DIR). Read only.
 #   check_driver_imports.sh MONADO_BUILD_DIR ARCHIVE INCLUDE_DIR
 # Skipped (77) without a Monado build.
 set -u

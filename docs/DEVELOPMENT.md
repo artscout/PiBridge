@@ -11,17 +11,17 @@ The headset shows no picture during a recording. That is fine: only the cameras 
 Two more cards on the page: **Monado build** (which Monado every start uses) and **Monado directly** (the debug /
 A-B session). Both below.
 
-## Monado build (A/B)
+## Monado build
 
-A selector between **Auto** (the key cleared: the lookup below), **Rust-linked (live)**
-(`~/gamedev/ovr-build/monado/src/xrt/targets/service/monado-service`) and **C++ (PiBridge)**
-(`~/gamedev/pibridge-monado-build/...`, docs/monado-abi.md "The PiBridge-linked Monado (M9)"). It writes the existing key
+A selector between **Auto** (the key cleared: the lookup below) and **C++ (PiBridge)**
+(`~/gamedev/pibridge-monado-build/...`, built from `third_party/monado`, docs/monado-abi.md "The PiBridge-linked Monado
+(M9)"). It writes the existing key
 `rec_monado_service`; a path set by hand shows as "chosen by hand". Record tracking, Monado directly and START TRACKING
 (SteamVR + Monado: its `steamvr-monado/` and rttime preload are the same build's) use it from their next start.
 
 The card shows (`core/monado_build.*`, read from the binary, cached by path, size and mtime):
 - the build: **C++ (PiBridge)** with the whole `PIBRIDGE_PIMAX_ABI` string ("PIBRIDGE_PIMAX_ABI 1 spec omarchyvr 5ffbcc5"), or
-  **Rust** (no such marker);
+  **unknown** (no such marker: a Monado that does not link `libpibridge_pimax.a`);
 - the required markers of omarchyvr's preflight: `PIMAX_SLAM`, `PIMAX_ANCHOR`, `PIMAX_EYE`, `PIMAX_CTRL_TRACK`,
   `held from the tracker`, plus `PIMAX_AE_MODEL` and `PIMAX_SLAM_DRIFT_HOLD`. A missing one is said in red and
   blocks every start that uses the build ("lacks a required marker (...)");
@@ -91,9 +91,9 @@ All optional. Without a key the app looks in the places listed, first match wins
 
 | Key | What | Default lookup |
 |---|---|---|
-| `rec_monado_service` | monado-service | PATH, `~/.local/lib/omarchyvr/monado/bin/`, `~/gamedev/ovr-build/monado/src/xrt/targets/service/` |
-| `rec_pimax_cam` | pimax-cam | PATH, `~/gamedev/omarchyvr/rust/target-clean/release/`, `.../rust/target/release/` |
-| `rec_pimax_ctrltrack` | pimax-ctrltrack | the same |
+| `rec_monado_service` | monado-service | PATH, `<prefix>/lib/pibridge/monado/bin/`, `~/gamedev/pibridge-monado-build/src/xrt/targets/service/` |
+| `rec_pimax_cam` | pibridge-cam | PATH, `<prefix>/bin/`, the build tree next to the app (`tools/cam/`) |
+| `rec_pimax_ctrltrack` | pibridge-ctrltrack | the same (`tools/ctrltrack/`) |
 | `rec_basalt_lib` | libbasalt.so | `~/gamedev/ovr-build/basalt/lib/`, `/usr/local/lib/`, `/usr/lib/` |
 | `rec_slam_config` | Basalt SLAM config | `~/.config/pibridge/pimax-basalt.toml`, `~/gamedev/ext/slam/pimax-basalt.toml` |
 | `rec_lens_conf` | lens file | `~/.config/pibridge/lens.conf`, `~/gamedev/ext/lens/crystal.conf` |
@@ -209,8 +209,7 @@ recordings: date, length (the IMU span), size, OK / PROBLEM and the first proble
 the fake temporary data dir; RECORD TRACKING plays the start (socket after 0.8 s, data after 2 s), the steps in real
 time and the stop with fake processes, and writes a made-up dataset. Screenshots: `07-development.png` (ready),
 `07b-development-steamvr-running.png` (blocked), `07c-development-recording.png` (step 3), `07d-development-done.png`,
-`07e-development-blocked-by-tracking.png`, `07f-development-monado-directly.png` (C++ build, Monado directly running),
-`07g-development-rust-build.png` (the Rust-linked build, Fix permissions shown).
+`07e-development-blocked-by-tracking.png`, `07f-development-monado-directly.png` (C++ build, Monado directly running).
 
 ## Not verified live yet
 

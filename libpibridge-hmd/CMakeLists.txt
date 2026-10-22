@@ -14,6 +14,8 @@ add_library(pibridge_hmd STATIC
     src/haptics.cpp
     src/pairing.cpp
     src/ipd.cpp
+    src/p3b.cpp
+    src/pose_shm.cpp
     src/session.cpp
     src/fake.cpp
     src/audio.cpp
@@ -37,7 +39,7 @@ if(PIBRIDGE_BUILD_TESTS)
     # present; those tests report "skipped" without it.
     set(PIBRIDGE_FIXTURES_DIR "${PROJECT_SOURCE_DIR}/../omarchyvr/rust/fixtures" CACHE PATH
         "omarchyvr rust/fixtures (optional, for the real-capture tests)")
-    foreach(t proto fixtures discovery toml allowlist session close audio follow settings haptics pairing)
+    foreach(t proto fixtures discovery toml allowlist session close audio follow settings haptics pairing p3b pose_shm)
         add_executable(pibridge_hmd_test_${t} tests/test_${t}.cpp)
         target_link_libraries(pibridge_hmd_test_${t} PRIVATE pibridge_hmd pibridge_common)
         target_compile_definitions(pibridge_hmd_test_${t} PRIVATE

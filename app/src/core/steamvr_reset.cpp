@@ -361,13 +361,13 @@ ResetDialogModel resetDialogModel(const SteamVrScan& scan, bool steamVrConnected
         return m;
     }
     m.mode = ResetDialogModel::Mode::CloseSteamVr;
-    m.confirm = QStringLiteral("Close SteamVR");
+    m.confirm = QStringLiteral("Restart SteamVR");
     m.warning = QStringLiteral("Games running in VR will close.");
     const bool healthy = scan.vrserverNamedRight() && steamVrConnected;
     if (healthy) {
         m.title = QStringLiteral("SteamVR looks fine");
         m.intro = QStringLiteral("SteamVR is running and PiBridge is connected to it. These are its processes:");
-        m.question = QStringLiteral("Close SteamVR anyway?");
+        m.question = QStringLiteral("Restart SteamVR anyway?");
         return m;
     }
     m.title = QStringLiteral("Reset SteamVR");
@@ -378,7 +378,8 @@ ResetDialogModel resetDialogModel(const SteamVrScan& scan, bool steamVrConnected
     } else {
         m.intro = QStringLiteral("These SteamVR processes are running:");
     }
-    m.question = QStringLiteral("Close them? PiBridge asks each one to quit and stops the ones still there after 5 s.");
+    m.question = QStringLiteral("Restart SteamVR? PiBridge asks each one to quit, stops the ones still there after 5 s, "
+                                "then starts SteamVR again.");
     return m;
 }
 

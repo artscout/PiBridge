@@ -21,6 +21,10 @@
 // `--follow PROCESS` (SteamVR's `vrserver`): the eye tracker runs only while PROCESS runs, like pibridge-keepalived: it
 // starts with the runtime and stops (unsubscribes, releases the chip) 5 s after it is gone.
 //
+// The original Crystal (34a4:0012) has its eye tracker as a separate USB device, 2104:0220, which comes up when
+// pibridge-keepalived sends the captured setTobiiEyeDeviceEnable; it speaks the same TTP as 2104:0561 and is started
+// with its own captured start list (pibridge::eye::live::for_chip). eyed never powers it itself.
+//
 // The state machine is the Daemon class; main.cpp only wires signals and the clock. Tests drive it with FakeChip
 // trackers, a fake headset command sink, a fake process table, a temporary shm path and temporary config dirs.
 #pragma once
@@ -125,7 +129,9 @@ struct Status {
     bool operator==(const Status&) const = default;
 };
 
-/// The tracker configuration of `opts` on top of `base` (Config::from_env): the start list, the profile, flip x.
+/// The tracker configuration of `opts` on top of `base` (Config::from_env): the start list, the profile, flip x, and the
+/// original Crystal's eye tracker 2104:0220 accepted (Config::p3b; it runs on its own built-in start list, the list
+/// and profile here are for 2104:0561).
 /// `profile_kind` is set to "user" | "list" | "none". An error is a plain-words reason (unreadable list, bad
 /// profile); a missing profile file is only logged.
 std::expected<pibridge::eye::live::Config, std::string> make_config(const Options& opts, pibridge::eye::live::Config base,

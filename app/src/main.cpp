@@ -281,12 +281,6 @@ int main(int argc, char** argv) {
              in.status.frames = 30 * 95;
              dashboard(win)->recordCard()->demo(in);
          }},
-        {pibridge::app::MainWindow::Development, false, QStringLiteral("07g-development-rust-build"), false,
-         [&](pibridge::app::MainWindow& win) {
-             win.directSession().stop();
-             setConf({{"rec_monado_service", "/fake/home/gamedev/ovr-build/monado/src/xrt/targets/service/monado-service"}});
-             reshow(win, pibridge::app::MainWindow::Development);
-         }},
         {pibridge::app::MainWindow::Tracking, true, QStringLiteral("09f-tracking-steamvr-some-off"), false,
          [&](pibridge::app::MainWindow& win) {
              setConf({{"io_slam", "off"}, {"io_cam_ae", "off"}, {"io_ctrl_angle", "45"}});

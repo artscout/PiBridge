@@ -72,13 +72,22 @@ private:
     // RESET STEAMVR: scan, the confirm dialog, then close the listed PIDs or restart Steam (core/steamvr_reset.h).
     void resetSteamVr();
     bool confirmReset(const ResetDialogModel& m);
-    void closeSteamVr(std::vector<SteamVrProc> targets);
+    // close exactly these processes; `startAfter`: start SteamVR again once they are all gone (Reset SteamVR)
+    void closeSteamVr(std::vector<SteamVrProc> targets, bool startAfter = false);
+    // START VR's start: the inside-out session (Monado) or SteamVR
+    void startVr();
     void restartSteam();
     // HEADSET DRIVER SETTINGS: shown only while CustomHeadsetOpenVR is the headset's SteamVR driver (core/chovr.h),
     // enabled when its configurator is found. Re-checked whenever the page is shown.
     void updateChovr();
     // The Tracking card's mode chip and the START TRACKING button (inside-out mode only).
     void updateMode();
+    /// The original Crystal is on: it tracks itself (Lighthouse faceplate or its own inside-out), VR is SteamVR alone.
+    bool crystalOn() const;
+    /// The tracking mode in effect: the Crystal's own while it is on, the saved setting otherwise.
+    bool insideOutNow() const;
+    /// START VR runs the Monado inside-out session (the saved inside-out mode, not the Crystal).
+    bool monadoSession() const;
     // The Quick settings SteamVR-dashboard toggle: reflects the saved choice and shows the launcher's plain-words status.
     void updateOverlay();
 
@@ -101,7 +110,6 @@ private:
     QPushButton* ioStart_ = nullptr;
     QPushButton* ioStop_ = nullptr;
     QPushButton* roomBtn_ = nullptr;
-    QPushButton* quickRoomBtn_ = nullptr;
     QPushButton* fixCaps_ = nullptr; // top bar: "Fix permissions" (pkexec setcap cap_sys_nice on monado-service)
     QString fixCapsPath_;            // the monado-service the button fixes
     QLabel* vrStatus_ = nullptr;
@@ -131,6 +139,8 @@ private:
     QLabel* hsSerial_ = nullptr; // the headset serial (real serial from SteamVR/keepalived)
     pibridge::ui::HeadsetArt* art_ = nullptr;
     pibridge::ui::Segmented* refresh_ = nullptr;
+    pibridge::ui::Segmented* refreshCrystal_ = nullptr; // the original Crystal: 72 / 90 / 120 Hz, through CHOVR
+    bool wasCrystalRefresh_ = false;                    // the Crystal selector was shown last time (read the file once)
     pibridge::ui::Chip* ctrlChip_ = nullptr;
     QLabel* ctrlText_ = nullptr;
     struct ControllerWidgets {
@@ -158,6 +168,13 @@ private:
     QPushButton* recenter_ = nullptr;
     pibridge::ui::SliderRow* ipd_ = nullptr; // ipd_mm: the user's IPD in whole mm (lens motors + rendering)
     QTimer* ipdTimer_ = nullptr;             // sends the IPD 0.6 s after the slider stops
+    // the original Crystal (P3B): battery row in the headset card, switch-off button next to QUICK ROOM SETUP
+    QLabel* hsBatteryLabel_ = nullptr;
+    pibridge::ui::Battery* hsBattery_ = nullptr;
+    QLabel* hsBatteryText_ = nullptr;
+    QPushButton* crystalOffBtn_ = nullptr;
+    bool crystalChovrChecked_ = false;
+    bool startAfterClose_ = false;           // Reset SteamVR: start it again once closed       // CHOVR's crystalOG entry enabled once per app start
     bool ipdFromHeadset_ = false;            // the slider took the lens IPD the headset reported
     double lastLensIpdMm_ = 0;               // the lens IPD last taken from the headset
     QElapsedTimer ipdSent_;                  // since our last motor request (the lenses travel meanwhile)

@@ -9,7 +9,7 @@ target_compile_options(pibridge-ctrltrack PRIVATE -ffp-contract=off -fwrapv)
 install(TARGETS pibridge-ctrltrack RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 if(PIBRIDGE_BUILD_TESTS)
-    include(${CMAKE_CURRENT_SOURCE_DIR}/tests/difftests.cmake)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/tests/tests.cmake)
 endif()
 
 # pibridge-ctrlbench: PiBridge's offline measurement harness of the tracker and the fuser (not installed; no Rust twin).

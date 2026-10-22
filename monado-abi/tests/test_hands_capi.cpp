@@ -247,8 +247,7 @@ TEST(struct_layout_matches_the_c_header) {
 }
 
 TEST(c_program_drives_a_hand_through_the_staticlib) {
-    // tests/c/session.c runs as the difftest mode "session" (monado_abi_diff_hands_session); here the same steps in
-    // short: the rest pose, a squeeze, the report path.
+    // the steps of pimax-hands' tests/c/session.c in short: the rest pose, a squeeze, the report path.
     pimax_hands* h = pimax_hands_create();
     pimax_hands_out out;
     std::memset(&out, 0xff, sizeof out);

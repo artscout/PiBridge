@@ -111,7 +111,7 @@ bool chovrSetIpd(const QString& settingsFile, double mm) {
     QJsonObject root = readObject(settingsFile, &ok); // missing or broken: start from an empty object
     QStringList keys;
     for (auto it = root.begin(); it != root.end(); ++it) {
-        if (it.key().startsWith(QLatin1String("crystalSuper")) && it.value().isObject()) {
+        if (it.key().startsWith(QLatin1String("crystal")) && it.value().isObject()) {
             keys << it.key();
         }
     }
@@ -128,6 +128,54 @@ bool chovrSetIpd(const QString& settingsFile, double mm) {
     QJsonObject gen = root.value(QStringLiteral("generalHeadset")).toObject();
     gen.remove(QStringLiteral("horizontalIPDOffset"));
     root[QStringLiteral("generalHeadset")] = gen;
+    QDir().mkpath(QFileInfo(settingsFile).absolutePath());
+    QSaveFile f(settingsFile);
+    if (!f.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    return f.commit();
+}
+
+bool chovrEnableCrystalOg(const QString& settingsFile, bool* changed) {
+    if (changed != nullptr) {
+        *changed = false;
+    }
+    bool ok = false;
+    QJsonObject root = readObject(settingsFile, &ok);
+    QJsonObject og = root.value(QStringLiteral("crystalOG")).toObject();
+    if (og.value(QStringLiteral("enable")).toBool(false)) {
+        return true;
+    }
+    og[QStringLiteral("enable")] = true;
+    root[QStringLiteral("crystalOG")] = og;
+    QDir().mkpath(QFileInfo(settingsFile).absolutePath());
+    QSaveFile f(settingsFile);
+    if (!f.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    if (!f.commit()) {
+        return false;
+    }
+    if (changed != nullptr) {
+        *changed = true;
+    }
+    return true;
+}
+
+int chovrCrystalRefresh(const QString& settingsFile) {
+    bool ok = false;
+    const QJsonObject root = readObject(settingsFile, &ok);
+    return root.value(QStringLiteral("crystalOG")).toObject().value(QStringLiteral("refreshRate")).toInt(0);
+}
+
+bool chovrSetCrystalRefresh(const QString& settingsFile, int hz) {
+    bool ok = false;
+    QJsonObject root = readObject(settingsFile, &ok);
+    QJsonObject og = root.value(QStringLiteral("crystalOG")).toObject();
+    og[QStringLiteral("refreshRate")] = hz;
+    root[QStringLiteral("crystalOG")] = og;
     QDir().mkpath(QFileInfo(settingsFile).absolutePath());
     QSaveFile f(settingsFile);
     if (!f.open(QIODevice::WriteOnly)) {

@@ -180,16 +180,21 @@ TEST(setup_lookup_order) {
     CHECK(s.brokerSocket == env.runtimeDir + QStringLiteral("/omarchyvr-cam-broker.sock"));
     CHECK(s.connector.isEmpty() && s.camDevice.isEmpty() && !s.headsetPresent);
 
-    // omarchyvr's builds as fallbacks: target-clean before target
-    makeExec(env.home + QStringLiteral("/gamedev/omarchyvr/rust/target/release/pimax-cam"));
-    makeExec(env.home + QStringLiteral("/gamedev/omarchyvr/rust/target-clean/release/pimax-cam"));
-    makeExec(env.home + QStringLiteral("/gamedev/omarchyvr/rust/target/release/pimax-ctrltrack"));
-    makeExec(env.home + QStringLiteral("/gamedev/ovr-build/monado/src/xrt/targets/service/monado-service"));
+    // PiBridge's tools from the install prefix, else the build tree (findTool); PiBridge's Monado build
+    makeExec(env.prefix + QStringLiteral("/bin/pibridge-cam"));
+    makeExec(d.path() + QStringLiteral("/build/tools/ctrltrack/pibridge-ctrltrack"));
+    makeExec(env.home + QStringLiteral("/gamedev/pibridge-monado-build/src/xrt/targets/service/monado-service"));
     writeAll(env.home + QStringLiteral("/gamedev/ext/calib/crystal-calibration.xml"), "<x/>");
     writeAll(env.home + QStringLiteral("/gamedev/ovr-build/basalt/lib/libbasalt.so"), "");
-    s = resolveRecSetup(none, env);
-    CHECK(s.cam.path.endsWith(QStringLiteral("/target-clean/release/pimax-cam")));
-    CHECK(s.ctrl.path.endsWith(QStringLiteral("/target/release/pimax-ctrltrack")));
+    RecEnv envT = env;
+    envT.findTool = [&d](const QString& n) {
+        return n == QLatin1String("pibridge-ctrltrack") ? d.path() + QStringLiteral("/build/tools/ctrltrack/pibridge-ctrltrack")
+                                                        : QString();
+    };
+    s = resolveRecSetup(none, envT);
+    CHECK(s.cam.path == env.prefix + QStringLiteral("/bin/pibridge-cam"));
+    CHECK(s.ctrl.path == d.path() + QStringLiteral("/build/tools/ctrltrack/pibridge-ctrltrack"));
+    CHECK(resolveRecSetup(none, env).ctrl.path.isEmpty()); // no findTool: not found
     CHECK(s.monado.path.endsWith(QStringLiteral("/service/monado-service")));
     CHECK(s.calib.path.endsWith(QStringLiteral("/crystal-calibration.xml")));
     CHECK(s.basalt.path.endsWith(QStringLiteral("libbasalt.so")));
@@ -200,19 +205,19 @@ TEST(setup_lookup_order) {
     CHECK(s.calib.path == env.configDir + QStringLiteral("/headset-calibration.xml"));
     // PATH before the fallbacks
     RecEnv env2 = env;
-    makeExec(d.path() + QStringLiteral("/bin/pimax-cam"));
+    makeExec(d.path() + QStringLiteral("/bin/pibridge-cam"));
     env2.which = [&d](const QString& n) {
-        return n == QLatin1String("pimax-cam") ? d.path() + QStringLiteral("/bin/pimax-cam") : QString();
+        return n == QLatin1String("pibridge-cam") ? d.path() + QStringLiteral("/bin/pibridge-cam") : QString();
     };
-    CHECK(resolveRecSetup(none, env2).cam.path == d.path() + QStringLiteral("/bin/pimax-cam"));
+    CHECK(resolveRecSetup(none, env2).cam.path == d.path() + QStringLiteral("/bin/pibridge-cam"));
 
     // pibridge.conf keys: only that path counts; ~ is expanded; connector, camera, folder, env words
     const QString cp = d.path() + QStringLiteral("/pibridge.conf");
-    writeAll(cp, "rec_pimax_cam=~/nowhere/pimax-cam\nrec_connector=DP-9\nrec_dir=~/recs\n"
+    writeAll(cp, "rec_pimax_cam=~/nowhere/pibridge-cam\nrec_connector=DP-9\nrec_dir=~/recs\n"
                  "rec_env=PIMAX_LOG=debug junk FOO=1\nrec_cam_device=/no/such/video\n");
     Conf conf(cp);
     s = resolveRecSetup(conf, env);
-    CHECK(s.cam.path.isEmpty() && s.cam.fromConf && s.cam.wanted == env.home + QStringLiteral("/nowhere/pimax-cam"));
+    CHECK(s.cam.path.isEmpty() && s.cam.fromConf && s.cam.wanted == env.home + QStringLiteral("/nowhere/pibridge-cam"));
     CHECK(s.connector == QStringLiteral("DP-9") && s.connectorFromConf);
     CHECK(s.recordingsDir == env.home + QStringLiteral("/recs"));
     CHECK((s.extraEnv == QStringList{QStringLiteral("PIMAX_LOG=debug"), QStringLiteral("FOO=1")}));
@@ -226,7 +231,7 @@ TEST(system_check_from_proc) {
     RecSystem s = readRecSystem(d.path());
     CHECK(s.monado && !s.vrserver && !s.camBroker && !s.ctrltrack);
     writeAll(d.path() + QStringLiteral("/14/comm"), "vrserver\n");
-    writeAll(d.path() + QStringLiteral("/15/comm"), "pimax-ctrltrack\n");
+    writeAll(d.path() + QStringLiteral("/15/comm"), "pibridge-ctrltr\n"); // comm: the first 15 bytes
     s = readRecSystem(d.path());
     CHECK(s.vrserver && s.ctrltrack);
 }
@@ -252,7 +257,7 @@ TEST(readiness_words) {
     CHECK(all.contains(QStringLiteral("No headset found")));
     CHECK(all.contains(QStringLiteral("tracking cameras were not found")));
     CHECK(all.contains(QStringLiteral("rec_connector=")));
-    CHECK(all.contains(QStringLiteral("pimax-cam not found. Set rec_pimax_cam= in pibridge.conf.")));
+    CHECK(all.contains(QStringLiteral("pibridge-cam not found. Set rec_pimax_cam= in pibridge.conf.")));
     // basalt and the SLAM config (empty in the fake setup) are optional; the made-up monado-service has no
     // cap_sys_nice
     CHECK(r.warnings.size() == 3);
@@ -631,11 +636,11 @@ TEST(pimax_slam_engine_environment) {
     CHECK(!e.driver.join(QString()).contains(s.basalt.path));
     // the driver's output stages stay for either engine
     CHECK(e.driver.contains(QStringLiteral("PIMAX_SLAM_DRIFT_HOLD=0")));
-    // the controllers from Pimax's LED engine in the same winbridge, not from pimax-ctrltrack
+    // the controllers from Pimax's LED engine in the same winbridge, not from pibridge-ctrltrack
     CHECK(pimaxCtrlEngine(s));
     CHECK(e.driver.contains(QStringLiteral("PIMAX_CTRL_ENGINE=1")));
     CHECK(e.driver.contains(QStringLiteral("PIMAX_CTRL_TRACK=0")) && !e.ctrltrack);
-    {   // no LED models in the kit: pimax-ctrltrack as before
+    {   // no LED models in the kit: pibridge-ctrltrack as before
         RecSetup sm = s;
         sm.winCtrlModels = false;
         const IoSessionEnv em = buildIoEnv(sm.io, sm, 90, QString(), QString());
@@ -683,7 +688,7 @@ TEST(session_pimax_engine_runs_winbridge_before_monado_and_stops_it_after) {
     r.dataAtMs = 3000;
     CHECK(r.s->start(RecSession::Mode::Guided, twoSteps(), 0, QStringLiteral("20261020-120000")));
     r.at(600);
-    // no pimax-ctrltrack: the controllers come from Pimax's LED engine inside winbridge
+    // no pibridge-ctrltrack: the controllers come from Pimax's LED engine inside winbridge
     CHECK((r.names() == QStringList{QStringLiteral("broker"), QStringLiteral("winbridge"), QStringLiteral("monado")}));
     CHECK(r.procs.started[1].program == r.setup.wine);
     CHECK(r.procs.started[2].env.contains(QStringLiteral("VIT_SYSTEM_LIBRARY_PATH=") + r.setup.vitBridge.path));
@@ -699,7 +704,7 @@ TEST(session_pimax_engine_runs_winbridge_before_monado_and_stops_it_after) {
     CHECK(r.procs.signalled[0].pid == monado && r.procs.signalled[1].pid == wb && r.procs.signalled[2].pid == broker);
     CHECK(r.s->runningPids().empty());
 
-    // the kit without the controllers' LED models: pimax-ctrltrack as before
+    // the kit without the controllers' LED models: pibridge-ctrltrack as before
     Rig rm([](RecSetup& s) { s.io.slamEngine = SlamEngine::Pimax; s.winCtrlModels = false; });
     rm.s->start(RecSession::Mode::Guided, twoSteps(), 0);
     rm.at(600);
@@ -914,9 +919,9 @@ TEST(session_other_failures) {
     }
     { // a program cannot be started
         Rig r;
-        r.procs.failWith = QStringLiteral("Could not start pimax-cam: no such file");
+        r.procs.failWith = QStringLiteral("Could not start pibridge-cam: no such file");
         CHECK(!r.s->start(RecSession::Mode::Guided, twoSteps(), 0));
-        CHECK(r.s->state() == RecState::Failed && r.s->message().contains(QStringLiteral("Could not start pimax-cam")));
+        CHECK(r.s->state() == RecState::Failed && r.s->message().contains(QStringLiteral("Could not start pibridge-cam")));
     }
 }
 

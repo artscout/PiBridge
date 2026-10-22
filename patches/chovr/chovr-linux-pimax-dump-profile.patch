@@ -1,0 +1,573 @@
+diff --git a/CustomHeadsetOpenVR/src/Config/Config.h b/CustomHeadsetOpenVR/src/Config/Config.h
+index 504d5cd..4f8838f 100644
+--- a/CustomHeadsetOpenVR/src/Config/Config.h
++++ b/CustomHeadsetOpenVR/src/Config/Config.h
+@@ -282,6 +282,15 @@ public:
+ 		bool enablePimaxHandTracking = false;
+ 		// if the legacy bone transform translation should be used, for testing
+ 		bool pimaxLegacyHandTrackingInput = false;
++		// path of the dump of Pimax's runtime used by the "Pimax Builtin (from dump)" distortion profile (no PVR).
++		// empty: <config folder>/pimax-distortion-dump.json, a leading ~/ is the home folder
++		std::string pimaxDumpPath = "";
++		// how the "Pimax Builtin (from dump)" profile maps the eye's display to the panel UV that the dumped
++		// pvr_getHmdDistortedUV takes. false (default, the original behaviour): each axis 0..1 over its own pixel
++		// count (3552 x 3840 on the Crystal Super micro-OLED). true: PVR's UV is a square over the LONGER side
++		// (3840 x 3840), the shorter side covers the centred part of it (0.0375..0.9625). The square is what makes
++		// the dumped lens isotropic per pixel and what matches the "like Pimax" profile (see PimaxDumpData.h).
++		bool pimaxDumpSquareDomain = false;
+ 	};
+ 	
+ 	class MeganeX8KConfig : public BaseHeadsetConfig{
+diff --git a/CustomHeadsetOpenVR/src/Config/ConfigLoader.cpp b/CustomHeadsetOpenVR/src/Config/ConfigLoader.cpp
+index 42e3a1a..13f955a 100644
+--- a/CustomHeadsetOpenVR/src/Config/ConfigLoader.cpp
++++ b/CustomHeadsetOpenVR/src/Config/ConfigLoader.cpp
+@@ -203,6 +203,12 @@ void parseBaseHeadsetConfig(json headsetData, Config::BaseHeadsetConfig& headset
+ 		if(headsetData["pimaxLegacyHandTrackingInput"].is_boolean()){
+ 			pimaxConfig->pimaxLegacyHandTrackingInput = headsetData["pimaxLegacyHandTrackingInput"].get<bool>();
+ 		}
++		if(headsetData["pimaxDumpPath"].is_string()){
++			pimaxConfig->pimaxDumpPath = headsetData["pimaxDumpPath"].get<std::string>();
++		}
++		if(headsetData["pimaxDumpSquareDomain"].is_boolean()){
++			pimaxConfig->pimaxDumpSquareDomain = headsetData["pimaxDumpSquareDomain"].get<bool>();
++		}
+ 	}
+ }
+ 
+@@ -601,6 +607,8 @@ ordered_json baseHeadsetInfo(Config::BaseHeadsetConfig& headsetConfig){
+ 		result["forcePimaxPassthrough"] = pimaxConfig->forcePimaxPassthrough;
+ 		result["enablePimaxHandTracking"] = pimaxConfig->enablePimaxHandTracking;
+ 		result["pimaxLegacyHandTrackingInput"] = pimaxConfig->pimaxLegacyHandTrackingInput;
++		result["pimaxDumpPath"] = pimaxConfig->pimaxDumpPath;
++		result["pimaxDumpSquareDomain"] = pimaxConfig->pimaxDumpSquareDomain;
+ 	}
+ 	return result;
+ }
+diff --git a/CustomHeadsetOpenVR/src/Distortion/DistortionProfile.h b/CustomHeadsetOpenVR/src/Distortion/DistortionProfile.h
+index 4902eb2..98f25ad 100644
+--- a/CustomHeadsetOpenVR/src/Distortion/DistortionProfile.h
++++ b/CustomHeadsetOpenVR/src/Distortion/DistortionProfile.h
+@@ -42,6 +42,9 @@ public:
+ 	
+ 	
+ 	
++	// profiles are deleted through DistortionProfile* (DistortionProfileConstructor), so members of derived
++	// profiles (vectors, the dump's shared_ptr) need a virtual destructor to be released
++	virtual ~DistortionProfile() = default;
+ 	// called before the other functions are called
+ 	virtual void Initialize(){};
+ 	// fU and fV are normalized to be within [-1, 1] within the smallest square that fit on the screen
+diff --git a/CustomHeadsetOpenVR/src/Distortion/DistortionProfileConstructor.cpp b/CustomHeadsetOpenVR/src/Distortion/DistortionProfileConstructor.cpp
+index 9db5814..714fe98 100644
+--- a/CustomHeadsetOpenVR/src/Distortion/DistortionProfileConstructor.cpp
++++ b/CustomHeadsetOpenVR/src/Distortion/DistortionProfileConstructor.cpp
+@@ -2,6 +2,8 @@
+ #include "RadialBezierDistortionProfile.h"
+ #ifdef PVR_EXISTS
+ #include "PimaxDistortionProfile.h"
++#else
++#include "PimaxDumpDistortionProfile.h"
+ #endif
+ #include <cmath>
+ #include <map>
+@@ -623,6 +625,19 @@ bool PopulateBuiltInDistortionProfiles(){
+ 	pimaxBuiltin.type = "Pimax";
+ 	builtInDistortionProfiles[pimaxBuiltin.name] = pimaxBuiltin;
+ 
++#ifndef PVR_EXISTS
++	// "Pimax Builtin" without PVR: the same profile answered from a dump of PVR taken on Windows.
++	DistortionProfileConfig pimaxBuiltinFromDump = {};
++	pimaxBuiltinFromDump.name = PimaxDumpDistortionProfile::kName;
++	pimaxBuiltinFromDump.device = {"DreamAir", "DreamAirSE", "CrystalSuper50PPD", "CrystalSuper57PPD", "CrystalSuperUltrawide", "CrystalSuperMicroOLED", "CrystalLight", "CrystalOG"};
++	pimaxBuiltinFromDump.modifiedTime = 0;
++	pimaxBuiltinFromDump.description = "The Pimax Builtin profile without the Pimax runtime: FOV, distortion, recommended resolution, eye canting and IPD read from a dump of the Pimax runtime of this headset taken on Windows (pimax-distortion-dump.json in the config folder, or the pimaxDumpPath setting). Parallel projection is turned off and the eye rotation is taken from the dump while it is selected.";
++	pimaxBuiltinFromDump.author = "Pimax";
++	pimaxBuiltinFromDump.creationDate = 0.0;
++	pimaxBuiltinFromDump.type = PimaxDumpDistortionProfile::kType;
++	builtInDistortionProfiles[pimaxBuiltinFromDump.name] = pimaxBuiltinFromDump;
++#endif
++
+ 	return true;
+ };
+ // this is pretty much just an initializer so immediately call
+@@ -694,6 +709,18 @@ bool DistortionProfileConstructor::LoadDistortionProfile(std::string name){
+ 		DriverLog("Pimax PVR distortion profile is not available");
+ 		#endif
+ 	}
++#ifndef PVR_EXISTS
++	else if (config.type == PimaxDumpDistortionProfile::kType){
++		PimaxDumpDistortionProfile* pimaxDumpProfile = new PimaxDumpDistortionProfile();
++		if(pimaxDumpProfile->IsValid()){
++			DriverLog("Using the Pimax distortion from the dump of the Pimax runtime");
++			newProfile = pimaxDumpProfile;
++		}else{
++			DriverLog("Pimax dump distortion profile is not available, see the dump error above");
++			delete pimaxDumpProfile;
++		}
++	}
++#endif
+ 
+ 	bool changed = false;
+ 	
+diff --git a/CustomHeadsetOpenVR/src/Distortion/PimaxDumpData.cpp b/CustomHeadsetOpenVR/src/Distortion/PimaxDumpData.cpp
+new file mode 100644
+index 0000000..51d0f46
+--- /dev/null
++++ b/CustomHeadsetOpenVR/src/Distortion/PimaxDumpData.cpp
+@@ -0,0 +1,207 @@
++#include "PimaxDumpData.h"
++
++#include <algorithm>
++#include <cmath>
++#include <fstream>
++
++#include "nlohmann/json.hpp"
++
++using json = nlohmann::json;
++
++void PimaxDumpEye::Sample(int channel, float u, float v, float& outU, float& outV) const {
++	const std::vector<float>& g = grid[channel];
++	const int n = gridN;
++	const double last = (double)(n - 1);
++	double x = std::clamp((double)u, 0.0, 1.0) * last;
++	double y = std::clamp((double)v, 0.0, 1.0) * last;
++	if(!std::isfinite(x)) x = 0.0;
++	if(!std::isfinite(y)) y = 0.0;
++	int i0 = std::min((int)std::floor(x), n - 2);
++	int j0 = std::min((int)std::floor(y), n - 2);
++	double tx = x - i0;
++	double ty = y - j0;
++	auto at = [&](int i, int j, int c){ return (double)g[((size_t)j * n + i) * 2 + c]; };
++	// written as a*(1-t)+b*t so the corners are reproduced exactly (t = 0 or 1)
++	auto lerp2 = [&](int c){
++		double top = at(i0, j0, c) * (1.0 - tx) + at(i0 + 1, j0, c) * tx;
++		double bottom = at(i0, j0 + 1, c) * (1.0 - tx) + at(i0 + 1, j0 + 1, c) * tx;
++		return top * (1.0 - ty) + bottom * ty;
++	};
++	outU = (float)lerp2(0);
++	outV = (float)lerp2(1);
++}
++
++static bool ReadNumber(const json& j, const char* key, double& out){
++	if(!j.is_object() || !j.contains(key) || !j[key].is_number()) return false;
++	out = j[key].get<double>();
++	return std::isfinite(out);
++}
++
++static bool ReadArray(const json& j, const char* key, size_t size, double* out){
++	if(!j.is_object() || !j.contains(key) || !j[key].is_array() || j[key].size() != size) return false;
++	for(size_t i = 0; i < size; i++){
++		if(!j[key][i].is_number()) return false;
++		out[i] = j[key][i].get<double>();
++		if(!std::isfinite(out[i])) return false;
++	}
++	return true;
++}
++
++std::shared_ptr<const PimaxDumpData> PimaxDumpData::Load(const std::string& path, std::string& error){
++	std::ifstream file(path);
++	if(!file.is_open()){
++		error = "cannot open " + path;
++		return nullptr;
++	}
++	auto data = std::make_shared<PimaxDumpData>();
++	try{
++		json root = json::parse(file, nullptr, true, true);
++		if(!root.is_object() || !root.contains("eyes") || !root["eyes"].is_array() || root["eyes"].size() != 2){
++			error = "not a Pimax distortion dump (needs an 'eyes' array of 2)";
++			return nullptr;
++		}
++		if(root.contains("config") && root["config"].is_object()){
++			double vrf = -1;
++			if(ReadNumber(root["config"], "view_rotation_fix_default_-1", vrf)) data->viewRotationFix = (int)vrf;
++		}
++		bool seen[2] = {false, false};
++		for(size_t index = 0; index < 2; index++){
++			const json& e = root["eyes"][index];
++			int eyeIndex = (int)index;
++			if(e.contains("eye") && e["eye"].is_string()){
++				std::string name = e["eye"].get<std::string>();
++				if(name == "left") eyeIndex = 0;
++				else if(name == "right") eyeIndex = 1;
++			}
++			if(seen[eyeIndex]){
++				error = "the dump has the same eye twice";
++				return nullptr;
++			}
++			seen[eyeIndex] = true;
++			const char* eyeName = eyeIndex == 0 ? "left" : "right";
++			PimaxDumpEye& eye = data->eyes[eyeIndex];
++
++			const json& fov = e.contains("fov_tan") ? e["fov_tan"] : json();
++			if(!ReadNumber(fov, "up", eye.fovUp) || !ReadNumber(fov, "down", eye.fovDown) ||
++				!ReadNumber(fov, "left", eye.fovLeft) || !ReadNumber(fov, "right", eye.fovRight) ||
++				eye.fovUp <= 0 || eye.fovDown <= 0 || eye.fovLeft <= 0 || eye.fovRight <= 0 ||
++				eye.fovUp > 20 || eye.fovDown > 20 || eye.fovLeft > 20 || eye.fovRight > 20){
++				error = std::string("bad fov_tan for the ") + eyeName + " eye";
++				return nullptr;
++			}
++
++			const json& pose = e.contains("hmd_to_eye_pose") ? e["hmd_to_eye_pose"] : json();
++			if(!ReadArray(pose, "position", 3, eye.position.data()) || !ReadArray(pose, "orientation_xyzw", 4, eye.orientation.data())){
++				error = std::string("bad hmd_to_eye_pose for the ") + eyeName + " eye";
++				return nullptr;
++			}
++			double qn = std::sqrt(eye.orientation[0] * eye.orientation[0] + eye.orientation[1] * eye.orientation[1] +
++				eye.orientation[2] * eye.orientation[2] + eye.orientation[3] * eye.orientation[3]);
++			if(qn < 0.5 || qn > 1.5){
++				error = std::string("hmd_to_eye_pose orientation is not a rotation for the ") + eyeName + " eye";
++				return nullptr;
++			}
++			for(double& q : eye.orientation) q /= qn;
++
++			const json& rec = e.contains("recommended_texture_size") ? e["recommended_texture_size"] : json();
++			double w = 0, h = 0;
++			if(!ReadNumber(rec, "w", w) || !ReadNumber(rec, "h", h) || w < 16 || h < 16 || w > 16384 || h > 16384){
++				error = std::string("bad recommended_texture_size for the ") + eyeName + " eye";
++				return nullptr;
++			}
++			eye.recommendedWidth = (uint32_t)w;
++			eye.recommendedHeight = (uint32_t)h;
++
++			const json& dist = e.contains("distortion") ? e["distortion"] : json();
++			double n = 0;
++			if(!ReadNumber(dist, "grid_n", n) || n < 2 || n > 4097 || n != std::floor(n)){
++				error = std::string("bad distortion.grid_n for the ") + eyeName + " eye";
++				return nullptr;
++			}
++			double failed = 0;
++			if(ReadNumber(dist, "failed_calls", failed) && failed > 0){
++				error = std::string("the runtime failed some pvr_getHmdDistortedUV calls for the ") + eyeName + " eye; take the dump again";
++				return nullptr;
++			}
++			eye.gridN = (int)n;
++			const size_t count = (size_t)eye.gridN * eye.gridN * 2;
++			const char* keys[3] = {"grid_r", "grid_g", "grid_b"};
++			for(int c = 0; c < 3; c++){
++				if(!dist.contains(keys[c]) || !dist[keys[c]].is_array() || dist[keys[c]].size() != count){
++					error = std::string("distortion.") + keys[c] + " of the " + eyeName + " eye does not hold grid_n x grid_n points";
++					return nullptr;
++				}
++				std::vector<float>& g = eye.grid[c];
++				g.resize(count);
++				const json& arr = dist[keys[c]];
++				for(size_t i = 0; i < count; i++){
++					if(!arr[i].is_number()){
++						error = std::string("distortion.") + keys[c] + " of the " + eyeName + " eye holds a non-number";
++						return nullptr;
++					}
++					g[i] = arr[i].get<float>();
++					if(!std::isfinite(g[i])){
++						error = std::string("distortion.") + keys[c] + " of the " + eyeName + " eye holds a non-finite value";
++						return nullptr;
++					}
++				}
++			}
++		}
++	}catch(const std::exception& ex){
++		error = std::string("JSON error: ") + ex.what();
++		return nullptr;
++	}
++
++	const PimaxDumpEye& l = data->eyes[0];
++	const PimaxDumpEye& r = data->eyes[1];
++	double dx = l.position[0] - r.position[0], dy = l.position[1] - r.position[1], dz = l.position[2] - r.position[2];
++	data->ipdMm = std::sqrt(dx * dx + dy * dy + dz * dz) * 1000.0;
++	// PimaxCommon (PVR): cantingAngle = Quatf(left).Angle(right) / 2 with Angle(q) = 2 * acos(|dot|)
++	double dot = l.orientation[0] * r.orientation[0] + l.orientation[1] * r.orientation[1] +
++		l.orientation[2] * r.orientation[2] + l.orientation[3] * r.orientation[3];
++	data->cantingAngleDeg = std::acos(std::min(1.0, std::fabs(dot))) * 180.0 / 3.14159265358979323846;
++	if(data->ipdMm < 40.0 || data->ipdMm > 90.0){
++		error = "the eye poses give an IPD outside 40..90 mm";
++		return nullptr;
++	}
++	if(data->cantingAngleDeg > 20.0){
++		error = "the eye poses give a canting angle above 20 degrees";
++		return nullptr;
++	}
++	return data;
++}
++
++void PimaxDumpData::PanelUVFromDistortionUV(bool leftEye, float& fU, float& fV, float resolutionX, float resolutionY, int displayRotation, bool squareDomain){
++	// Same operations and order as PimaxDistortionProfile::ComputeDistortion.
++	// Un-scale non-square resolution
++	const float minResolution = std::min(resolutionX, resolutionY);
++	if(squareDomain){
++		// [-1,1] over the square of the longer side: both axes by min/max (the longer axis lands on [-1,1], the
++		// shorter one on [-min/max, min/max])
++		const float maxResolution = std::max(resolutionX, resolutionY);
++		fU *= minResolution / maxResolution;
++		fV *= minResolution / maxResolution;
++	}else{
++		fU *= minResolution / resolutionX;
++		fV *= minResolution / resolutionY;
++	}
++	// Counteract negation for 180 and 270 rotation
++	if(displayRotation == 2 || displayRotation == 3){
++		fU *= -1;
++		fV *= -1;
++	}
++	// Counteract swap for 90 and 270 rotation
++	if(displayRotation == 1 || displayRotation == 3){
++		float tmp = fU;
++		if(leftEye){
++			fU = fV;
++			fV = -tmp;
++		}else{
++			fU = -fV;
++			fV = tmp;
++		}
++	}
++	// Convert from [-1,1] back to [0,1]
++	fU = fU / 2.0f + 0.5f;
++	fV = fV / 2.0f + 0.5f;
++}
+diff --git a/CustomHeadsetOpenVR/src/Distortion/PimaxDumpData.h b/CustomHeadsetOpenVR/src/Distortion/PimaxDumpData.h
+new file mode 100644
+index 0000000..d83da1c
+--- /dev/null
++++ b/CustomHeadsetOpenVR/src/Distortion/PimaxDumpData.h
+@@ -0,0 +1,62 @@
++#pragma once
++// Distortion data dumped from Pimax's own runtime (PVR) on Windows, for use without PVR (Linux).
++//
++// The dump is the JSON written by omarchyvr's windows/pimax-dump-distortion.ps1. Per eye it holds what the
++// "Pimax Builtin" profile asks PVR for at run time:
++//   fov_tan {up, down, left, right}            pvr_getEyeRenderInfo(...).Fov (all tangents positive)
++//   hmd_to_eye_pose {position, orientation_xyzw} pvr_getEyeRenderInfo(...).HmdToEyePose (metres, PVR frame)
++//   recommended_texture_size {w, h}            pvr_getFovTextureSize(..., Fov, 1.0)
++//   distortion {grid_n, grid_r, grid_g, grid_b} pvr_getHmdDistortedUV sampled on a grid_n x grid_n grid:
++//       row-major, v outer loop (v = j/(n-1)), u inner loop (u = i/(n-1)); each array holds [u0,v0,u1,v1,...]
++//       of the OUTPUT uv. Input = panel UV of the eye (0..1), output = per channel UV (0..1) into the
++//       undistorted render texture that spans the eye's FOV port.
++// This file has no SteamVR dependency so the standalone test can use it unchanged.
++
++#include <array>
++#include <cstdint>
++#include <memory>
++#include <string>
++#include <vector>
++
++struct PimaxDumpEye {
++	// FOV port tangents, all positive as PVR reports them
++	double fovUp = 0, fovDown = 0, fovLeft = 0, fovRight = 0;
++	// HmdToEyePose
++	std::array<double, 3> position = {0, 0, 0};
++	std::array<double, 4> orientation = {0, 0, 0, 1}; // x, y, z, w
++	// pvr_getFovTextureSize(..., 1.0)
++	uint32_t recommendedWidth = 0, recommendedHeight = 0;
++	// pvr_getHmdDistortedUV grid
++	int gridN = 0;
++	std::array<std::vector<float>, 3> grid; // red, green, blue
++
++	// Bilinear interpolation of the channel's grid at panel uv (0..1), clamped to the grid edges.
++	// Returns the grid value exactly at grid points. Output uv is 0..1 into the render texture.
++	void Sample(int channel, float u, float v, float& outU, float& outV) const;
++};
++
++struct PimaxDumpData {
++	std::array<PimaxDumpEye, 2> eyes; // left, right
++	// distance between the two eye positions in mm (what PimaxCommon computes from PVR's eye poses)
++	double ipdMm = 0;
++	// half the angle between the two eye orientations in degrees (PimaxCommon: Quatf::Angle(...) / 2)
++	double cantingAngleDeg = 0;
++	// the runtime's view_rotation_fix when the dump was taken (1 = parallel projection), -1 if unknown
++	int viewRotationFix = -1;
++
++	// Parse and validate a dump. Returns nullptr and sets error on failure.
++	static std::shared_ptr<const PimaxDumpData> Load(const std::string& path, std::string& error);
++
++	// The exact inverse of BaseHeadsetShim::transformUV as done by PimaxDistortionProfile::ComputeDistortion
++	// (Windows): un-scale the non-square resolution, undo the negation for 180/270, undo the swap for 90/270,
++	// then [-1,1] -> [0,1]. The result is the panel UV that pvr_getHmdDistortedUV takes.
++	// squareDomain false: each axis spans 0..1 over its own pixel count (the inverse above, unchanged).
++	// squareDomain true: PVR's panel UV is a square over the longer side of the panel; the shorter side covers
++	// only the centred part (Crystal Super micro-OLED: the 3552 px side covers 0.0375..0.9625 of the 3840 square).
++	// Evidence (2026-10-19, dump of the Crystal Super micro-OLED): with the square, the lens is isotropic per pixel
++	// at its centre (otherwise 9 % more angle per pixel along the 3552 side, which a round lens can not do), PVR's
++	// own pixels_per_tan_angle_at_center is equal in x and y, and the result matches the camera/compositor fitted
++	// "Crystal Super micro-OLED like Pimax" profile to 0.06 deg rms within 25 deg (apart from PVR's constant
++	// vertical image offset of 0.10 tan, which the RadialBezier profile can not express).
++	static void PanelUVFromDistortionUV(bool leftEye, float& fU, float& fV, float resolutionX, float resolutionY, int displayRotation, bool squareDomain = false);
++};
+diff --git a/CustomHeadsetOpenVR/src/Distortion/PimaxDumpDistortionProfile.cpp b/CustomHeadsetOpenVR/src/Distortion/PimaxDumpDistortionProfile.cpp
+new file mode 100644
+index 0000000..b1e2a55
+--- /dev/null
++++ b/CustomHeadsetOpenVR/src/Distortion/PimaxDumpDistortionProfile.cpp
+@@ -0,0 +1,121 @@
++#include "PimaxDumpDistortionProfile.h"
++
++#ifndef PVR_EXISTS
++
++#include <cstdlib>
++#include <filesystem>
++#include <mutex>
++#include <system_error>
++
++#include "../Config/ConfigLoader.h"
++#include "../Driver/DriverLog.h"
++#include "../Helpers/PimaxCommon.h"
++
++namespace {
++	std::mutex s_dumpMutex;
++	bool s_dumpTried = false;
++	std::string s_dumpPath;
++	std::filesystem::file_time_type s_dumpTime = {};
++	std::shared_ptr<const PimaxDumpData> s_dump;
++}
++
++std::string PimaxDumpDistortionProfile::ResolvePath(const std::string& configuredPath){
++	if(configuredPath.empty()){
++		return driverConfigLoader.GetConfigFolder() + "pimax-distortion-dump.json";
++	}
++	if(configuredPath.rfind("~/", 0) == 0){
++		const char* home = std::getenv("HOME");
++		if(home != nullptr){
++			return std::string(home) + configuredPath.substr(1);
++		}
++	}
++	return configuredPath;
++}
++
++std::shared_ptr<const PimaxDumpData> PimaxDumpDistortionProfile::GetDump(const std::string& configuredPath, bool checkForChanges){
++	std::lock_guard<std::mutex> lock(s_dumpMutex);
++	// fast path, used by PatchConfig on every GetConfig(): no disk access once a load was attempted
++	if(s_dumpTried && !checkForChanges && s_dumpPath == configuredPath){
++		return s_dump;
++	}
++	std::string path = ResolvePath(configuredPath);
++	std::error_code ec;
++	std::filesystem::file_time_type time = std::filesystem::last_write_time(path, ec);
++	if(ec){
++		time = {};
++	}
++	if(s_dumpTried && s_dumpPath == configuredPath && time == s_dumpTime){
++		return s_dump;
++	}
++	s_dumpTried = true;
++	s_dumpPath = configuredPath;
++	s_dumpTime = time;
++	std::string error;
++	s_dump = PimaxDumpData::Load(path, error);
++	if(s_dump){
++		const PimaxDumpEye& l = s_dump->eyes[0];
++		DriverLog("Pimax dump loaded from %s: canting %.2f deg, IPD %.2f mm, left eye tan up %.5f down %.5f left %.5f right %.5f, recommended %u x %u, grid %i, view_rotation_fix %i",
++			path.c_str(), s_dump->cantingAngleDeg, s_dump->ipdMm, l.fovUp, l.fovDown, l.fovLeft, l.fovRight,
++			l.recommendedWidth, l.recommendedHeight, l.gridN, s_dump->viewRotationFix);
++		if(s_dump->viewRotationFix == 1){
++			DriverLog("Pimax dump: taken with view_rotation_fix 1 (parallel projection); the FOV and eye poses are those of the parallel views");
++		}
++	}else{
++		DriverLog("Pimax dump at %s can not be used: %s", path.c_str(), error.c_str());
++	}
++	return s_dump;
++}
++
++PimaxDumpDistortionProfile::PimaxDumpDistortionProfile(){
++	dump = GetDump(PimaxCommon::GetHeadsetConfig().pimaxDumpPath, true);
++}
++
++void PimaxDumpDistortionProfile::Initialize(){
++	Config::PimaxHeadsetConfig& config = PimaxCommon::GetHeadsetConfig();
++	dump = GetDump(config.pimaxDumpPath, true);
++	squareDomain = config.pimaxDumpSquareDomain;
++	DriverLog("Pimax dump profile: panel UV domain %s", squareDomain ? "square over the longer panel side (pimaxDumpSquareDomain true)" : "each axis over its own pixel count (pimaxDumpSquareDomain false)");
++}
++
++void PimaxDumpDistortionProfile::GetProjectionRaw(vr::EVREye eEye, float* pfLeft, float* pfRight, float* pfBottom, float* pfTop){
++	if(!dump){
++		*pfLeft = *pfBottom = -1.0f;
++		*pfRight = *pfTop = 1.0f;
++		return;
++	}
++	const PimaxDumpEye& eye = dump->eyes[eEye == vr::Eye_Left ? 0 : 1];
++	// same as PimaxDistortionProfile::GetProjectionRaw with eyeInfo.Fov from the dump
++	*pfLeft = -(float)eye.fovLeft;
++	*pfRight = (float)eye.fovRight;
++	// Top and bottom are backwards per SteamVR documentation.
++	*pfTop = (float)eye.fovDown;
++	*pfBottom = -(float)eye.fovUp;
++}
++
++Point2D PimaxDumpDistortionProfile::ComputeDistortion(vr::EVREye eEye, ColorChannel colorChannel, float fU, float fV){
++	if(!dump){
++		return {fU, fV};
++	}
++	// Counteract the display rotation and scaling applied in BaseHeadset::transformUV, exactly like
++	// PimaxDistortionProfile (which also takes displayRotation from the default config of the headset).
++	Config::BaseHeadsetConfig& headsetConfig = PimaxCommon::GetHeadsetConfigDefault();
++	// pimaxDumpSquareDomain (headset config, read in Initialize, default false = original behaviour): see PimaxDumpData.h
++	PimaxDumpData::PanelUVFromDistortionUV(eEye == vr::Eye_Left, fU, fV, resolutionX, resolutionY, headsetConfig.displayRotation, squareDomain);
++
++	// pvr_getHmdDistortedUV from the dumped grid
++	float outU = 0.f, outV = 0.f;
++	dump->eyes[eEye == vr::Eye_Left ? 0 : 1].Sample((int)colorChannel, fU, fV, outU, outV);
++
++	return {(outU - 0.5f) * 2.f, (outV - 0.5f) * 2.f};
++}
++
++void PimaxDumpDistortionProfile::GetRecommendedRenderTargetSize(uint32_t* pnWidth, uint32_t* pnHeight){
++	if(!dump){
++		return;
++	}
++	// pvr_getFovTextureSize(left eye, its Fov, 1.0), rounded up to a multiple of 4
++	*pnWidth = (dump->eyes[0].recommendedWidth + 3) / 4 * 4;
++	*pnHeight = (dump->eyes[0].recommendedHeight + 3) / 4 * 4;
++}
++
++#endif // !PVR_EXISTS
+diff --git a/CustomHeadsetOpenVR/src/Distortion/PimaxDumpDistortionProfile.h b/CustomHeadsetOpenVR/src/Distortion/PimaxDumpDistortionProfile.h
+new file mode 100644
+index 0000000..ab402bc
+--- /dev/null
++++ b/CustomHeadsetOpenVR/src/Distortion/PimaxDumpDistortionProfile.h
+@@ -0,0 +1,47 @@
++#pragma once
++#include "DistortionProfile.h"
++#include "PimaxDumpData.h"
++
++#include <cstdint>
++#include <memory>
++#include <string>
++
++#ifndef PVR_EXISTS
++// "Pimax Builtin (from dump)": the "Pimax Builtin" profile (PimaxDistortionProfile, Windows only) without PVR.
++// Instead of asking PVR at run time, it answers the same three questions from a dump of PVR taken on Windows
++// (see PimaxDumpData.h). The dump path is the headset config key "pimaxDumpPath"; empty means
++// <config folder>/pimax-distortion-dump.json (~/.config/CustomHeadset/pimax-distortion-dump.json).
++//
++// The dump's FOV is the FOV of the canted eyes (taken with view_rotation_fix 0), so while this profile is
++// selected PimaxCommon::PatchConfig forces parallelProjection off and sets eyeRotation to the dump's canting
++// angle (and the IPD, see there), which is what PVR gives the Windows driver with parallel projection off.
++class PimaxDumpDistortionProfile : public DistortionProfile {
++public:
++	static constexpr const char* kName = "Pimax Builtin (from dump)";
++	static constexpr const char* kType = "PimaxDump";
++
++	PimaxDumpDistortionProfile();
++
++	virtual void Initialize() override;
++
++	virtual void GetProjectionRaw(vr::EVREye eEye, float* pfLeft, float* pfRight, float* pfBottom, float* pfTop) override;
++
++	virtual Point2D ComputeDistortion(vr::EVREye eEye, ColorChannel colorChannel, float fU, float fV) override;
++
++	virtual void GetRecommendedRenderTargetSize(uint32_t* pnWidth, uint32_t* pnHeight) override;
++
++	bool IsValid() const { return dump != nullptr; }
++
++	// The cached dump for the configured path ("" = default). Loads it on first use. With checkForChanges the
++	// file is loaded again when its path or modification time changed; without it nothing touches the disk
++	// once a load was attempted (PatchConfig calls this on every GetConfig()). Returns nullptr if the dump
++	// cannot be used; the reason is logged once per load attempt.
++	static std::shared_ptr<const PimaxDumpData> GetDump(const std::string& configuredPath, bool checkForChanges);
++	static std::string ResolvePath(const std::string& configuredPath);
++
++private:
++	std::shared_ptr<const PimaxDumpData> dump;
++	// headset config pimaxDumpSquareDomain at Initialize (see PimaxDumpData::PanelUVFromDistortionUV)
++	bool squareDomain = false;
++};
++#endif

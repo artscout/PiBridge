@@ -35,9 +35,9 @@ std::uint64_t seq_begin(const fs::path& p) {
     return v;
 }
 
-// The C layout of omarchyvr linux/crystal-super/omarchyvr_eye_gaze.h, copied field for field.
+// The C layout of patches/chovr/pibridge_eye_gaze.h, copied field for field.
 #pragma pack(push, 1)
-struct omarchyvr_eye_gaze {
+struct pibridge_eye_gaze {
     std::uint64_t seq_begin;
     std::uint32_t magic;
     std::uint32_t version;
@@ -54,7 +54,7 @@ struct omarchyvr_eye_gaze {
     std::uint64_t seq_end;
 };
 #pragma pack(pop)
-static_assert(sizeof(omarchyvr_eye_gaze) == SIZE);
+static_assert(sizeof(pibridge_eye_gaze) == SIZE);
 
 } // namespace
 
@@ -117,14 +117,14 @@ TEST(torn_snapshots_are_refused) {
 }
 
 TEST(the_layout_is_byte_identical_to_the_c_header) {
-    CHECK(offsetof(omarchyvr_eye_gaze, magic) == 8);
-    CHECK(offsetof(omarchyvr_eye_gaze, t_ns) == 16);
-    CHECK(offsetof(omarchyvr_eye_gaze, flags) == 32);
-    CHECK(offsetof(omarchyvr_eye_gaze, left_origin) == 40);
-    CHECK(offsetof(omarchyvr_eye_gaze, right_dir) == 76);
-    CHECK(offsetof(omarchyvr_eye_gaze, combined_dir) == 100);
-    CHECK(offsetof(omarchyvr_eye_gaze, sample) == 112);
-    CHECK(offsetof(omarchyvr_eye_gaze, seq_end) == 128);
+    CHECK(offsetof(pibridge_eye_gaze, magic) == 8);
+    CHECK(offsetof(pibridge_eye_gaze, t_ns) == 16);
+    CHECK(offsetof(pibridge_eye_gaze, flags) == 32);
+    CHECK(offsetof(pibridge_eye_gaze, left_origin) == 40);
+    CHECK(offsetof(pibridge_eye_gaze, right_dir) == 76);
+    CHECK(offsetof(pibridge_eye_gaze, combined_dir) == 100);
+    CHECK(offsetof(pibridge_eye_gaze, sample) == 112);
+    CHECK(offsetof(pibridge_eye_gaze, seq_end) == 128);
     const auto dir = testutil::temp_dir("shm-c");
     const auto p = dir / "gaze";
     auto w = Publisher::create(p);
@@ -132,7 +132,7 @@ TEST(the_layout_is_byte_identical_to_the_c_header) {
     CHECK(w && w->publish(&s, 2, 777).has_value());
     const auto bytes = testutil::read_bytes(p);
     CHECK(bytes.size() == SIZE);
-    omarchyvr_eye_gaze c{};
+    pibridge_eye_gaze c{};
     std::memcpy(&c, bytes.data(), sizeof c);
     CHECK(c.magic == 0x4745564fu && c.version == 1);
     CHECK(c.seq_begin == c.seq_end && c.seq_begin % 2 == 0 && c.seq_begin != 0);

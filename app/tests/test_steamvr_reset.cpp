@@ -262,7 +262,7 @@ TEST(dialog_stuck_vrserver) {
     CHECK(m.mode == ResetDialogModel::Mode::CloseSteamVr);
     CHECK(m.title == QStringLiteral("Reset SteamVR"));
     CHECK(m.intro.startsWith(QStringLiteral("SteamVR is left over from an earlier start and holds SteamVR's socket")));
-    CHECK(m.confirm == QStringLiteral("Close SteamVR"));
+    CHECK(m.confirm == QStringLiteral("Restart SteamVR"));
     CHECK(m.lines.size() == 8); // 7 processes + the unheld socket
     CHECK(m.lines.contains(QStringLiteral(
         "vrserver (PID 200, running 1 h 24 min, shows as \"36674: vrstartu\", holds the SteamVR socket)")));
@@ -278,7 +278,7 @@ TEST(dialog_healthy_asks_anyway) {
     s.procs = {v};
     const ResetDialogModel h = resetDialogModel(s, true);
     CHECK(h.title == QStringLiteral("SteamVR looks fine"));
-    CHECK(h.question == QStringLiteral("Close SteamVR anyway?"));
+    CHECK(h.question == QStringLiteral("Restart SteamVR anyway?"));
     CHECK(h.mode == ResetDialogModel::Mode::CloseSteamVr);
     // vrserver named right but the connection is not up: not healthy
     const ResetDialogModel n = resetDialogModel(s, false);

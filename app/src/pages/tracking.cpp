@@ -402,7 +402,7 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
     addRow(ctrl, QStringLiteral("Optical tracking"),
            QStringLiteral("Finds the controllers' LEDs in the cameras. With the Pimax head tracking engine: Pimax's own "
                           "LED engine in the same winbridge, as in Pimax Play (PIMAX_CTRL_ENGINE); otherwise "
-                          "pimax-ctrltrack (PIMAX_CTRL_TRACK). Off: the controllers only turn, at a fixed place by the "
+                          "pibridge-ctrltrack (PIMAX_CTRL_TRACK). Off: the controllers only turn, at a fixed place by the "
                           "head."),
            ctrlTrack_, [](const IoSettings& io) { return io.ctrlTrack; },
            [](const IoSettings& io, const RecSetup& s) {
@@ -412,15 +412,15 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
                    return QString();
                }
                if (io.slamEngine == SlamEngine::Pimax && pimaxSlamReady(cur) && !s.winCtrlModels) {
-                   return QStringLiteral("The Pimax files have no controller LED models (slam/H1); pimax-ctrltrack "
+                   return QStringLiteral("The Pimax files have no controller LED models (slam/H1); pibridge-ctrltrack "
                                          "tracks the controllers instead.");
                }
-               return s.ctrl.path.isEmpty() ? QStringLiteral("pimax-ctrltrack was not found; set it under Advanced.")
+               return s.ctrl.path.isEmpty() ? QStringLiteral("pibridge-ctrltrack was not found; set it under Advanced.")
                                             : QString();
            });
     const auto noCtrl = [](const IoSettings& io, const RecSetup& s) -> QString {
         if (s.ctrl.path.isEmpty()) {
-            return QStringLiteral("pimax-ctrltrack was not found.");
+            return QStringLiteral("pibridge-ctrltrack was not found.");
         }
         return io.ctrlTrack ? QString() : QStringLiteral("Optical tracking is off.");
     };
@@ -540,7 +540,7 @@ void TrackingPage::load() {
         "headset's own cameras track the head in 6DoF and the controllers by their LEDs. By default it uses the "
         "<b style='color:#e6e6ec'>Pimax SLAM engine</b> &mdash; the same tracking Pimax Play uses on Windows, run on "
         "Linux through Monado (the open-source Basalt engine is an alternative under Advanced). It needs monado-service "
-        "with the Pimax driver, the camera broker (pimax-cam), the controller tracker (pimax-ctrltrack) and the "
+        "with the Pimax driver, the camera broker (pibridge-cam), the controller tracker (pibridge-ctrltrack) and the "
         "headset's factory calibration. START VR runs it as a SteamVR driver, so games start through SteamVR as usual. "
         "The settings below are used by START VR and, in every mode, by Record tracking and \"Monado directly\" "
         "(Development page).</p>"));

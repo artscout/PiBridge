@@ -114,21 +114,26 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
     // uninstalled development checkout still works.
     const QString lib = env.prefix + QStringLiteral("/lib/pibridge");
     const QString data = env.prefix + QStringLiteral("/share/pibridge");
-    // omarchyvr's builds, as fallbacks only (like the configurator lookup in core/chovr.cpp)
-    const QStringList rust{h + QStringLiteral("/gamedev/omarchyvr/rust/target-clean/release"),
-                           h + QStringLiteral("/gamedev/omarchyvr/rust/target/release")};
+    // PiBridge's own tools: PATH, then the install prefix, then the build tree next to the app (core/system.h)
+    const auto ownTool = [&env](const QString& name) {
+        QStringList c = tool(env, name, {env.prefix + QStringLiteral("/bin")});
+        if (env.findTool) {
+            if (const QString p = env.findTool(name); !p.isEmpty()) {
+                c << p;
+            }
+        }
+        return c;
+    };
     RecSetup s;
     s.monado = pick(conf, reckey::kMonado, QStringLiteral("monado-service"), true,
                     tool(env, QStringLiteral("monado-service"),
                          {lib + QStringLiteral("/monado/bin"),
-                          h + QStringLiteral("/.local/lib/omarchyvr/monado/bin"),
-                          h + QStringLiteral("/gamedev/pibridge-monado-build/src/xrt/targets/service"),
-                          h + QStringLiteral("/gamedev/ovr-build/monado/src/xrt/targets/service")}),
+                          h + QStringLiteral("/gamedev/pibridge-monado-build/src/xrt/targets/service")}),
                     h, isExec);
-    s.cam = pick(conf, reckey::kCam, QStringLiteral("pimax-cam"), true, tool(env, QStringLiteral("pimax-cam"), rust), h,
+    s.cam = pick(conf, reckey::kCam, QStringLiteral("pibridge-cam"), true, ownTool(QStringLiteral("pibridge-cam")), h,
                  isExec);
-    s.ctrl = pick(conf, reckey::kCtrl, QStringLiteral("pimax-ctrltrack"), true,
-                  tool(env, QStringLiteral("pimax-ctrltrack"), rust), h, isExec);
+    s.ctrl = pick(conf, reckey::kCtrl, QStringLiteral("pibridge-ctrltrack"), true,
+                  ownTool(QStringLiteral("pibridge-ctrltrack")), h, isExec);
     s.basalt = pick(conf, reckey::kBasalt, QStringLiteral("Basalt library (libbasalt.so)"), false,
                     {lib + QStringLiteral("/libbasalt.so"), h + QStringLiteral("/gamedev/ovr-build/basalt/lib/libbasalt.so"),
                      QStringLiteral("/usr/local/lib/libbasalt.so"), QStringLiteral("/usr/lib/libbasalt.so")},
@@ -256,8 +261,8 @@ RecSetup fakeRecSetup(const QString& recordingsDir) {
     };
     RecSetup s;
     s.monado = p(reckey::kMonado, "monado-service", "/fake/monado/monado-service", true);
-    s.cam = p(reckey::kCam, "pimax-cam", "/fake/omarchyvr/pimax-cam", true);
-    s.ctrl = p(reckey::kCtrl, "pimax-ctrltrack", "/fake/omarchyvr/pimax-ctrltrack", true);
+    s.cam = p(reckey::kCam, "pibridge-cam", "/fake/bin/pibridge-cam", true);
+    s.ctrl = p(reckey::kCtrl, "pibridge-ctrltrack", "/fake/bin/pibridge-ctrltrack", true);
     s.basalt = p(reckey::kBasalt, "Basalt library (libbasalt.so)", "/fake/basalt/libbasalt.so", false);
     s.winbridge = p(reckey::kWinbridge, "winbridge.exe", "/fake/pibridge/winbridge/winbridge.exe", false);
     s.vitBridge = p(reckey::kVitBridge, "VIT library (libpibridge_vit_winbridge.so)",
@@ -391,8 +396,8 @@ RecSystem readRecSystem(const QString& procRoot) {
     RecSystem s;
     s.vrserver = processRunning(QStringLiteral("vrserver"), procRoot);
     s.monado = processRunning(QStringLiteral("monado-service"), procRoot);
-    s.camBroker = processRunning(QStringLiteral("pimax-cam"), procRoot);
-    s.ctrltrack = processRunning(QStringLiteral("pimax-ctrltrack"), procRoot);
+    s.camBroker = processRunning(QStringLiteral("pibridge-cam"), procRoot);
+    s.ctrltrack = processRunning(QStringLiteral("pibridge-ctrltrack"), procRoot);
     s.winbridge = processRunning(QStringLiteral("winbridge.exe"), procRoot);
     s.steamClient = steamClientRunning(procRoot);
     return s;
@@ -407,10 +412,10 @@ RecReadiness recReadiness(const RecSetup& s, const RecSystem& sys, RecUse use) {
         r.blocking << QStringLiteral("Another Monado (monado-service) is running. Close it first.");
     }
     if (sys.camBroker) {
-        r.blocking << QStringLiteral("The tracking cameras are in use by another pimax-cam. Close it first.");
+        r.blocking << QStringLiteral("The tracking cameras are in use by another pibridge-cam. Close it first.");
     }
     if (sys.ctrltrack) {
-        r.blocking << QStringLiteral("Another pimax-ctrltrack is running. Close it first.");
+        r.blocking << QStringLiteral("Another pibridge-ctrltrack is running. Close it first.");
     }
     if (sys.winbridge && s.io.slam && s.io.slamEngine == SlamEngine::Pimax) {
         r.blocking << QStringLiteral("Another winbridge (Pimax head tracking) is running. Close it first.");

@@ -2,7 +2,7 @@
 // Development: RECORD TRACKING. Records a EuRoC dataset (cameras + IMU) from a Monado 6DoF session for offline SLAM
 // analysis, with guided steps read out loud (the user wears the headset), then checks it; the past recordings with
 // Open folder / Delete. The logic is in core/rec_*.h; this page only shows it and ticks the session.
-// Also here: the Monado build every start uses (the A/B choice of the Rust-linked and the PiBridge-linked build, its
+// Also here: the Monado build every start uses (auto or PiBridge's build of third_party/monado, its
 // markers, its cap_sys_nice and the Fix permissions button; core/monado_build.h) and "Monado directly", the debug /
 // A-B session where monado-service owns the headset (core/io_session.h, IoVariant::MonadoDirect).
 #pragma once

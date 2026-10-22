@@ -11,8 +11,8 @@ settings the services share. It never talks to the hardware itself. Quad views (
 OpenXR layer [linux-vulkan-quadviews-openxr-layer](https://github.com/artscout/linux-vulkan-quadviews-openxr-layer)
 (a separate repository); PiBridge only shows and changes its settings.
 
-**Status: alpha.** It is tested on one PC with one headset (Pimax Crystal Super micro-OLED with the Lighthouse
-faceplate, RTX 5090, Ubuntu 26.04). Expect rough edges.
+**Status: alpha.** It is tested on one PC with two headsets (Pimax Crystal Super micro-OLED with the Lighthouse
+faceplate, and the original Pimax Crystal in both its tracking modes; RTX 5090, Ubuntu 26.04). Expect rough edges.
 
 ## Why PiBridge exists
 
@@ -59,6 +59,8 @@ pixel font, for SteamVR's chaperone file on Linux. ZoneTweak's set dressing (the
 |---|---|---|---|---|
 | Pimax Crystal Super (micro-OLED), Lighthouse faceplate | SteamVR Lighthouse: Index controllers, base stations | CustomHeadsetOpenVR + our patches; wake, keepalive, panel 72/90 Hz; headset audio | yes, with your own Tobii profile | **works** (one headset tested) |
 | Pimax Crystal Super, inside-out (no faceplate) | SLAM on the headset cameras (Pimax Play's engine under Wine, or Basalt), controllers by their LEDs | SteamVR via our bundled Monado driver | through the Pimax driver in Monado | **experimental**: head tracking usable on a worn headset, controllers not checked live yet. On a USB 2.0 port or hub the tracking cameras come up as Motion-JPEG instead of YUYV (480 Mbps cannot carry the uncompressed stream), which loses the metadata block, so that path runs without device timestamps, auto-exposure and the controller cameras; a SuperSpeed port gives YUYV back. See `docs/TRACKING.md` |
+| Pimax Crystal (original, "P3B"), Lighthouse (switched on by software, no faceplate swap) | SteamVR Lighthouse: Index controllers, base stations | CustomHeadsetOpenVR + our patches; 72/90/120 Hz; sound over DisplayPort, its microphone | yes (its Tobii chip, started by PiBridge) | **works** (one headset tested) |
+| Pimax Crystal (original), its own inside-out | the headset tracks itself (head and Crystal controllers); PiBridge passes the poses to CustomHeadsetOpenVR, no Monado | CustomHeadsetOpenVR + our patches | yes | **works** (one headset tested): head, controllers with all buttons and the stick, battery. Not yet: controller vibration; the controllers are drawn as Quest 2 controllers. See [docs/INSTALL.md](docs/INSTALL.md) 5.5 |
 | Pimax Dream Air | | | | protocol and device description present (from omarchyvr); not tested with PiBridge |
 | Other Pimax models | | | | not supported yet: data wanted, see [docs/HEADSET-DATA.md](docs/HEADSET-DATA.md) |
 
@@ -120,8 +122,8 @@ Status on the Crystal Super (no faceplate), as of 2026-10-19:
 - **No Rust:** the Pimax libraries Monado links (headset, cameras, auto exposure, lenses, controllers, hands) are
   ported to C++ (`libpibridge_pimax.a`), byte for byte against the Rust originals (every ported test has a C++ twin).
   The bundled Monado (`third_party/monado/`) links this C++ archive — **nothing Rust is built or shipped**, and it is
-  what runs live. (The driver's dynamic symbols carry `PIBRIDGE_PIMAX_ABI`, so a PiBridge-linked build is
-  distinguishable from an old Rust-linked one.) Plan and results:
+  what runs live. (The driver carries the `PIBRIDGE_PIMAX_ABI` marker, so a PiBridge-linked build is
+  recognisable.) Plan and results:
   [docs/research/rust-port-plan.md](docs/research/rust-port-plan.md).
 - **Open:** no persistent world anchor yet (the room boundary can turn or shift between sessions), the gyro bias
   takes about 40 s to settle after a start, and longer walking takes are still to be recorded.
@@ -130,7 +132,7 @@ Status on the Crystal Super (no faceplate), as of 2026-10-19:
 
 | What | Tested | Notes |
 |---|---|---|
-| GPU and driver | NVIDIA RTX 5090, open modules 615.71.09+ (or 595.99.02) | **615.71.09+ works as-is, no patch** (the Blackwell DSC fix is upstream); 595.x needs the FEC patch + EDID override from `patches/nvidia/`; other GPUs untested |
+| GPU and driver | NVIDIA RTX 5090, open modules 615.71.09+ (or 595.99.02) | **615.71.09+ needs no patch** (the Blackwell DSC fix is upstream); 595.x needs the FEC patch from `patches/nvidia/`; every driver: the EDID override (`pibridge-headset-edid`, docs/INSTALL.md 5.2); other GPUs untested |
 | Distribution | Ubuntu 26.04, KDE Wayland | package names for Arch and Fedora are in the guide, not tried on hardware |
 | SteamVR | Steam's SteamVR for Linux | PiBridge does not start or change SteamVR on its own |
 | CustomHeadsetOpenVR | upstream `4f25826` + `patches/chovr/` | or the `linux-crystal-super` branch of artscout/CustomHeadsetOpenVR |

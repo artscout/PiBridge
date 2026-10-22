@@ -2,7 +2,7 @@
 //
 // The parity switch of the controller code (docs/research/ctrl-tracking-improvements.md). PiBridge improves on the Rust
 // tracker and fuser it was ported from; `PIBRIDGE_CTRL_PARITY=1` (or `on`/`true`) brings back the exact Rust behaviour,
-// bit for bit, which the difftests against the Rust oracle use. Read once per process.
+// bit for bit, which the twins of the Rust tests use. Read once per process.
 #pragma once
 
 #include <cstdlib>

@@ -16,6 +16,10 @@ libpibridge-hmd is `eyed::HidHeadsetCommands` (`src/hid_commands.{h,cpp}`), `src
   user's eye profile in place of the list's own upload), subscribes, decodes the gaze with libpibridge-eyemath (clock map,
   frame conversion, `eye-calibration.toml`, filter, drift) and recovers a silent chip (eye-module enable at most every
   5 s, USB port reset after two silent links, at most once a minute).
+- The original Crystal (34a4:0012) has its eye tracker as its own USB device, 2104:0220: it comes up about 1.6 s after
+  pibridge-keepalived sends the captured `setTobiiEyeDeviceEnable 1`, speaks the same protocol as 2104:0561 and is
+  started with its own built-in start list (Pimax Play's, `libpibridge-eye/data/p3b-frames.txt`: no auth, no profile
+  upload); the start list and eye profile files of the Crystal Super are not used for it. eyed never powers it itself.
 - Every new sample goes into the gaze file at once (the loop runs every 2 ms); without one the file is rewritten twice
   a second with the tracker state (0 searching, 1 connecting, 2 streaming, 3 reconnecting, 4 stopped), so readers
   see that the writer lives.

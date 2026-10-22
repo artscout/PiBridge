@@ -29,6 +29,13 @@ public:
     bool setRefreshHz(int hz, Done done);
     // audio_to_headset=on|off, then SIGHUP to the keepalive daemon.
     bool setAudioToHeadset(bool on, Done done);
+    // The original Crystal (P3B): the tracking pibridge-keepalived switches it to (crystal_tracking: its Lighthouse
+    // faceplate or its own inside-out tracking), done at once while it is connected.
+    bool setCrystalTracking(bool lighthouse);
+    // The original Crystal: switch the headset off (request file for pibridge-keepalived, which sends shutDown).
+    bool crystalShutdown(const QString& statusDir);
+    // Asks pibridge-keepalived to close SteamVR and start it again (with the original Crystal on).
+    bool crystalRestartSteamVr(const QString& statusDir);
 
     // The eye calibration tool: pibridge-eyecal, else (only when pibridge-eyecal is not found) omarchyvr's pimax-eyecal;
     // empty when neither is found.

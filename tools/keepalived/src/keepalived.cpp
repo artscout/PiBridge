@@ -59,6 +59,8 @@ std::expected<Options, std::string> parse_args(const std::vector<std::string>& a
     o.video = static_cast<std::uint8_t>(settings.refresh_hz);
     o.follow = settings.follow;
     o.audio = settings.audio_to_headset;
+    o.crystal_tracking = settings.crystal_tracking;
+    o.crystal_autostart_steamvr = settings.crystal_autostart_steamvr;
     o.settings_path = settings_path_of(args);
     bool follow_flag = false;
     bool audio_flag = false;
@@ -281,6 +283,25 @@ Daemon::Daemon(Options opts, Deps deps) : opts_(std::move(opts)), deps_(std::mov
         ev_->fd = std::move(*e);
     }
     ev_->say = deps_.say;
+    Crystal::Deps cd;
+    cd.find = deps_.crystal_find ? deps_.crystal_find : [] { return p3b::find_hidraw(discovery::Roots::from_env()); };
+    cd.open = deps_.crystal_open ? deps_.crystal_open : open_hidraw;
+    cd.process_running = deps_.process_running;
+    cd.start_steamvr = deps_.start_steamvr ? deps_.start_steamvr : [] {
+        return start_detached(in_own_scope({"steam", "steam://rungameid/250820"}));
+    };
+    // the app next to this binary (~/.local/bin or /usr/bin): systemd's PATH need not have ~/.local/bin
+    cd.start_app = deps_.start_app ? deps_.start_app : [] {
+        std::error_code ec;
+        const auto self = std::filesystem::read_symlink("/proc/self/exe", ec);
+        return !ec && start_detached(in_own_scope({(self.parent_path() / "pibridge").string()}));
+    };
+    cd.signal_steamvr = deps_.signal_steamvr ? deps_.signal_steamvr : [](int sig) { signal_steamvr_processes(sig); };
+    cd.lighthouse_module = deps_.crystal_lighthouse_module ? deps_.crystal_lighthouse_module : [] { return lighthouse_module_present(); };
+    cd.say = deps_.say;
+    cd.request = pibridge::status::runtime_dir() / "crystal-request";
+    crystal_ = std::make_unique<Crystal>(std::move(cd));
+    crystal_->set({opts_.crystal_tracking, opts_.crystal_autostart_steamvr});
 }
 
 Daemon::~Daemon() { stop(); }
@@ -495,6 +516,30 @@ std::chrono::milliseconds Daemon::poll_timeout() const {
 }
 
 void Daemon::tick(Clock::time_point now) {
+    crystal_->tick(now); // the original Crystal: its own life, apart from the Crystal Super / Dream Air session
+    // its sound (DisplayPort) and microphone are the defaults while it is on, as the Crystal Super's during VR
+    const bool crystal_on = crystal_->stage() == "ready" && opts_.audio;
+    if (crystal_on && !crystal_audio_) {
+        audio_on();
+        crystal_audio_ = true;
+        crystal_audio_retry_ = now + std::chrono::seconds(3);
+    } else if (!crystal_on && crystal_audio_) {
+        audio_off();
+        crystal_audio_ = false;
+    } else if (crystal_on && audio_before_ && !audio_before_->our_sink && now >= crystal_audio_retry_) {
+        // its sound output exists only once the GPU drives its display (SteamVR's compositor, with the non-desktop
+        // EDID the desktop does not): try again until it is there
+        crystal_audio_retry_ = now + std::chrono::seconds(3);
+        auto [m, b] = audio::to_headset(deps_.pactl);
+        if (b.our_sink) {
+            say(m);
+            audio_before_->sink = b.sink;
+            audio_before_->our_sink = b.our_sink;
+            audio_before_->card = b.card;
+            audio_before_->card_profile = b.card_profile;
+            audio_before_->our_card_profile = b.our_card_profile;
+        }
+    }
     if (paused_) {
         read_volume_button_file();
     }
@@ -575,6 +620,7 @@ void Daemon::tick(Clock::time_point now) {
 }
 
 void Daemon::reload(Options o, Clock::time_point now) {
+    crystal_->set({o.crystal_tracking, o.crystal_autostart_steamvr});
     if (o.rate_file != opts_.rate_file || o.wake != opts_.wake) {
         say("settings: the rate file and the wake change at the next start");
         o.rate_file = opts_.rate_file;
@@ -708,6 +754,11 @@ Status Daemon::status() const {
     }
     s.haptic_seq = haptic_seq_;
     s.haptic_result = haptic_result_;
+    s.crystal_present = crystal_->present();
+    s.crystal_stage = std::string(crystal_->stage());
+    s.crystal_lighthouse = crystal_->lighthouse();
+    s.crystal_tracked = crystal_->tracked();
+    s.crystal_battery = crystal_->battery();
     if (paused_) {
         s.state = "paused";
         s.paused = std::string(pibridge::pause::kWords);
@@ -717,6 +768,9 @@ Status Daemon::status() const {
     s.follow_running = follow_ && follow_running_;
     s.audio_on_headset = audio_before_ && (audio_before_->our_sink || audio_before_->our_source);
     s.lens_ipd_x100 = ev_->lens_ipd_x100.load(std::memory_order_relaxed);
+    if (const int c = crystal_->ipd_x100(); c > 0) {
+        s.lens_ipd_x100 = c; // the original Crystal: its IPD buttons move the lenses, the slider follows
+    }
     s.error = error_;
     const bool present = session_ && session_->is_connected();
     s.headset_present = present;
@@ -781,6 +835,11 @@ void Daemon::write_status(Clock::time_point now, bool force) {
         .integer("haptic_seq", static_cast<long long>(s.haptic_seq))
         .str("haptic_result", s.haptic_result)
         .integer("lens_ipd_x100", s.lens_ipd_x100)
+        .boolean("crystal_present", s.crystal_present)
+        .str("crystal_stage", s.crystal_stage)
+        .str("crystal_lighthouse", s.crystal_lighthouse)
+        .boolean("crystal_tracked", s.crystal_tracked)
+        .integer("crystal_battery", s.crystal_battery)
         .integer("pid", static_cast<long long>(::getpid()));
     w.write(deps_.status_name);
     last_status_ = s;

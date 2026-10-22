@@ -223,7 +223,7 @@ DevelopmentPage::DevelopmentPage(StateSource& source, Conf& conf, IoSessionContr
     });
     connect(stop_, &QPushButton::clicked, this, stopNow);
 
-    // ---- the Monado build (A/B)
+    // ---- the Monado build
     buildCard_ = new pibridge::ui::Card(QStringLiteral("Monado build"));
     buildCard_->body()->addWidget(pibridge::ui::dimLabel(QStringLiteral(
         "The Monado every start uses: Record tracking, Monado directly, and START TRACKING (its SteamVR driver, "
@@ -234,7 +234,7 @@ DevelopmentPage::DevelopmentPage(StateSource& source, Conf& conf, IoSessionContr
     }
     build_ = new pibridge::ui::Segmented(labels);
     const QString buildTip = QStringLiteral("Saved as rec_monado_service in pibridge.conf. Auto: the usual lookup "
-                                            "(PATH, the installed omarchyvr build, the live build).");
+                                            "(PATH, the installed build, ~/gamedev/pibridge-monado-build).");
     build_->setToolTip(buildTip);
     connect(build_, &pibridge::ui::Segmented::activated, this, [this](int i) {
         const auto choices = monadoBuildChoices(home());
@@ -448,7 +448,7 @@ void DevelopmentPage::refreshSetup() {
         setup_.io = ioSettings(conf_);
         setup_.refreshHz = conf_.refreshHz();
         sys.vrserver = source_.state().steamvrRunning;
-        // the build the selector names (made-up binaries: the Rust one without the PiBridge marker)
+        // the build the selector names (made-up binaries)
         const QString choice = monadoBuildChoiceOf(conf_.value(reckey::kMonado, QString()), home());
         for (const MonadoBuildChoice& c : monadoBuildChoices(home())) {
             if (c.id == choice && !c.service.isEmpty()) {
@@ -459,10 +459,6 @@ void DevelopmentPage::refreshSetup() {
         setup_.build.path = setup_.monado.path;
         if (const qsizetype at = setup_.monado.path.indexOf(QLatin1String("/src/xrt/targets/service/")); at > 0) {
             setup_.steamVrDriverDir = setup_.monado.path.left(at) + QStringLiteral("/steamvr-monado");
-        }
-        if (choice == QLatin1String("rust")) {
-            setup_.build.kind = BuildKind::Rust;
-            setup_.build.abiText.clear();
         }
     } else {
         conf_.reload();

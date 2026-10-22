@@ -3,7 +3,7 @@
 The world anchor files shared with Monado's room-anchor hook, without hardware and without the room map: milestone
 R1 of `docs/research/rust-port-plan.md` (section 5). Ported from omarchyvr `rust/omarchyvr-anchor` (MIT OR
 Apache-2.0) at the pinned commit `5ffbcc5`: `world.rs` and `config.rs`, and `detect.rs`'s `pose_error`. The Monado
-side is `forks/monado/src/xrt/drivers/pimax/pimax_anchor.h` of the omarchyvr checkout (`PIMAX_ANCHOR=1`, marker
+side is `third_party/monado/src/xrt/drivers/pimax/pimax_anchor.h` (`PIMAX_ANCHOR=1`, marker
 `PIMAX_ANCHOR_GLIDE`); every file below is byte-compatible with it and with the Rust tools, so PiBridge and omarchyvr
 tools can run side by side on one session.
 
@@ -70,8 +70,7 @@ recenter_offset(head))`. Monado glides to it (it is not the session's first offs
 | `pibridge_anchor_world` | twins of the 8 world.rs tests (`lease_tests`, `feed_tests`) + the file names and bytes, the ring layout, recenter |
 | `pibridge_anchor_config` | anchor.toml round trip, error texts, the path rule |
 | `pibridge_anchor_probe` | `tests/anchor_probe.cpp` against `tests/golden/anchor_probe.txt.gz` (4909 lines, byte for byte): 300 offset texts and their parse, 20 crafted offset files, 14 lease files, 40 rings (corrupt magic/version/size, NaN/inf quaternions, ts 0, duplicates) with 480 `at` queries, 10 ring writes (FNV of the bytes), 60 `compute_offset` x2 / `interp` / `pose_error`, 30 `robust_mean`, 480 `decide_lease` cases, 192 `check_feed` cases with `plain()`, 13 anchor.toml texts; every number as its f64 bits. The golden file is the output of a scratch program that linked omarchyvr-anchor at `5ffbcc5` and ran the same cases (not in the tree: PiBridge has no Rust) |
-| `pibridge_anchor_monado` | Monado's own `pimax_anchor.h` (from the omarchyvr checkout, with stub headers for its math/clock/log helpers): it writes the head ring that `HeadRing::read` parses (128 newest samples, floats exact, pid), deletes the old offset at its start, and parses the offset `write_offset` writes (first offset placed at once, `offset * slam` applied, another pid's file ignored); skipped without the checkout |
-| `pibridge_anchor_diff_*` (tools/roommap) | `pibridge-anchor status/clear` = `omarchyvr-anchor status/clear` (13 cases: config, offset, rings old/empty/fresh/short, env paths, clear) |
+| `pibridge_anchor_monado` | Monado's own `pimax_anchor.h` (from `third_party/monado`, with stub headers for its math/clock/log helpers): it writes the head ring that `HeadRing::read` parses (128 newest samples, floats exact, pid), deletes the old offset at its start, and parses the offset `write_offset` writes (first offset placed at once, `offset * slam` applied, another pid's file ignored) |
 
 Not ported: the AprilTag detector and pose (`detect.rs`, `tag.rs` printable SVG/PDF, `rig.rs`) and the
 `omarchyvr-anchor tag/detect/calibrate/apply` commands: they need the AprilTag C library (apriltag-sys builds it from

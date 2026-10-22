@@ -133,10 +133,6 @@ both are test-read for 0.3 s first, and a missing one only drops the sound, neve
   drops instead of waits, the recorder or SteamVR gone, errors), the openvrpaths lookup, a whole `--source mirror`
   recording (the fake producer as the mirror), and the real `pibridge-record-mirror` with a fake `libopenvr_api.so`
   (`tests/fake_openvr.cpp`: SteamVR not running, no compositor interface; EGL is never reached).
-- `pibridge_record_difftest` (31 cases, `tests/difftest.sh`): the Rust `omarchyvr-record` (`PIBRIDGE_RUST_ORACLE_DIR`)
-  and pibridge-record side by side on argument and settings errors, the saved record.toml, status lines and six whole
-  recordings (fake producer + fake ffmpeg; the ffmpeg command lines and the final status). Only the names differ
-  (omarchyvr record -> pibridge-record, the "start a session" hint).
 - The app's card: `pibridge_video_record_tests` (words, record.toml, the commands, the tap's env) and the screenshots
   `09h-dashboard-recording`, `09i-dashboard-recording-saved`.
 

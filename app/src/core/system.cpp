@@ -36,7 +36,6 @@ QStringList toolDirs() {
             dirs << QDir::cleanPath(tools.absoluteFilePath(d));
         }
     }
-    dirs << QDir::homePath() + QStringLiteral("/gamedev/omarchyvr/rust/target/release");
     return dirs;
 }
 

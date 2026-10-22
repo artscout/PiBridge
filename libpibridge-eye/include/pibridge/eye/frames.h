@@ -34,6 +34,11 @@ namespace pibridge::eye::frames {
 /// `libpibridge-eye/data/base-frames.txt`.
 std::string_view base_list();
 
+/// The start list of the original Crystal's eye tracker (2104:0220): Pimax Play's start from the Windows capture of
+/// 2026-10-22, byte for byte (no auth, no platform config, no eye profile). Compiled in from
+/// `libpibridge-eye/data/p3b-frames.txt`; the tracker uses it for every 2104:0220 (live::for_chip).
+std::string_view p3b_list();
+
 /// Which list `list()` chose.
 enum class ListKind {
     Base, ///< the public base list

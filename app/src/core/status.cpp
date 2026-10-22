@@ -62,6 +62,11 @@ std::optional<KeepaliveStatus> parseKeepalive(const QByteArray& json) {
     k.followRunning = o->value("follow_running").toBool();
     k.audioOnHeadset = o->value("audio_on_headset").toBool();
     k.lensIpdMm = o->value("lens_ipd_x100").toDouble() / 100.0;
+    k.crystalPresent = o->value("crystal_present").toBool();
+    k.crystalStage = o->value("crystal_stage").toString();
+    k.crystalLighthouse = o->value("crystal_lighthouse").toString();
+    k.crystalTracked = o->value("crystal_tracked").toBool();
+    k.crystalBattery = o->value("crystal_battery").isDouble() ? o->value("crystal_battery").toInt() : -1;
     k.error = o->value("error").toString();
     k.ctrlId = int64(o->value("ctrl_id"));
     k.ctrlOp = o->value("ctrl_op").toString();

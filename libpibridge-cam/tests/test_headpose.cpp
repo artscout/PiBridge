@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Twins of the tests in omarchyvr pimax-cam/src/headpose.rs (MIT OR Apache-2.0). The two #[ignore] replays of a
-// session's head-imu.csv (replay_head_imu_log, replay_drift_hold) are analysis tools, not checks; the recorded
-// replay is covered by the difftest (monado_abi_diff_slam_replay_*).
+// session's head-imu.csv (replay_head_imu_log, replay_drift_hold) are analysis tools, not checks (pibridge-slam's
+// head replay, tools/slam/src/headreplay.h, does that offline).
 #include "pibridge/cam/headpose.h"
 #include "pibridge/cam/rustfmt.h"
 #include "pibridge_test.h"

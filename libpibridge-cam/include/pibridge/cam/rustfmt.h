@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Text exactly as the Rust code prints it. The C ABI's error messages, the tool's output and the JSON files must be
-// byte-identical to omarchyvr's pimax-cam (the difftest compares them), so the few Rust formatting rules the port
-// needs are reproduced here: `{:?}` and `{}` of f64 (shortest round-trip digits), `{:.N}` with Rust's NaN spelling,
-// `{:?}` of strings and arrays, and lossy UTF-8 decoding.
+// Text exactly as the Rust code prints it. The C ABI's error messages, the tool's output and the JSON files stay
+// byte-identical to omarchyvr's pimax-cam (files and tools that read them stay compatible), so the few Rust formatting
+// rules the port needs are reproduced here: `{:?}` and `{}` of f64 (shortest round-trip digits), `{:.N}` with Rust's
+// NaN spelling, `{:?}` of strings and arrays, and lossy UTF-8 decoding.
 #pragma once
 
 #include <cstdint>

@@ -14,6 +14,15 @@ math(EXPR PIBRIDGE_EYE_BASE_SIZE "${PIBRIDGE_EYE_BASE_HEX_LEN} / 2")
 string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," PIBRIDGE_EYE_BASE_BYTES "${PIBRIDGE_EYE_BASE_HEX}")
 configure_file(src/base_frames.cpp.in ${CMAKE_CURRENT_BINARY_DIR}/base_frames.cpp @ONLY)
 
+# The start list of the original Crystal's eye tracker (2104:0220, frames::p3b_list()), compiled in the same way.
+set(PIBRIDGE_EYE_P3B_FRAMES ${CMAKE_CURRENT_SOURCE_DIR}/data/p3b-frames.txt)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PIBRIDGE_EYE_P3B_FRAMES})
+file(READ ${PIBRIDGE_EYE_P3B_FRAMES} PIBRIDGE_EYE_P3B_HEX HEX)
+string(LENGTH "${PIBRIDGE_EYE_P3B_HEX}" PIBRIDGE_EYE_P3B_HEX_LEN)
+math(EXPR PIBRIDGE_EYE_P3B_SIZE "${PIBRIDGE_EYE_P3B_HEX_LEN} / 2")
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," PIBRIDGE_EYE_P3B_BYTES "${PIBRIDGE_EYE_P3B_HEX}")
+configure_file(src/p3b_frames.cpp.in ${CMAKE_CURRENT_BINARY_DIR}/p3b_frames.cpp @ONLY)
+
 # The nine captured Tobii calibration target requests (calibration::targets()), compiled in the same way.
 set(PIBRIDGE_EYE_CAL_TARGETS ${CMAKE_CURRENT_SOURCE_DIR}/data/tobii-calibration-targets.txt)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PIBRIDGE_EYE_CAL_TARGETS})
@@ -39,6 +48,7 @@ add_library(pibridge_eye STATIC
     src/live.cpp
     src/calibration.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/base_frames.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/p3b_frames.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/calibration_targets.cpp
 )
 target_include_directories(pibridge_eye PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

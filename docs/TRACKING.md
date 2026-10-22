@@ -129,7 +129,7 @@ samples, the rotation predicted with the angular acceleration, and recordings th
 used. `PIBRIDGE_HEAD_PARITY=1` under Advanced > Extra environment gives the exact omarchyvr behaviour for an A/B; the
 single switches are `PIMAX_SLAM_SEED_BIAS`, `PIMAX_SLAM_ACCEL_BIAS`, `PIMAX_SLAM_PREDICT_ACCEL`,
 `PIMAX_SLAM_STILL_BACKOFF` (off: measured worse), `PIMAX_SLAM_RECORD_ACCEL_BIAS`, and `PIMAX_SLAM_DRIFT_HOLD=2` (an
-experimental hold only while the head is quiet). A Rust-linked Monado ignores all of them.
+experimental hold only while the head is quiet).
 
 Not passed yet, recommended once a second take confirms it: `PIMAX_SLAM_CAM_OFFSET_US=-1500` with auto exposure on
 (the camera frame times are about 1.5 ms late against the IMU; on the 07:04 take it lowered the mark error after the

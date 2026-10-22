@@ -140,15 +140,14 @@ Evaluated and off by default: the still re-zero back-off (`PIMAX_SLAM_STILL_BACK
 `ctest -R pibridge_cam_` runs the twins of the Rust unit tests of these modules (frame 6, clock 3, kb4 4, geom 3, xml 2,
 calib 7 + 1 PiBridge-only, json 3, overlay 5, record 4 + the 2 of `tests/replay.rs`, stats 1 + 1, camera 1, resilient 6,
 v4l2 3, jpeg 5 (JPEG -> grey, junk buffers, the profile through `Camera`, the recorded profile), broker 9 + the PXCB wire layout byte by byte, slam 15, headpose 21, drift 2, imulog 3, ae 27 + the 2 text tests of
-capi_ae.rs; plus `pibridge_cam_headpibridge`, 10 PiBridge-only cases of the improvements above) and the parity tests against the Rust tool
-(`pibridge_cam_tool_*`, `pibridge_cam_broker_cross`, see `docs/pibridge-cam.md`). The calibration twins read the embedded
+capi_ae.rs; plus `pibridge_cam_headpibridge`, 10 PiBridge-only cases of the improvements above). The calibration twins read the embedded
 reference (the Rust fixture has the same numbers, only its `deviceUID` differs); so do the slam.rs tests that read
 the project headset's own calibration in Rust (the reference is that file with the serial scrubbed). The two
 `#[ignore]` head-imu replays of headpose.rs (`replay_head_imu_log`, `replay_drift_hold`) are analysis harnesses, not
-checks: the recorded replay is the difftest `monado_abi_diff_slam_replay_*` (`docs/monado-abi.md`). The imulog twin
+checks (`pibridge-slam`'s head replay does that offline, `docs/pibridge-slam.md`). The imulog twin
 waits for the keeper thread to re-point the `.prev` link (it removes and re-creates it), which the Rust test reads at
 once and so can lose a race with. Tests that need the lab recordings
-(`PIBRIDGE_LAB_CAM_DIR`, default `../ext/cam`) or the Rust oracle report "skipped" without them. No test opens a camera:
+(`PIBRIDGE_LAB_CAM_DIR`, default `../ext/cam`) report "skipped" without them. No test opens a camera:
 sources are recordings, synthetic frames and sockets in the build directory.
 
 ## Not ported yet
@@ -161,4 +160,4 @@ sources are recordings, synthetic frames and sockets in the build directory.
   extend: `src/rustfmt_escape.inc`, 911 ranges, produced by a probe that
   prints `format!("{:?}", c.to_string())` for every `char` other than the named escapes and keeps those that come
   out as `\u{..}`). A newer Rust
-  with newer Unicode tables can differ there; regenerate the table with the toolchain the oracle is built with.
+  with newer Unicode tables can differ there; regenerate the table with that toolchain if byte-identical text to a Rust tool matters.

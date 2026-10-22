@@ -11,8 +11,7 @@ namespace pibridge::app {
 // `procRoot` is for tests.
 bool processRunning(const QString& comm, const QString& procRoot = QStringLiteral("/proc"));
 
-// The places a helper tool is looked for, in order: PATH, next to this binary, this build's tools/*/ dirs, the
-// omarchyvr release build (~/gamedev/omarchyvr/rust/target/release).
+// The places a helper tool is looked for, in order: PATH, next to this binary, this build's tools/*/ dirs.
 QStringList toolDirs();
 // The tool's full path, or empty when it is in none of them.
 QString findTool(const QString& name);

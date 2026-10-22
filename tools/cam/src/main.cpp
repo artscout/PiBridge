@@ -16,7 +16,7 @@
 //                       1 no broker, 2 camera reopening / no frames)
 //
 // SRC / S: empty or `auto` (live camera), `/dev/videoN`, `broker[:SOCKET]`, or a `.pxcam` recording. Standard output
-// is the same text as pimax-cam's (the difftests compare it). Not ported: tiles, rectify, hypotheses, cpu.
+// is the same text as pimax-cam's. Not ported: tiles, rectify, hypotheses, cpu.
 #include "pibridge/cam/broker.h"
 #include "pibridge/cam/calib.h"
 #include "pibridge/cam/camera.h"

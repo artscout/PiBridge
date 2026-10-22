@@ -79,7 +79,7 @@ struct Scanner {
         b.checked = true;
         b.path = path;
         b.abiText = abi;
-        b.kind = abi.isEmpty() ? BuildKind::Rust : BuildKind::PiBridge;
+        b.kind = abi.isEmpty() ? BuildKind::Unknown : BuildKind::PiBridge;
         for (size_t i = 0; i < found.size(); i++) {
             if (!found[i]) {
                 b.missing << needles[qsizetype(i)];
@@ -186,7 +186,6 @@ MonadoBuildInfo monadoBuildInfo(const QString& monadoService) {
 QString buildKindWords(BuildKind k) {
     switch (k) {
     case BuildKind::PiBridge: return QStringLiteral("C++ (PiBridge)");
-    case BuildKind::Rust: return QStringLiteral("Rust");
     case BuildKind::Unknown: break;
     }
     return QStringLiteral("unknown");
@@ -201,7 +200,8 @@ QString buildSummary(const MonadoBuildInfo& b) {
     }
     QString s = b.kind == BuildKind::PiBridge
                     ? QStringLiteral("C++ (PiBridge): %1.").arg(b.abiText)
-                    : QStringLiteral("Rust: links omarchyvr's Rust archives (no %1 marker).").arg(QLatin1String(kPiBridgeAbiMarker));
+                    : QStringLiteral("Unknown build: no %1 marker (it does not link libpibridge_pimax.a).")
+                          .arg(QLatin1String(kPiBridgeAbiMarker));
     if (b.missing.isEmpty()) {
         s += QStringLiteral(" All %1 required markers present.").arg(requiredMonadoMarkers().size());
     } else {
@@ -217,18 +217,16 @@ QString buildBlockingReason(const MonadoBuildInfo& b) {
     if (!b.checked || b.missing.isEmpty()) {
         return {};
     }
-    return QStringLiteral("The Monado build %1 lacks %2 (%3). It was built without part of the Pimax driver; choose "
-                          "the other build on the Development page or rebuild it with the cache options of the live "
-                          "build.")
+    return QStringLiteral("The Monado build %1 lacks %2 (%3). It was built without part of the Pimax driver; rebuild "
+                          "it (docs/INSTALL.md) or choose another build on the Development page.")
         .arg(b.path, b.missing.size() == 1 ? QStringLiteral("a required marker") : QStringLiteral("required markers"),
              b.missing.join(QStringLiteral(", ")));
 }
 
-// ---------------------------------------------------------------- the A/B choice
+// ---------------------------------------------------------------- the choice
 
 std::vector<MonadoBuildChoice> monadoBuildChoices(const QString& home) {
     const QString svc = QStringLiteral("/src/xrt/targets/service/monado-service");
-    // The Rust-linked (omarchyvr) build was dropped (user 2026-10-20: we use our own C++ build now).
     return {{QStringLiteral("auto"), QStringLiteral("Auto"), QString()},
             {QStringLiteral("pibridge"), QStringLiteral("C++ (PiBridge)"), home + QStringLiteral("/gamedev/pibridge-monado-build") + svc}};
 }

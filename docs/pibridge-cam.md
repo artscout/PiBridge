@@ -22,31 +22,13 @@ real time (`--loop` restarts it). SIGINT/SIGTERM stop `record` and `broker` clea
 `hypotheses`, `cpu`.
 
 Drop-in for the session: `pibridge-cam broker --source /dev/videoN --socket $XDG_RUNTIME_DIR/omarchyvr-cam-broker.sock`
-is the command line PiBridge's RECORD TRACKING and START TRACKING run with `pimax-cam` today (`rec_pimax_cam`). The
-app still defaults to `pimax-cam` and looks for a running `pimax-cam` process; switching its default to `pibridge-cam`
-is the app's change (plan M2, last step).
+is the command line PiBridge's RECORD TRACKING and START TRACKING run (`rec_pimax_cam`, default `pibridge-cam`).
 
-## Parity tests (`ctest -R pibridge_cam_tool -R pibridge_cam_broker_cross`)
+## Tests
 
-Each runs the Rust `pimax-cam` of the pinned commit (`PIBRIDGE_RUST_ORACLE_DIR`) and `pibridge-cam` with the same
-arguments and compares standard output (`monado-abi/difftest/run_difftest.sh`); skipped without the oracle or the
-lab recordings.
-
-| Test | Command | Compared |
-|---|---|---|
-| `pibridge_cam_tool_calib_reference`, `_conv1`, `_crystal`, `_home` | `calib` of the reference (both rig conventions), of the Crystal Super XML, and the default search in an empty HOME | the whole report |
-| `pibridge_cam_tool_stats_{first,ctrl1,ctrl2}` | `stats --source REC.pxcam` | the whole report but the latency line (it depends on the absolute clock at the start of the replay; two Rust runs can differ there in the last digit) |
-| `pibridge_cam_tool_record` | `record OUT --source first.pxcam --frames 20` | the report and the written file (headers, payload hashes, times relative to the first record) |
-| `pibridge_cam_tool_import` | `import IN.raw OUT --zlib 0` | the report and the written file |
-| `pibridge_cam_tool_errors` | `stats --source /nonexistent.pxcam` | exit status 1 |
-| `pibridge_cam_broker_cross` | `tools/cam/tests/broker_cross.sh` | see below |
-
-`broker_cross.sh` runs, on `first.pxcam`: every server ({Rust broker, pibridge-cam broker}) with every client (the
-difftest C program on `libpimax_cam.a` and on `libpibridge_pimax.a`): every frame after connecting arrives, in order,
-identical to a direct replay (metadata, all four tiles) and with the recorded spacing; the raw hello and ring header
-of both servers are the same bytes; a slow client (40 ms per frame) skips frames in order while the broker keeps its
-pace; a second broker on a live socket is refused, both ways; `broker-status` of each tool reads the other's broker,
-and both say the same without a broker; a stale socket file is replaced.
+The tool's parity tests against the Rust `pimax-cam` (and the broker cross tests Rust <-> C++) were removed with the
+oracle once the port was finished (2026-10-22). The library behind the tool is tested by `ctest -R pibridge_cam_`
+(`docs/libpibridge-cam.md`).
 
 Zlib recordings are compatible both ways but not byte-identical (zlib instead of miniz_oxide), so `record`/`import`
 with `--zlib > 0` print other sizes; the frames are the same.

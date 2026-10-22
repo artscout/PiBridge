@@ -16,6 +16,7 @@
 
 #include "pibridge/eye/error.h"
 #include "pibridge/eye/power.h"
+#include "pibridge/eye/replay.h"
 #include "pibridge/eye/session.h"
 #include "pibridge/eye/shm.h"
 #include "pibridge/eye/transport.h"
@@ -100,8 +101,12 @@ struct Config {
     Duration response_wait = 3s;
     /// Samples kept for Tracker::sample_at.
     std::size_t history = 256;
-    /// Use this usbfs node instead of searching sysfs for 2104:0561.
+    /// Use this usbfs node instead of searching sysfs for 2104:0561 (taken as a 2104:0561).
     std::optional<std::filesystem::path> usb_device;
+    /// Also take the eye tracker of the original Crystal (2104:0220) when no 2104:0561 is there; it always runs on
+    /// its own start list (for_chip). Off by default (pibridge-eyed turns it on; the Tobii calibration of
+    /// pibridge-eyecal was captured on 2104:0561 only and never reaches a 2104:0220).
+    bool p3b = false;
     /// Pace the init steps like the capture (clamped to 1 s). Off only in tests.
     bool pace = true;
     /// Recover a chip that stopped answering with a host-side USB port reset (`USBDEVFS_RESET`).
@@ -130,6 +135,12 @@ struct Config {
     /// logged through `log` (stderr with a `pibridge-eye: ` prefix by default) and leave the default in place.
     static Config from_env(const LogFn& log = {});
 };
+
+/// The configuration of a link to the chip with USB product id `pid`. A 2104:0220 (the original Crystal) gets its own
+/// start list (frames::p3b_list) in place of the configured list and profile: those are made from and for 2104:0561
+/// (its auth, platform config and XR5EYECHIP profile), and Pimax Play uploads no profile to this chip. Any other pid:
+/// `cfg` as it is.
+Config for_chip(const Config& cfg, std::uint16_t pid);
 
 /// The pieces of a running drift estimate shared between the reader thread and the recentre hook.
 struct SharedDrift {
@@ -228,19 +239,23 @@ public:
     /// Called after a link failed with a silent chip (still on the bus, no answer or no gaze): may power the eye
     /// module again; returns a log line when it did something.
     virtual std::optional<std::string> silent(const Config& cfg, Clock::time_point now);
+    /// USB product id of the chip the last open() reached (replay::EYE_PID unless the device knows better).
+    virtual std::uint16_t pid() const;
 };
 
 /// A Device made of an open function (tests): no reset, no power control.
 class FnDevice final : public Device {
 public:
     using OpenFn = std::function<std::expected<std::unique_ptr<Transport>, std::string>(const Config&, std::stop_token)>;
-    explicit FnDevice(OpenFn f) : f_(std::move(f)) {}
+    explicit FnDevice(OpenFn f, std::uint16_t pid = replay::EYE_PID) : f_(std::move(f)), pid_(pid) {}
     std::expected<std::unique_ptr<Transport>, std::string> open(const Config& cfg, std::stop_token stop) override {
         return f_(cfg, stop);
     }
+    std::uint16_t pid() const override { return pid_; }
 
 private:
     OpenFn f_;
+    std::uint16_t pid_;
 };
 
 /// The eye-module enable after a silent chip is sent at most this often.
@@ -264,15 +279,18 @@ public:
     std::optional<std::string> silent(const Config& cfg, Clock::time_point now) override;
     /// The headset is there and the chip has been missing for 5 s: the enable, once per headset enumeration.
     std::optional<std::string> absent(const Config& cfg, Clock::time_point now) override;
+    std::uint16_t pid() const override { return pid_; }
 
 private:
-    std::expected<std::filesystem::path, std::string> chip_node(const Config& cfg) const;
+    /// The chip's node and USB product id.
+    std::expected<std::pair<std::filesystem::path, std::uint16_t>, std::string> chip_node(const Config& cfg) const;
 
     std::shared_ptr<power::HeadsetCommands> hid_;
     std::filesystem::path usb_root_;
     std::filesystem::path dev_usb_root_;
     power::EnableGate gate_;
     std::optional<Clock::time_point> silent_enable_at_;
+    std::uint16_t pid_ = replay::EYE_PID;
 };
 
 /// Run one link on an open transport until `stop` is requested (ok) or the link fails (error; the caller
@@ -297,8 +315,10 @@ public:
     /// Start the reader thread on `dev` (RealDevice for the real chip). `log` gets the tracker's lines, each only
     /// once in a row (stderr with a `pibridge-eye: ` prefix by default).
     static std::unique_ptr<Tracker> start(Config cfg, std::unique_ptr<Device> dev, LogFn log = {});
-    /// Start with an open function (tests): called for every connection attempt; an error means "no device".
-    static std::unique_ptr<Tracker> start_with(Config cfg, FnDevice::OpenFn open, LogFn log = {});
+    /// Start with an open function (tests): called for every connection attempt; an error means "no device". `pid`
+    /// is the chip it stands for.
+    static std::unique_ptr<Tracker> start_with(Config cfg, FnDevice::OpenFn open, LogFn log = {},
+                                               std::uint16_t pid = replay::EYE_PID);
 
     ~Tracker();
     Tracker(const Tracker&) = delete;

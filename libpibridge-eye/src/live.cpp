@@ -304,31 +304,54 @@ std::optional<std::string> Device::absent(const Config&, Clock::time_point) { re
 
 std::optional<std::string> Device::silent(const Config&, Clock::time_point) { return std::nullopt; }
 
+std::uint16_t Device::pid() const { return replay::EYE_PID; }
+
+Config for_chip(const Config& cfg, std::uint16_t pid) {
+    if (pid != replay::EYE_PID_P3B) {
+        return cfg;
+    }
+    Config c = cfg;
+    c.frames = std::make_shared<const std::string>(frames::p3b_list());
+    c.profile = nullptr;
+    c.with_cal = false;
+    return c;
+}
+
 RealDevice::RealDevice(std::shared_ptr<power::HeadsetCommands> hid, fs::path usb_root, fs::path dev_usb_root)
     : hid_(std::move(hid)), usb_root_(std::move(usb_root)), dev_usb_root_(std::move(dev_usb_root)) {}
 
-std::expected<fs::path, std::string> RealDevice::chip_node(const Config& cfg) const {
+std::expected<std::pair<fs::path, std::uint16_t>, std::string> RealDevice::chip_node(const Config& cfg) const {
     if (cfg.usb_device) {
-        return *cfg.usb_device;
+        return std::pair(*cfg.usb_device, replay::EYE_PID);
     }
-    for (const auto& d : usbfs::scan_sysfs(usb_root_, dev_usb_root_)) {
-        if (d.vid != replay::EYE_VID || d.pid != replay::EYE_PID) {
+    // a 2104:0561 first; the original Crystal's 2104:0220 only when asked for (Config::p3b)
+    const auto devices = usbfs::scan_sysfs(usb_root_, dev_usb_root_);
+    for (const std::uint16_t want : {replay::EYE_PID, replay::EYE_PID_P3B}) {
+        if (want == replay::EYE_PID_P3B && !cfg.p3b) {
             continue;
         }
-        if (const auto drv = d.interface_driver()) {
-            return std::unexpected(
-                std::format("kernel driver '{}' is bound to the EyeChip interface; not detaching it", *drv));
+        for (const auto& d : devices) {
+            if (d.vid != replay::EYE_VID || d.pid != want) {
+                continue;
+            }
+            if (const auto drv = d.interface_driver()) {
+                return std::unexpected(
+                    std::format("kernel driver '{}' is bound to the EyeChip interface; not detaching it", *drv));
+            }
+            return std::pair(d.devnode, want);
         }
-        return d.devnode;
     }
-    return std::unexpected(std::string("no EyeChip (2104:0561) on the USB bus"));
+    return std::unexpected(std::string(cfg.p3b ? "no eye chip (2104:0561 or 2104:0220) on the USB bus"
+                                               : "no EyeChip (2104:0561) on the USB bus"));
 }
 
 std::expected<std::unique_ptr<Transport>, std::string> RealDevice::open(const Config& cfg, std::stop_token) {
-    const auto node = chip_node(cfg);
-    if (!node) {
-        return std::unexpected(node.error());
+    const auto found = chip_node(cfg);
+    if (!found) {
+        return std::unexpected(found.error());
     }
+    const fs::path* node = &found->first;
+    pid_ = found->second;
     auto dev = usbfs::UsbFs::open(*node);
     if (!dev) {
         return std::unexpected(std::format("open {}: {}", node->string(), dev.error().to_string()));
@@ -340,15 +363,16 @@ std::expected<std::unique_ptr<Transport>, std::string> RealDevice::open(const Co
 }
 
 std::expected<std::string, std::string> RealDevice::reset(const Config& cfg) {
-    const auto node = chip_node(cfg);
-    if (!node) {
-        return std::unexpected(node.error());
+    const auto found = chip_node(cfg);
+    if (!found) {
+        return std::unexpected(found.error());
     }
-    if (auto r = usbfs::reset_node(*node); !r) {
-        return std::unexpected(std::format("{}: {}", node->string(), r.error().to_string()));
+    const auto& [node, pid] = *found;
+    if (auto r = usbfs::reset_node(node); !r) {
+        return std::unexpected(std::format("{}: {}", node.string(), r.error().to_string()));
     }
-    return std::format("chip silent: host-side USB port reset of 2104:0561 ({}); it re-enumerates like a replug",
-                       node->string());
+    return std::format("chip silent: host-side USB port reset of 2104:{:04x} ({}); it re-enumerates like a replug", pid,
+                       node.string());
 }
 
 std::optional<std::string> RealDevice::silent(const Config& cfg, Clock::time_point now) {
@@ -592,8 +616,8 @@ std::unique_ptr<Tracker> Tracker::start(Config cfg, std::unique_ptr<Device> dev,
     return tr;
 }
 
-std::unique_ptr<Tracker> Tracker::start_with(Config cfg, FnDevice::OpenFn open, LogFn log) {
-    return start(std::move(cfg), std::make_unique<FnDevice>(std::move(open)), std::move(log));
+std::unique_ptr<Tracker> Tracker::start_with(Config cfg, FnDevice::OpenFn open, LogFn log, std::uint16_t pid) {
+    return start(std::move(cfg), std::make_unique<FnDevice>(std::move(open), pid), std::move(log));
 }
 
 Tracker::~Tracker() { stop(); }
@@ -642,8 +666,14 @@ void Tracker::run(std::stop_token stop, std::unique_ptr<Device> dev) {
             continue;
         }
         bool streamed = false;
+        const Config link_cfg = for_chip(cfg_, dev->pid());
+        if (dev->pid() == replay::EYE_PID_P3B) {
+            say(std::string("original Crystal eye tracker (2104:0220): its own captured start list") +
+                (cfg_.frames || cfg_.profile ? " (the configured start list / eye profile are for 2104:0561, not used)"
+                                             : ""));
+        }
         auto r = run_link(
-            **t, cfg_, stop, pipe,
+            **t, link_cfg, stop, pipe,
             [&](State s) {
                 streamed |= s == State::Streaming;
                 set(s);

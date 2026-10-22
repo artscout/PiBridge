@@ -39,8 +39,8 @@ namespace pibridge::cam::headpose {
 using geom::Vec3;
 using slam::Quat;
 
-/// PIBRIDGE_HEAD_PARITY=1: the output layer behaves exactly as omarchyvr's Rust at the pinned commit (the difftests and
-/// the Rust twins run this way); unset or 0: PiBridge's measured improvements are on by default
+/// PIBRIDGE_HEAD_PARITY=1: the output layer behaves exactly as omarchyvr's Rust at the pinned commit (the Rust twins
+/// run this way); unset or 0: PiBridge's measured improvements are on by default
 /// (docs/research/head-tracking-improvements.md). Read once per call (cheap; HeadParams::from_env and the C ABI's
 /// create read it once per session).
 bool parity_mode();

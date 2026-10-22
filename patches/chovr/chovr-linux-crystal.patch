@@ -1,0 +1,756 @@
+diff --git a/CustomHeadsetOpenVR/src/Config/Config.h b/CustomHeadsetOpenVR/src/Config/Config.h
+index 4f8838f..9511fda 100644
+--- a/CustomHeadsetOpenVR/src/Config/Config.h
++++ b/CustomHeadsetOpenVR/src/Config/Config.h
+@@ -180,6 +180,9 @@ public:
+ 		HeadsetType headsetType = HeadsetType::None;
+ 		// ipd in mm
+ 		double ipd = 63.0;
++		// the display refresh rate in Hz SteamVR picks the headset's mode by (0 = what the tracked device reports);
++		// PiBridge: the original Crystal runs 72, 90 or 120 Hz
++		double refreshRate = 0;
+ 		// ipd offset from the ipd value in mm
+ 		double ipdOffset = 0.0;
+ 		// whether to use ipd data from the platform (eg: PVR)
+diff --git a/CustomHeadsetOpenVR/src/Config/ConfigLoader.cpp b/CustomHeadsetOpenVR/src/Config/ConfigLoader.cpp
+index 13f955a..c94ac84 100644
+--- a/CustomHeadsetOpenVR/src/Config/ConfigLoader.cpp
++++ b/CustomHeadsetOpenVR/src/Config/ConfigLoader.cpp
+@@ -78,6 +78,9 @@ void parseBaseHeadsetConfig(json headsetData, Config::BaseHeadsetConfig& headset
+ 	if(headsetData["resolutionX"].is_number()){
+ 		headsetConfig.resolutionX = headsetData["resolutionX"].get<int>();
+ 	}
++	if(headsetData["refreshRate"].is_number()){
++		headsetConfig.refreshRate = headsetData["refreshRate"].get<double>();
++	}
+ 	if(headsetData["resolutionY"].is_number()){
+ 		headsetConfig.resolutionY = headsetData["resolutionY"].get<int>();
+ 	}
+@@ -553,6 +556,7 @@ ordered_json baseHeadsetInfo(Config::BaseHeadsetConfig& headsetConfig){
+ 		{"subpixelOffsets", headsetConfig.subpixelOffsets},
+ 		{"resolutionX", headsetConfig.resolutionX},
+ 		{"resolutionY", headsetConfig.resolutionY},
++		{"refreshRate", headsetConfig.refreshRate},
+ 		{"displayRotation", headsetConfig.displayRotation},
+ 		{"maxFovX", headsetConfig.maxFovX},
+ 		{"maxFovY", headsetConfig.maxFovY},
+diff --git a/CustomHeadsetOpenVR/src/Driver/DeviceProvider.cpp b/CustomHeadsetOpenVR/src/Driver/DeviceProvider.cpp
+index 152aeb1..cee45a5 100644
+--- a/CustomHeadsetOpenVR/src/Driver/DeviceProvider.cpp
++++ b/CustomHeadsetOpenVR/src/Driver/DeviceProvider.cpp
+@@ -15,9 +15,7 @@
+ #include "../Headsets/FakeHeadset.h"
+ #include "../Headsets/NotConnectedPlaceholder.h"
+ #include "../Headsets/PimaxLighthouse.h"
+-#ifdef PVR_EXISTS
+-#include "../Headsets/PimaxSlam.h"
+-#endif
++#include "../Headsets/PimaxSlam.h" // Linux too (PiBridge): the original Crystal tracking itself
+ #include "../Helpers/EyeTrackingOutput.h"
+ #include "../Helpers/AAPVRBlocker.h"
+ #include "../Helpers/MiscHelper.h"
+@@ -99,6 +97,19 @@ vr::EVRInitError CustomHeadsetDeviceProvider::Init(vr::IVRDriverContext *pDriver
+ 
+ 
+ void CustomHeadsetDeviceProvider::TryPimaxSlamConnect(){
++	#ifndef PVR_EXISTS
++	// PiBridge (Linux): the original Crystal tracking itself, its poses from PiBridge's shared memory
++	static bool hasProvidedPimaxSlamHeadset = false;
++	if(!hasProvidedPimaxSlamHeadset && PimaxCommon::IsSlamHeadsetConnected()){
++		PimaxSlamDriver* pimaxSlamImplementation = new PimaxSlamDriver();
++		pimaxSlamImplementation->deviceProvider = this;
++		shims.insert(pimaxSlamImplementation);
++		vr::ITrackedDeviceServerDriver* driver = new ShimTrackedDeviceDriver(pimaxSlamImplementation, nullptr);
++		vr::VRServerDriverHost()->TrackedDeviceAdded("PimaxSlamCustomHMD", vr::TrackedDeviceClass_HMD, driver);
++		hasProvidedPimaxSlamHeadset = true;
++		DriverLog("Pimax Crystal tracking itself: SLAM headset added");
++	}
++	#endif
+ 	#ifdef PVR_EXISTS
+ 	static bool hasProvidedPimaxSlamHeadset = false;
+ 	if(!hasProvidedPimaxSlamHeadset){
+@@ -376,7 +387,10 @@ bool CustomHeadsetDeviceProvider::HandleDeviceAdded(const char *&pchDeviceSerial
+ 		// the HID hooks (not available on Linux) or by the Pimax shim itself, so connect before deciding on the shim.
+ 		PimaxCommon::TryDirectConnection();
+ 		#endif
+-		if(PimaxCommon::IsLighthouseHeadsetConnected()){
++		// PiBridge: not around our own SLAM headset (it is the Pimax headset already; the Lighthouse shim would stack a
++		// second headset shim on it)
++		const bool ownSlamHeadset = std::string_view(pchDeviceSerialNumber) == "PimaxSlamCustomHMD";
++		if(!ownSlamHeadset && PimaxCommon::IsLighthouseHeadsetConnected()){
+ 			PimaxLighthouseShim* pimaxLighthouseShim = new PimaxLighthouseShim();
+ 			pimaxLighthouseShim->deviceProvider = this;
+ 			shims.insert(pimaxLighthouseShim);
+diff --git a/CustomHeadsetOpenVR/src/Headsets/BaseHeadset.cpp b/CustomHeadsetOpenVR/src/Headsets/BaseHeadset.cpp
+index 87c76f5..b234add 100644
+--- a/CustomHeadsetOpenVR/src/Headsets/BaseHeadset.cpp
++++ b/CustomHeadsetOpenVR/src/Headsets/BaseHeadset.cpp
+@@ -40,6 +40,23 @@ void BaseHeadsetShim::PosTrackedDeviceActivate(uint32_t &unObjectId, vr::EVRInit
+ 	vr::VRProperties()->SetBoolProperty(container, vr::Prop_DisplaySupportsRuntimeFramerateChange_Bool, false);
+ 	
+ 	// vr::VRProperties()->SetFloatProperty(container, vr::Prop_DisplayFrequency_Float, 90.0f);
++	// PiBridge: the configured rate replaces the device's own (SteamVR picks the display mode by it; the Lighthouse
++	// module of the original Crystal says 90 Hz, its panel also runs 72 and 120 Hz). Read at activation only.
++	if(GetConfig().refreshRate > 0){
++		vr::VRProperties()->SetFloatProperty(container, vr::Prop_DisplayFrequency_Float, (float)GetConfig().refreshRate);
++		// the compositor picks the mode by SteamVR's own setting steamvr/preferredRefreshRate (90 by default), not by the
++		// property above (2026-10-22: 120 and 72 configured, "desired rate of 90" each time): offer the panel's rates and
++		// prefer the configured one
++		if(GetConfig().headsetType == Config::HeadsetType::CrystalOG){
++			const float rates[] = {72.0f, 90.0f, 120.0f};
++			vr::VRProperties()->SetProperty(container, vr::Prop_DisplayAvailableFrameRates_Float_Array, (void*)rates,
++				sizeof(rates), vr::k_unFloatPropertyTag);
++			vr::VRProperties()->SetBoolProperty(container, vr::Prop_DisplaySupportsMultipleFramerates_Bool, true);
++		}
++		vr::VRSettings()->SetFloat(vr::k_pch_SteamVR_Section, "preferredRefreshRate", (float)GetConfig().refreshRate);
++	}
++	DriverLog("Display frequency: configured %.1f Hz, the device reports %.1f Hz", GetConfig().refreshRate,
++		vr::VRProperties()->GetFloatProperty(container, vr::Prop_DisplayFrequency_Float));
+ 	
+ 	// vr::VRProperties()->SetInt32Property(container, vr::Prop_EdidVendorID_Int32, 0xd222); // HVR htc vr
+ 	// vr::VRProperties()->SetInt32Property(container, vr::Prop_EdidProductID_Int32, 43521); // vive
+diff --git a/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp b/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp
+index 17cad3a..fc4ddab 100644
+--- a/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp
++++ b/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp
+@@ -670,4 +670,371 @@ void PimaxSlamDriver::PvrTrackingThread() {
+ 	DriverLog("PVR tracking thread stopped");
+ }
+ 
++#else // no Pimax runtime (Linux)
++
++// The original Pimax Crystal tracks itself (inside-out on the headset); PiBridge's pibridge-keepalived reads the poses
++// it streams over its HID and writes them to shared memory (SharedMemoryPoseSource.h). This is the Windows driver's
++// SLAM headset with that file in place of pvr_getTrackingState / pvr_getInputState: the head, and the Crystal
++// controllers as Touch controllers (pose, buttons, touches, trigger, grip, stick). Not yet: haptics, the passthrough
++// camera, hand tracking.
++
++#include "../Helpers/EyeTrackingOutput.h"
++#include "../Helpers/SharedMemoryEyeSource.h"
++#include "../Helpers/SharedMemoryPoseSource.h"
++#include "../Helpers/MiscHelper.h"
++
++#include <cstring>
++#include <memory>
++#include <shared_mutex>
++#include <time.h>
++
++// Matches the Windows driver (driver_aapvr).
++static constexpr uint64_t k_UniverseId = 30;
++// The file is older than this: the headset or its writer is gone.
++static constexpr int64_t k_StaleNs = 500000000;
++
++static vr::DriverPose_t PoseFromDevice(const SharedMemoryPose::Device& d, int64_t nowNs, bool tracked, bool positionTracked) {
++	vr::DriverPose_t pose = {};
++	pose.qWorldFromDriverRotation.w = pose.qDriverFromHeadRotation.w = pose.qRotation.w = 1.0;
++	pose.deviceIsConnected = true;
++	pose.result = vr::TrackingResult_Running_OutOfRange;
++	if (tracked) {
++		for (int i = 0; i < 3; i++) {
++			pose.vecPosition[i] = d.position[i];
++			pose.vecVelocity[i] = positionTracked ? d.linearVelocity[i] : 0;
++			pose.vecAngularVelocity[i] = d.angularVelocity[i];
++		}
++		pose.qRotation.x = d.orientation[0];
++		pose.qRotation.y = d.orientation[1];
++		pose.qRotation.z = d.orientation[2];
++		pose.qRotation.w = d.orientation[3];
++		// how old the sample is (negative); kept within 100 ms so a clock error never sends SteamVR a pose from the
++		// distant past (it fades the headset to black then)
++		const double offset = double(d.timeNs - nowNs) / 1e9;
++		pose.poseTimeOffset = offset < -0.1 ? -0.1 : offset > 0 ? 0 : offset;
++		pose.poseIsValid = true;
++		pose.result = positionTracked ? vr::TrackingResult_Running_OK : vr::TrackingResult_Fallback_RotationOnly;
++	}
++	return pose;
++}
++
++// A Pimax Crystal controller, presented as an Oculus Touch controller (as the Windows driver does).
++class PimaxCrystalControllerDriver : public vr::ITrackedDeviceServerDriver {
++public:
++	PimaxCrystalControllerDriver(vr::ETrackedControllerRole role) : role(role) {
++	}
++
++	vr::EVRInitError Activate(uint32_t unObjectId) override {
++		deviceIndex = unObjectId;
++		const bool isLeft = role == vr::TrackedControllerRole_LeftHand;
++		const vr::PropertyContainerHandle_t container = vr::VRProperties()->TrackedDeviceToPropertyContainer(deviceIndex);
++
++		vr::VRProperties()->SetInt32Property(container, vr::Prop_ControllerRoleHint_Int32, role);
++		vr::VRProperties()->SetStringProperty(container, vr::Prop_TrackingSystemName_String, "oculus");
++		vr::VRProperties()->SetStringProperty(container, vr::Prop_ManufacturerName_String, "Oculus");
++		vr::VRProperties()->SetStringProperty(
++			container, vr::Prop_ModelNumber_String, isLeft ? "Oculus Quest2 (Left Controller)" : "Oculus Quest2 (Right Controller)");
++		vr::VRProperties()->SetStringProperty(container, vr::Prop_InputProfilePath_String, "{oculus}/input/touch_profile.json");
++		vr::VRProperties()->SetStringProperty(container, vr::Prop_ControllerType_String, "oculus_touch");
++		// SteamVR's own model (the Crystal controller models are in Pimax's Windows driver)
++		vr::VRProperties()->SetStringProperty(
++			container, vr::Prop_RenderModelName_String, isLeft ? "oculus_quest2_controller_left" : "oculus_quest2_controller_right");
++		vr::VRProperties()->SetUint64Property(container, vr::Prop_CurrentUniverseId_Uint64, k_UniverseId);
++		vr::VRProperties()->SetBoolProperty(container, vr::Prop_DeviceProvidesBatteryStatus_Bool, true);
++
++		vr::VRDriverInput()->CreateScalarComponent(container, "/input/trigger/value", &components[ComponentTrigger],
++			vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedOneSided);
++		vr::VRDriverInput()->CreateBooleanComponent(container, "/input/trigger/click", &components[ComponentTriggerClick]);
++		vr::VRDriverInput()->CreateBooleanComponent(container, "/input/trigger/touch", &components[ComponentTriggerTouch]);
++		vr::VRDriverInput()->CreateScalarComponent(container, "/input/grip/value", &components[ComponentGrip],
++			vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedOneSided);
++		vr::VRDriverInput()->CreateBooleanComponent(container, "/input/grip/click", &components[ComponentGripClick]);
++		vr::VRDriverInput()->CreateScalarComponent(container, "/input/joystick/x", &components[ComponentThumbstickX],
++			vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedTwoSided);
++		vr::VRDriverInput()->CreateScalarComponent(container, "/input/joystick/y", &components[ComponentThumbstickY],
++			vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedTwoSided);
++		vr::VRDriverInput()->CreateBooleanComponent(container, "/input/joystick/click", &components[ComponentThumbstickClick]);
++		vr::VRDriverInput()->CreateBooleanComponent(container, "/input/joystick/touch", &components[ComponentThumbstickTouch]);
++		vr::VRDriverInput()->CreateBooleanComponent(container, "/input/system/click", &components[ComponentMenu]);
++		vr::VRDriverInput()->CreateBooleanComponent(container, isLeft ? "/input/y/click" : "/input/b/click", &components[ComponentButton1]);
++		vr::VRDriverInput()->CreateBooleanComponent(container, isLeft ? "/input/y/touch" : "/input/b/touch", &components[ComponentButton1Touch]);
++		vr::VRDriverInput()->CreateBooleanComponent(container, isLeft ? "/input/x/click" : "/input/a/click", &components[ComponentButton2]);
++		vr::VRDriverInput()->CreateBooleanComponent(container, isLeft ? "/input/x/touch" : "/input/a/touch", &components[ComponentButton2Touch]);
++		vr::VRInputComponentHandle_t haptics;
++		vr::VRDriverInput()->CreateHapticComponent(container, "/output/haptic", &haptics);
++		return vr::VRInitError_None;
++	}
++
++	void Deactivate() override {
++		deviceIndex = vr::k_unTrackedDeviceIndexInvalid;
++	}
++	void EnterStandby() override {
++	}
++	void* GetComponent(const char* pchComponentNameAndVersion) override {
++		return nullptr;
++	}
++	vr::DriverPose_t GetPose() override {
++		return {};
++	}
++	void DebugRequest(const char* pchRequest, char* pchResponseBuffer, uint32_t unResponseBufferSize) override {
++		if (unResponseBufferSize >= 1) {
++			pchResponseBuffer[0] = 0;
++		}
++	}
++
++	// From the tracking thread. State 7: optically tracked; 5: the IMU only (orientation, the position frozen); else no pose.
++	void UpdateTrackingState(const SharedMemoryPose::Device& d, int64_t nowNs, bool fresh) {
++		if (deviceIndex == vr::k_unTrackedDeviceIndexInvalid) {
++			return;
++		}
++		const bool tracked = fresh && (d.state == 7 || d.state == 5);
++		vr::DriverPose_t pose = PoseFromDevice(d, nowNs, tracked, d.state == 7);
++		pose.deviceIsConnected = fresh && d.state != 0;
++		// The headset reports the controller's tip; SteamVR wants the origin of the render model. As the Windows driver
++		// does with the Crystal controller model: the inverse of its "tip" component (origin (0, -0.019, 0.014),
++		// rotate_xyz (-35.65, 0, 0)), i.e. a turn of +35.65 degrees about x and (0, 0.0236, -0.0003) m. The Quest 2 model
++		// shown has nearly the same tip (-37.4 degrees) and the same openxr_aim.
++		pose.qDriverFromHeadRotation.x = 0.306111;
++		pose.qDriverFromHeadRotation.y = 0;
++		pose.qDriverFromHeadRotation.z = 0;
++		pose.qDriverFromHeadRotation.w = 0.951996;
++		pose.vecDriverFromHeadTranslation[0] = 0;
++		pose.vecDriverFromHeadTranslation[1] = 0.023599;
++		pose.vecDriverFromHeadTranslation[2] = -0.000302;
++		vr::VRServerDriverHost()->TrackedDevicePoseUpdated(deviceIndex, pose, sizeof(pose));
++	}
++
++	// From the tracking thread, when something changed. The headset's controller report (PiBridge's p3b.h): pressed
++	// 0x01 A/X, 0x02 B/Y, 0x04 menu, 0x08 stick, 0x40 Pimax; touched (<< 8) 0x01 A/X, 0x02 B/Y, 0x08 stick,
++	// 0x10 trigger, 0x20 grip; axes trigger, grip, stick x, stick y.
++	void UpdateInputs(const SharedMemoryPose::Device& d, int64_t nowNs) {
++		if (deviceIndex == vr::k_unTrackedDeviceIndexInvalid || (d.buttons == lastButtons && memcmp(d.axes, lastAxes, sizeof lastAxes) == 0)) {
++			return;
++		}
++		lastButtons = d.buttons;
++		memcpy(lastAxes, d.axes, sizeof lastAxes);
++		const double t = double(d.timeNs - nowNs) / 1e9;
++		const uint32_t pressed = d.buttons & 0xff, touched = (d.buttons >> 8) & 0xff;
++		auto& in = *vr::VRDriverInput();
++		in.UpdateScalarComponent(components[ComponentTrigger], d.axes[0], t);
++		in.UpdateBooleanComponent(components[ComponentTriggerClick], d.axes[0] >= 0.9f, t); // no click bit: by the value
++		in.UpdateBooleanComponent(components[ComponentTriggerTouch], (touched & 0x10) != 0, t);
++		in.UpdateScalarComponent(components[ComponentGrip], d.axes[1], t);
++		in.UpdateBooleanComponent(components[ComponentGripClick], d.axes[1] >= 0.9f, t);
++		in.UpdateScalarComponent(components[ComponentThumbstickX], d.axes[2], t);
++		in.UpdateScalarComponent(components[ComponentThumbstickY], d.axes[3], t);
++		in.UpdateBooleanComponent(components[ComponentThumbstickClick], (pressed & 0x08) != 0, t);
++		in.UpdateBooleanComponent(components[ComponentThumbstickTouch], (touched & 0x08) != 0, t);
++		in.UpdateBooleanComponent(components[ComponentButton1], (pressed & 0x02) != 0, t);
++		in.UpdateBooleanComponent(components[ComponentButton1Touch], (touched & 0x02) != 0, t);
++		in.UpdateBooleanComponent(components[ComponentButton2], (pressed & 0x01) != 0, t);
++		in.UpdateBooleanComponent(components[ComponentButton2Touch], (touched & 0x01) != 0, t);
++		// the Pimax button and the menu button: SteamVR's system button (its dashboard)
++		in.UpdateBooleanComponent(components[ComponentMenu], (pressed & (0x40 | 0x04)) != 0, t);
++	}
++
++	// From RunFrame.
++	void UpdateBattery(int battery) {
++		if (deviceIndex == vr::k_unTrackedDeviceIndexInvalid || battery < 0 || battery == lastBattery) {
++			return;
++		}
++		lastBattery = battery;
++		const vr::PropertyContainerHandle_t container = vr::VRProperties()->TrackedDeviceToPropertyContainer(deviceIndex);
++		vr::VRProperties()->SetFloatProperty(container, vr::Prop_DeviceBatteryPercentage_Float, battery / 100.f);
++	}
++
++private:
++	enum Components {
++		ComponentTrigger,
++		ComponentTriggerClick,
++		ComponentTriggerTouch,
++		ComponentGrip,
++		ComponentGripClick,
++		ComponentThumbstickX,
++		ComponentThumbstickY,
++		ComponentThumbstickClick,
++		ComponentThumbstickTouch,
++		ComponentButton1,
++		ComponentButton1Touch,
++		ComponentButton2,
++		ComponentButton2Touch,
++		ComponentMenu,
++		ComponentCount,
++	};
++	const vr::ETrackedControllerRole role;
++	vr::TrackedDeviceIndex_t deviceIndex = vr::k_unTrackedDeviceIndexInvalid;
++	vr::VRInputComponentHandle_t components[ComponentCount] = {};
++	int lastBattery = -1;
++	uint32_t lastButtons = 0xffffffff; // the first report is always sent
++	float lastAxes[4] = {};
++};
++
++static std::unique_ptr<PimaxCrystalControllerDriver> s_controllerDriver[2];
++static std::shared_mutex s_controllerDriverMutex;
++
++PimaxSlamDriver::PimaxSlamDriver() {
++}
++
++bool PimaxSlamDriver::IsDesiredHeadset(std::string model, vr::PropertyContainerHandle_t container) {
++	return true;
++}
++
++Config::BaseHeadsetConfig& PimaxSlamDriver::GetConfig(){
++	return GetHeadsetConfig();
++}
++
++Config::BaseHeadsetConfig& PimaxSlamDriver::GetConfigOld(){
++	return GetHeadsetConfigOld();
++}
++
++void PimaxSlamDriver::PosTrackedDeviceGetComponent(const char*& pchComponentNameAndVersion, void*& returnComponent) {
++	BaseHeadsetShim::PosTrackedDeviceGetComponent(pchComponentNameAndVersion, returnComponent);
++}
++
++void PimaxSlamDriver::PosTrackedDeviceActivate(uint32_t& unObjectId, vr::EVRInitError& returnValue) {
++	vr::PropertyContainerHandle_t container = vr::VRProperties()->TrackedDeviceToPropertyContainer(unObjectId);
++
++	vr::VRProperties()->SetStringProperty(container, vr::Prop_TrackingSystemName_String, "aapvr");
++	vr::VRProperties()->SetStringProperty(container, vr::Prop_ManufacturerName_String, "Pimax");
++	vr::VRProperties()->SetStringProperty(container, vr::Prop_ModelNumber_String, "Pimax Crystal");
++	vr::VRProperties()->SetStringProperty(container, vr::Prop_RenderModelName_String, "generic_hmd");
++	vr::VRProperties()->SetUint64Property(container, vr::Prop_CurrentUniverseId_Uint64, k_UniverseId);
++	// the panel mode PiBridge asks the headset for (piPcSwicthIoctl video 120 switches the link, 90 is what the
++	// Lighthouse session ran at)
++	vr::VRProperties()->SetFloatProperty(container, vr::Prop_DisplayFrequency_Float, 90.0f);
++	vr::VRProperties()->SetBoolProperty(container, vr::Prop_DeviceProvidesBatteryStatus_Bool, true);
++
++	vr::VRProperties()->SetStringProperty(
++		container, vr::Prop_InputProfilePath_String, ("{" + driverConfigLoader.info.driverName + "}/input/pimaxhmd_profile.json").c_str());
++	vr::VRDriverInput()->CreateBooleanComponent(container, "/input/system/click", &inputComponents[ComponentSystemClick]);
++	vr::VRDriverInput()->CreateBooleanComponent(container, "/input/tap/click", &inputComponents[ComponentTap]);
++
++	// the gaze comes from an external eye tracker through shared memory
++	if (GetInfo().hasEyeTracking) {
++		eyeTrackingOutput.Initialize();
++	}
++
++	returnValue = vr::VRInitError_None;
++	BaseHeadsetShim::PosTrackedDeviceActivate(unObjectId, returnValue);
++}
++
++void PimaxSlamDriver::SubDeactivate() {
++	StopPvrTracking();
++	sharedMemoryEyeSource.Stop();
++}
++
++void PimaxSlamDriver::RunFrame() {
++	if(!isActive){
++		// don't do anything if not the active device
++		return;
++	}
++	BaseHeadsetShim::RunFrame();
++	if(GetInfo().directConnected){
++		TryDirectConnection();
++	}
++	StartPvrTracking();
++
++	// controllers: added once the headset reports them, battery levels
++	const auto snapshot = SharedMemoryPose::Read();
++	if (snapshot) {
++		for (int side = 0; side < 2; side++) {
++			const SharedMemoryPose::Device& d = snapshot->devices[1 + side];
++			if (d.state != 0 && !s_controllerDriver[side]) {
++				std::unique_lock lock(s_controllerDriverMutex);
++				s_controllerDriver[side] = std::make_unique<PimaxCrystalControllerDriver>(
++					side == 0 ? vr::TrackedControllerRole_LeftHand : vr::TrackedControllerRole_RightHand);
++				vr::VRServerDriverHost()->TrackedDeviceAdded(
++					side == 0 ? "PIMAXLEFT" : "PIMAXRIGHT", vr::TrackedDeviceClass_Controller, s_controllerDriver[side].get());
++				DriverLog("Pimax Crystal %s controller added", side == 0 ? "left" : "right");
++			}
++			if (s_controllerDriver[side]) {
++				s_controllerDriver[side]->UpdateBattery(d.battery);
++			}
++		}
++		const int battery = snapshot->devices[0].battery;
++		if (battery >= 0 && battery != lastHeadsetBattery && deviceIndex >= 0) {
++			lastHeadsetBattery = battery;
++			const vr::PropertyContainerHandle_t container = vr::VRProperties()->TrackedDeviceToPropertyContainer(deviceIndex);
++			vr::VRProperties()->SetFloatProperty(container, vr::Prop_DeviceBatteryPercentage_Float, battery / 100.f);
++		}
++	}
++
++	bool systemClick = false, doubleTap = false;
++	GetHmdButtonsState(systemClick, doubleTap);
++	if(inputComponents[ComponentSystemClick]){
++		vr::VRDriverInput()->UpdateBooleanComponent(inputComponents[ComponentSystemClick], systemClick, 0);
++	}
++	if(inputComponents[ComponentTap]){
++		vr::VRDriverInput()->UpdateBooleanComponent(inputComponents[ComponentTap], doubleTap, 0);
++	}
++
++	if(GetInfo().hasEyeTracking && GetConfig().enableEyeTracking){
++		sharedMemoryEyeSource.Start();
++	} else {
++		sharedMemoryEyeSource.Stop();
++	}
++	eyeTrackingOutput.ipd = (float)(GetConfig().ipd + GetConfig().ipdOffset);
++	eyeTrackingOutput.RunFrame();
++}
++
++void PimaxSlamDriver::RunPvrBackground() {
++}
++
++void PimaxSlamDriver::HandleEvent(const vr::VREvent_t& event) {
++}
++
++void PimaxSlamDriver::StartPvrTracking() {
++	if (!pvrTrackingRunning.exchange(true)) {
++		DriverLog("Starting the Pimax Crystal tracking thread (poses from PiBridge's shared memory)");
++		pvrTrackingThread = std::thread(&PimaxSlamDriver::PvrTrackingThread, this);
++	}
++}
++
++void PimaxSlamDriver::StopPvrTracking() {
++	if (pvrTrackingRunning.exchange(false) && pvrTrackingThread.joinable()) {
++		DriverLog("Stopping the Pimax Crystal tracking thread");
++		pvrTrackingThread.join();
++		pvrTrackingThread = {};
++	}
++}
++
++void PimaxSlamDriver::PvrTrackingThread() {
++	// 500 Hz, as the Windows driver; the headset reports its pose about 667 times a second
++	timespec next{};
++	clock_gettime(CLOCK_MONOTONIC, &next);
++	while (pvrTrackingRunning) {
++		next.tv_nsec += 2000000;
++		if (next.tv_nsec >= 1000000000) {
++			next.tv_nsec -= 1000000000;
++			next.tv_sec++;
++		}
++		clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, nullptr);
++		if (deviceIndex < 0) {
++			continue;
++		}
++		const int64_t now = SharedMemoryPose::NowNs();
++		const auto snapshot = SharedMemoryPose::Read();
++		const bool fresh = snapshot && now - snapshot->writtenNs < k_StaleNs;
++		SharedMemoryPose::Device head;
++		if (snapshot) {
++			head = snapshot->devices[0];
++		}
++		// flags of its inside-out: 1 orientation, 2 position (orientation only: just started, or it cannot see the room)
++		const uint32_t flags = snapshot ? snapshot->tracking : 0;
++		const bool headTracked = fresh && head.state == 1 && (flags & 1) != 0;
++		vr::DriverPose_t pose = PoseFromDevice(head, now, headTracked, headTracked && (flags & 2) != 0);
++		vr::VRServerDriverHost()->TrackedDevicePoseUpdated(deviceIndex, pose, sizeof(pose));
++
++		std::shared_lock lock(s_controllerDriverMutex);
++		for (int side = 0; side < 2; side++) {
++			if (s_controllerDriver[side] && snapshot) {
++				s_controllerDriver[side]->UpdateTrackingState(snapshot->devices[1 + side], now, fresh);
++				if (fresh) {
++					s_controllerDriver[side]->UpdateInputs(snapshot->devices[1 + side], now);
++				}
++			}
++		}
++	}
++}
++
+ #endif // PVR_EXISTS
+diff --git a/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.h b/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.h
+index 76bad22..ac5b500 100644
+--- a/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.h
++++ b/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.h
+@@ -27,4 +27,5 @@ private:
+ 
+ 	std::thread pvrTrackingThread;
+ 	std::atomic<bool> pvrTrackingRunning;
++	int lastHeadsetBattery = -1; // Linux: the battery last given to SteamVR
+ };
+diff --git a/CustomHeadsetOpenVR/src/Helpers/PimaxCommon.cpp b/CustomHeadsetOpenVR/src/Helpers/PimaxCommon.cpp
+index beaea72..71fa27d 100644
+--- a/CustomHeadsetOpenVR/src/Helpers/PimaxCommon.cpp
++++ b/CustomHeadsetOpenVR/src/Helpers/PimaxCommon.cpp
+@@ -1,4 +1,5 @@
+ #include "PimaxCommon.h"
++#include "SharedMemoryPoseSource.h"
+ 
+ #ifdef PVR_EXISTS
+ #include <PVR_Math.h>
+@@ -14,6 +15,9 @@
+ #include "../Driver/DeviceProvider.h"
+ #include "EyeTrackingOutput.h"
+ #include "MiscHelper.h"
++#ifndef PVR_EXISTS
++#include "../Distortion/PimaxDumpDistortionProfile.h"
++#endif
+ 
+ // For "hmd_buttons" config. Not in PVR SDK.
+ enum class HmdButton : int {
+@@ -261,7 +265,11 @@ public:
+ 		std::string serialNumber = "";
+ 		std::string path = "";
+ 		std::string path2 = "";
++		bool crystalP3b = false;
+ 		while(devicesIter){
++			// PiBridge: the original Crystal (P3B, 34A4:0012) has its HID on interface 2 and a USB serial that does
++			// not start with 'P', so the loop below never takes it.
++			crystalP3b |= devicesIter->product_id == 0x0012;
+ 			char name[256] = {};
+ 			char serial[256] = {};
+ 			int i = 0;
+@@ -301,6 +309,16 @@ public:
+ 			devicesIter = devicesIter->next;
+ 		}
+ 		hid_free_enumeration(devices);
++		if(crystalP3b && productId == 0){
++			// PiBridge: identified by its product id only. Its HID speaks 1024-byte RPC frames, not the 64-byte
++			// commands below, and pibridge-keepalived already talks to it: nothing is opened, no info thread.
++			if(s_info.headsetType != Config::HeadsetType::CrystalOG){
++				DriverLog("Found the original Pimax Crystal (P3B, 34A4:0012): identified by USB, its HID is left to PiBridge");
++			}
++			s_info.headsetType = Config::HeadsetType::CrystalOG;
++			s_info.hasEyeTracking = HeadsetHasEyeTracking(s_info.headsetType);
++			return true;
++		}
+ 		Config::HeadsetType headsetType = TypeFromProduct(productId, deviceName, serialNumber);
+ 		if(headsetType == Config::HeadsetType::None){
+ 			DriverLog("Unknown Pimax device %i, %s, %s", productId, deviceName.c_str(), serialNumber.c_str());
+@@ -609,8 +627,16 @@ bool PimaxCommon::IsLighthouseHeadsetConnected(){
+ }
+ 
+ bool PimaxCommon::IsSlamHeadsetConnected(){
++#ifdef PVR_EXISTS
+ 	PimaxInfo info = PimaxCommon::GetInfo();
+ 	return info.headsetType && driverConfig.ConfigFromHeadsetType(info.headsetType)->enable && info.connected && info.isOpenPortEnabled && info.useSlamTracking;
++#else
++	// PiBridge: the original Crystal identified by USB, tracking itself (its poses in PiBridge's shared memory)
++	TryDirectConnection();
++	PimaxInfo info = PimaxCommon::GetInfo();
++	return info.headsetType == Config::HeadsetType::CrystalOG && driverConfig.ConfigFromHeadsetType(info.headsetType)->enable &&
++		SharedMemoryPose::HeadsetTracksItself();
++#endif
+ }
+ 
+ #ifdef PVR_EXISTS
+@@ -640,6 +666,26 @@ Config::BaseHeadsetConfig& PimaxCommon::PatchConfig(Config::BaseHeadsetConfig& c
+ 			config.eyeRotation = GetInfo().cantingAngle;
+ 		}
+ 	}
++#ifndef PVR_EXISTS
++	// Without PVR, cantingAngle is never filled in (it stays 0), so the "Pimax Builtin (from dump)" profile
++	// supplies what PVR gives the Windows driver: the dump's FOV belongs to the canted eyes (view_rotation_fix 0),
++	// so parallel projection is forced off and the eyes are rotated by the dump's canting angle (half the angle
++	// between the two HmdToEye orientations, as above with PVR), whatever autoEyeRotation/eyeRotation say.
++	// With hardwareIpd the live IPD from the headset (direct USB) is kept as PVR would track it, and the dump's
++	// IPD (distance of its eye poses) is used when the headset reports none. Other profiles are not affected,
++	// and nothing changes if the dump can not be loaded.
++	if (config.distortionProfile == PimaxDumpDistortionProfile::kName) {
++		Config::PimaxHeadsetConfig* pimaxConfig = dynamic_cast<Config::PimaxHeadsetConfig*>(&config);
++		std::shared_ptr<const PimaxDumpData> dump = PimaxDumpDistortionProfile::GetDump(pimaxConfig ? pimaxConfig->pimaxDumpPath : std::string(), false);
++		if (dump) {
++			config.parallelProjection = false;
++			config.eyeRotation = dump->cantingAngleDeg;
++			if (config.hardwareIpd && !(config.ipd > 0)) {
++				config.ipd = dump->ipdMm;
++			}
++		}
++	}
++#endif
+ 	return config;
+ }
+ 
+diff --git a/CustomHeadsetOpenVR/src/Helpers/SharedMemoryPoseSource.cpp b/CustomHeadsetOpenVR/src/Helpers/SharedMemoryPoseSource.cpp
+new file mode 100644
+index 0000000..23a8a8c
+--- /dev/null
++++ b/CustomHeadsetOpenVR/src/Helpers/SharedMemoryPoseSource.cpp
+@@ -0,0 +1,104 @@
++#include "SharedMemoryPoseSource.h"
++
++#ifndef _WIN32
++
++#include <cstdlib>
++#include <cstring>
++#include <fcntl.h>
++#include <string>
++#include <time.h>
++#include <unistd.h>
++
++namespace SharedMemoryPose {
++
++namespace {
++
++constexpr uint32_t kMagic = 0x53504250u; // "PBPS"
++constexpr uint32_t kVersion = 1;
++constexpr size_t kSize = 328;
++constexpr size_t kDevice = 96;
++// older than this, the writer (or the headset) is gone
++constexpr int64_t kStaleNs = 500000000;
++
++template <typename T> T At(const uint8_t* b, size_t offset) {
++	T v;
++	memcpy(&v, b + offset, sizeof(T));
++	return v;
++}
++
++int OpenFile() {
++	const char* env = getenv("CUSTOM_HEADSET_POSE_SHM");
++	const std::string path = env && *env ? env : "/dev/shm/pibridge-crystal-pose";
++	return open(path.c_str(), O_RDONLY | O_CLOEXEC);
++}
++
++} // namespace
++
++int64_t NowNs() {
++	timespec ts{};
++	clock_gettime(CLOCK_MONOTONIC, &ts);
++	return int64_t(ts.tv_sec) * 1000000000 + ts.tv_nsec;
++}
++
++std::optional<Snapshot> Read() {
++	// opened once per thread and kept: the writer rewrites the same file in place (reopened when a read fails)
++	thread_local int fd = -1;
++	if (fd < 0) {
++		fd = OpenFile();
++		if (fd < 0) {
++			return std::nullopt;
++		}
++	}
++	for (int attempt = 0; attempt < 8; attempt++) {
++		uint8_t b[kSize];
++		// seq_end, body, seq_begin, each with its own pread (the order the writer's pwrites guarantee)
++		if (pread(fd, b + 320, 8, 320) != 8 || pread(fd, b + 8, 312, 8) != 312 || pread(fd, b, 8, 0) != 8) {
++			close(fd);
++			fd = -1;
++			return std::nullopt;
++		}
++		const uint64_t begin = At<uint64_t>(b, 0), end = At<uint64_t>(b, 320);
++		if (begin != end || begin == 0 || (begin & 1)) {
++			continue;
++		}
++		if (At<uint32_t>(b, 8) != kMagic || At<uint32_t>(b, 12) != kVersion) {
++			return std::nullopt;
++		}
++		Snapshot s;
++		s.writtenNs = At<int64_t>(b, 16);
++		s.tracking = At<uint32_t>(b, 24);
++		for (size_t i = 0; i < 3; i++) {
++			const size_t o = 32 + i * kDevice;
++			Device& d = s.devices[i];
++			d.timeNs = At<int64_t>(b, o);
++			d.state = At<uint32_t>(b, o + 8);
++			d.battery = At<int32_t>(b, o + 12);
++			memcpy(d.position, b + o + 16, 12);
++			memcpy(d.orientation, b + o + 28, 16);
++			memcpy(d.linearVelocity, b + o + 44, 12);
++			memcpy(d.angularVelocity, b + o + 56, 12);
++			d.buttons = At<uint32_t>(b, o + 68);
++			memcpy(d.axes, b + o + 72, 16);
++			d.sample = At<uint64_t>(b, o + 88);
++		}
++		return s;
++	}
++	return std::nullopt;
++}
++
++bool HeadsetTracksItself() {
++	const auto s = Read();
++	return s && NowNs() - s->writtenNs < kStaleNs && s->tracking != 0 && s->devices[0].timeNs != 0;
++}
++
++} // namespace SharedMemoryPose
++
++#else
++
++namespace SharedMemoryPose {
++std::optional<Snapshot> Read() { return std::nullopt; }
++int64_t NowNs() { return 0; }
++bool HeadsetTracksItself() { return false; }
++} // namespace SharedMemoryPose
++
++#endif
+diff --git a/CustomHeadsetOpenVR/src/Helpers/SharedMemoryPoseSource.h b/CustomHeadsetOpenVR/src/Helpers/SharedMemoryPoseSource.h
+new file mode 100644
+index 0000000..d18e822
+--- /dev/null
++++ b/CustomHeadsetOpenVR/src/Helpers/SharedMemoryPoseSource.h
+@@ -0,0 +1,50 @@
++#pragma once
++
++#include <cstdint>
++#include <optional>
++
++// The headset's own inside-out tracking from another process through a small shared memory file, for platforms
++// without the Pimax runtime (Linux): PiBridge's pibridge-keepalived writes what the original Pimax Crystal streams over
++// its HID (head and controllers, tracked by the headset itself).
++//
++// Default file: /dev/shm/pibridge-crystal-pose (environment CUSTOM_HEADSET_POSE_SHM overrides it). The format (328
++// bytes, little endian, the headset's tracking space: y up, metres; CLOCK_MONOTONIC nanoseconds):
++//   0 u64 seq_begin | 8 u32 magic "PBPS" | 12 u32 version 1 | 16 i64 publish time | 24 u32 the headset's own
++//   inside-out, flags 1 orientation 2 position (0: Lighthouse mode) | 28 u32 reserved | 32 three devices (head, left,
++//   right), 96 bytes each:
++//     +0 i64 sample time (0 never) | +8 u32 state (head 1 tracked; controller 4 no pose, 5 IMU only, 7 optical)
++//     +12 i32 battery % | +16 f32[3] position | +28 f32[4] orientation x y z w | +44 f32[3] linear velocity
++//     +56 f32[3] angular velocity (tracking space) | +68 u32 buttons | +72 f32[4] trigger grip stick-x stick-y
++//     +88 u64 sample number
++//   320 u64 seq_end
++// The writer stores an odd seq_begin, the body, the new even value in seq_end, then in seq_begin; a copy is
++// consistent when both are equal and even. PiBridge's side: libpibridge-hmd pibridge/hmd/pose_shm.h.
++namespace SharedMemoryPose {
++
++struct Device {
++	int64_t timeNs = 0;
++	uint32_t state = 0;
++	int32_t battery = -1;
++	float position[3] = {};
++	float orientation[4] = {0, 0, 0, 1};
++	float linearVelocity[3] = {};
++	float angularVelocity[3] = {};
++	uint32_t buttons = 0;
++	float axes[4] = {};
++	uint64_t sample = 0;
++};
++
++struct Snapshot {
++	int64_t writtenNs = 0;
++	uint32_t tracking = 0;
++	Device devices[3]; // head, left, right
++};
++
++// A consistent copy of the file; nullopt when it is missing, torn or of another layout.
++std::optional<Snapshot> Read();
++// CLOCK_MONOTONIC in nanoseconds (the file's clock).
++int64_t NowNs();
++// The headset is in its own inside-out tracking right now (fresh file, a tracking flag set, a head report seen).
++bool HeadsetTracksItself();
++
++} // namespace SharedMemoryPose

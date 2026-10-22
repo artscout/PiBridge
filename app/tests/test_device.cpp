@@ -162,8 +162,8 @@ TEST(device_view_modes_quad_views_and_build) {
     CHECK(row(deviceView(in).rendering, QStringLiteral("Quad views"))->value == QStringLiteral("Off"));
     in.qvInstalled = false;
     CHECK(row(deviceView(in).rendering, QStringLiteral("Quad views"))->value == QStringLiteral("Not installed"));
-    in.monado.kind = BuildKind::Rust;
-    CHECK(row(deviceView(in).rendering, QStringLiteral("Monado build"))->value == QStringLiteral("Rust"));
+    in.monado.kind = BuildKind::Unknown; // no PIBRIDGE_PIMAX_ABI marker
+    CHECK(row(deviceView(in).rendering, QStringLiteral("Monado build"))->value == QStringLiteral("unknown"));
     in.monado.missing = {QStringLiteral("PIMAX_SLAM")};
     CHECK(row(deviceView(in).rendering, QStringLiteral("Monado build"))->note.contains(QStringLiteral("PIMAX_SLAM")));
     in.monado.checked = false;

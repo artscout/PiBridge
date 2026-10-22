@@ -120,6 +120,46 @@ TEST(base_list_parses_and_has_no_auth_ops) {
     CHECK(select(s, Skips{.auth = true}).size() == 23);
 }
 
+TEST(the_compiled_in_p3b_list_is_the_data_file) {
+    CHECK(p3b_list() == read_text(std::filesystem::path(PIBRIDGE_EYE_DATA_DIR) / "p3b-frames.txt"));
+}
+
+TEST(p3b_list_is_the_captured_start_of_the_original_crystals_tracker) {
+    // Pimax Play's start of 2104:0220 (capture 20261022-202727-crystal-cold-hub2.pcap, device address 97, 20:28:37.9):
+    // 4 vendor control transfers, 12 reads, 8 clock reads, the gaze subscribe, the lens configuration
+    const auto p = parse(p3b_list());
+    CHECK(p.has_value());
+    const auto s = p.value_or(std::vector<FStep>{});
+    CHECK(s.size() == 26);
+    const auto ops = ops_of(s);
+    const std::vector<std::uint32_t> want = {0x3e8, 0x640, 0x58c, 0x532, 0x546, 0x547, 0x5d2,
+                                             0x686, 0x4b0, 0x596, 0x578, 0x672, 0x4c4, 0x5be};
+    CHECK(ops == want);
+    CHECK(std::ranges::all_of(ops, [](std::uint32_t o) { return !is_auth(o) && !is_denied(o) && o != CAL_OP; }));
+    // byte exact against the capture: the hello, the subscribe and the lens configuration
+    const auto frame_of = [&](std::uint32_t op) {
+        for (const auto& x : s) {
+            if (const auto* t = std::get_if<Ttp>(&x.action); t != nullptr && t->op == op && t->frames.size() == 1) {
+                return hex(t->frames[0]);
+            }
+        }
+        return std::string();
+    };
+    CHECK(frame_of(0x3e8) == "0000000047000000000000510000000100000000000003e8000000000000002f000017000000280000000900010000"
+                             "0001000100010002000100030001000400010005000100060001000700010008");
+    CHECK(frame_of(0x4c4) == "000000002c000000000000510000000d00000000000004c4000000000000001400000200000004000005051700"
+                             "00000400000000");
+    CHECK(frame_of(0x5be) == "000000007a000000000000510000000e00000000000005be00000000000000620000050000000400031f41040000"
+                             "000800007860008000000400000008000000000000000004000000080000000000000000050000000400031f41"
+                             "0400000008ffff879fff8000000400000008000000000000000004000000080000000000000000");
+    // the vendor control transfers are those of 2104:0561 (the write bReq 48 is skipped by default, as there)
+    const auto* c0 = std::get_if<Control>(&s[0].action);
+    CHECK(c0 != nullptr && c0->setup[0] == 0x41 && c0->setup[1] == 48 &&
+          hex(c0->data) == "010000000000000001000000040000000000000000000000");
+    CHECK(select(s, Skips{.vendor_write = true}).size() == 25);
+    CHECK(Guard::make_with(s, false).has_value());
+}
+
 TEST(base_calibration_step_matches_the_pins) {
     const auto s = base_steps();
     const auto* t = std::get_if<Ttp>(&s.back().action);

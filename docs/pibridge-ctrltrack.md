@@ -66,38 +66,18 @@ every expression, Rust's `sort_by` as `std::stable_sort` (also where -0.0 and 0.
 at -0.0. The two `sort_unstable`-like calls (`[usize; 3]` sorts and the deduplicated triple list) sort distinct or
 identical values only. The one hash map (`track --overlay`, record number -> frame) is only looked up.
 
-## Parity tests (`ctest -R ctrltrack`)
+## Tests (`ctest -R ctrltrack`)
 
-Each `pibridge_ctrltrack_diff_*` runs the Rust `pimax-ctrltrack` of the pinned commit (`PIBRIDGE_RUST_ORACLE_DIR`) and
-`pibridge-ctrltrack` with the same arguments in a scratch HOME (`monado-abi/difftest/run_difftest.sh` through
-`tools/ctrltrack/tests/ct_run.sh`: stderr merged into stdout, run-dependent values masked: durations, ages of the
-heartbeat and poses, writer pids, the LED-frame count of the last heartbeat, the panicking thread id and location) and
-compares the output byte for byte, with the files written appended. Lab recordings (`PIBRIDGE_LAB_CAM_DIR`:
-`first`/`ctrl1`/`ctrl2.pxcam`) and the Crystal Super's XML (compared by hash only) are read only; skipped without
-them or the oracle.
+The `pibridge_ctrltrack_diff_*` parity tests against the Rust `pimax-ctrltrack` (every command byte for byte) were
+removed with the oracle once the port was finished (2026-10-22).
 
-| Tests | Covers |
-|---|---|
-| `track_{first,ctrl1,ctrl2}`, `_factory` | the whole report and the CSV, default and factory extrinsics |
-| `track_ctrl1_window`, `_prior_window` | `--no-prior`, `--start/--count/--every` |
-| `track_ctrl1_models`, `_home_models`, `_model_dir` | models given, the per-serial layout in HOME (Hand field wins), `PIMAX_CTRL_MODEL_DIR` |
-| `track_ctrl1_fit`, `track_ctrl2_fit_factory`, `track_ctrl1_crystal_fit`, `_fit_badsave` | the extrinsics refit (with real multi-camera fixes on the Crystal rig), the saved file, a save that fails |
-| `track_ctrl1_extrinsics`, `_other`, `_broken`, `_home` | `--extrinsics` files: used, another headset's (ignored), broken, the default path in HOME with an out-of-range id |
-| `track_ctrl1_overlay`, `track_ctrl2_crystal_overlay` | `--overlay` pictures, decoded (`ctrltrack_png_dump`: the deflate bytes come from zlib, not miniz_oxide) |
-| `track_ctrl1_crystal`, `_crystal_ext` | the Crystal XML |
-| `scan_{first,ctrl1,ctrl2}` | `scan` stdout and the histogram |
-| `live_{first,ctrl1,ctrl2}`, `_factory`, `live_ctrl1_baseline`, `live_ctrl2_options`, `live_ctrl1_pitch`, `live_ctrl{1,2}_crystal` | `live` over the replay at its recorded pace with `--stats 0` (the tracker statistics and last poses after every LED frame), `--trace` with times relative to the first fix, and the final pose file as Monado's `pimax_ctrltrack_shm.h` reads it (`ctrltrack_shm_dump`, built from the omarchyvr checkout's header, not copied) |
-| `live_ctrl1_inhand_left`, `live_first_inhand_both` | Monado's in-hand status file |
-| `show_from_{rust,pibridge}`, `health_from_{rust,pibridge}`, `health_stale_from_*`, `health_*`, `show_old_writer` | the pose file written by one tool read by the other, an older writer's file (no heartbeat), no file |
-| `err_*` | usage, unknown command, panics (missing argument, bad numbers, `--every 0`, missing / foreign recording), missing calibration or models, `PIMAX_NO_REFERENCE`, broken model files, live source / pose file errors, show errors |
-
-Also: `pibridge_ctrltrack_csv_ctrl{1,2}`: `ctrl1.pxcam`/`ctrl2.pxcam` are Crystal Super recordings, and their reference
+`pibridge_ctrltrack_csv_ctrl{1,2}`: `ctrl1.pxcam`/`ctrl2.pxcam` are Crystal Super recordings, and their reference
 CSVs `ctrl1.csv`/`ctrl2.csv` (lab data) are exactly `track REC.pxcam --calib crystal-calibration.xml --csv` of the
 Rust tool; `pibridge-ctrltrack` writes the same bytes (with the default reference calibration the output is a different
 one, so those CSVs were never a default-run golden). `pibridge_ctrltrack_live_broker`: `live --source broker:SOCK
---factory` as the session runs it, for each tool against a `pibridge-cam broker` serving `ctrl1.pxcam`: both run and exit
-0, identical start lines, LED frames reach the tracker, Monado's reader sees a valid pose file with the heartbeat
-(frames before the client connects are lost, so the poses are not compared; in practice they came out identical).
+--factory` as the session runs it, against a `pibridge-cam broker` serving `ctrl1.pxcam`: it runs and exits 0, the
+start lines name the broker, LED frames reach the tracker, Monado's reader (`pimax_ctrltrack_shm.h` of
+`third_party/monado`, `ctrltrack_shm_dump`) sees a valid pose file with the heartbeat.
 `pibridge_ctrltrack_not_ported_*`: the message and exit 2. Unit twins: the 22 Rust `#[test]`s of the ported modules
 (blob 2, assign 3, p3p 2, model 4, extrinsics 4, solve 3, shm 2, tracker 2) plus 3 extra (live blob parameters,
 component order of model folders, the pose file bytes).
@@ -121,7 +101,7 @@ Measured in `docs/research/ctrl-tracking-improvements.md`. `track`, `scan`, `sho
     refuses left/right swaps in the search;
   - it was not better on the recordings with the synthetic IMU (research doc section 5).
 
-The parity difftests run with `PIBRIDGE_CTRL_PARITY=1`. `pibridge_ctrltrack_improved` tests the new paths.
+`pibridge_ctrltrack_csv_*` run with `PIBRIDGE_CTRL_PARITY=1`. `pibridge_ctrltrack_improved` tests the new paths.
 `pibridge_ctrltrack_take_steps` checks the controller take's guided steps (`tools/ctrltrack/ctrl-take-steps.json`).
 `pibridge_ctrlbench_imu_log` checks the replay of a fuser IMU log (`pibridge-ctrlbench --imu-log`).
 

@@ -322,7 +322,7 @@ IoSessionEnv buildIoEnv(const IoSettings& io, const RecSetup& s, int refreshHz, 
     const bool ctrlEngine = pimaxCtrlEngine(s);
     e.ctrltrack = io.ctrlTrack && !ctrlEngine && !s.ctrl.path.isEmpty();
     if (io.ctrlTrack && !ctrlEngine && !e.ctrltrack) {
-        e.notes << QStringLiteral("Optical controller tracking stays off: pimax-ctrltrack was not found (rec_pimax_ctrltrack=).");
+        e.notes << QStringLiteral("Optical controller tracking stays off: pibridge-ctrltrack was not found (rec_pimax_ctrltrack=).");
     }
     d << (e.ctrltrack ? QStringLiteral("PIMAX_CTRL_TRACK=1") : QStringLiteral("PIMAX_CTRL_TRACK=0"));
     if (ctrlEngine) {

@@ -55,8 +55,7 @@ TEST(create_compute_destroy_with_defaults) {
     CHECK(fov[0] == 52.58f && fov[1] == 47.54f && fov[2] == 44.55f && fov[3] == 44.55f);
     float uv[6] = {};
     CHECK(pimax_lens_rs_compute(l, 1, 0.5f, 0.5f, uv) == 0);
-    // the Rust test compares with Lens::compute of the handle; here: the same call twice (bit parity with the Rust
-    // library is the difftest's job)
+    // the Rust test compares with Lens::compute of the handle; here: the same call twice (deterministic)
     float again[6] = {};
     CHECK(pimax_lens_rs_compute(l, 1, 0.5f, 0.5f, again) == 0);
     for (int i = 0; i < 6; i++) {

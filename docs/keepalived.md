@@ -23,6 +23,33 @@ Apache-2.0) on libpibridge-hmd. Sources in `tools/keepalived/`; the state machin
   once (a new followed process is taken in its current state, without the 5 s grace). `--rate-file` and `--no-wake`
   change only at the next start.
 
+## The original Pimax Crystal
+
+The original Crystal (`34a4:0012`, "P3B", `src/crystal.{h,cpp}`) has its own life next to the session above: it is
+switched on with its power button and speaks another protocol (1024-byte RPC frames on its HID interface 2,
+`libpibridge-hmd` `p3b.h`; only the frames Pimax Play sends, byte for byte from the Windows recording of 2026-10-22).
+
+- **Connect** when its hidraw appears: `screen_state 1`, `control_signal_restart_runtime 0`, `video 120`, the
+  Lighthouse properties, `setTobiiEyeDeviceEnable 1` (its eye tracker comes up on USB as `2104:0220`), then
+  `getConnectState` every 10 s. The `piPcSwicthIoctl` replies give the video link (`video link 2`: the panel shows the
+  PC's picture).
+- **Tracking mode** (`crystal_tracking` = `lighthouse` | `slam` | `keep` in `pibridge.conf`, the Dashboard's selector):
+  `EnableLighthouse 1` and 8 s later `LighthouseTakeEffect 1`, or `EnableLighthouse 0`. The mode it really runs comes
+  from its head reports (byte 113, flags of its own inside-out: 1 orientation, 2 position; 0 in Lighthouse mode).
+- **SteamVR and PiBridge** (`crystal_autostart_steamvr`): started once per connection, through `systemd-run --user
+  --scope` (out of this service's cgroup), not before 10 s after `video 120` (its DisplayPort replug) and in Lighthouse
+  mode not before its Lighthouse module (`28de:2300`) has been on USB for 3 s. A tracking change or the app's
+  `restart-steamvr` request (a new refresh rate) closes SteamVR (SIGTERM, SIGKILL after 10 s) and starts it again.
+- **Poses**: every head and controller report goes to `/dev/shm/pibridge-crystal-pose` (`libpibridge-hmd`
+  `pose_shm.h`), the headset clock mapped to `CLOCK_MONOTONIC`, the head's x-up space turned y up, the controllers'
+  buttons, touches, trigger, grip and stick with them. CustomHeadsetOpenVR's SLAM headset reads it.
+- **Sound**: while it is on, its microphone and its DisplayPort sound (the GPU audio card's port whose monitor is
+  "Pimax", the card profile switched to it and back) are the defaults; the output is looked for every 3 s until
+  SteamVR drives its display.
+- **Requests** from the app (`$XDG_RUNTIME_DIR/pibridge/crystal-request`): `shutdown`, `restart-steamvr`.
+- **Status**: `crystal_present`, `crystal_stage`, `crystal_lighthouse`, `crystal_tracked`, `crystal_battery`, and its live
+  IPD as `lens_ipd_x100`.
+
 ## Options
 
 Defaults come from `~/.config/pibridge/pibridge.conf` (`refresh_hz`, `follow`, `audio_to_headset`); flags
@@ -59,11 +86,13 @@ Lighthouse drop-in (`--video 90 --follow vrserver --audio`). The app starts, sto
 
 ## Tests
 
-`ctest -R pibridge_keepalived` (9 tests): the whole idle -> active -> idle cycle against the fake Crystal Super (one
+`ctest -R pibridge_keepalived` (29 tests): the whole idle -> active -> idle cycle against the fake Crystal Super (one
 rate-0 keepalive then silence; wake + rate at the start; the four video frames exactly after 2 s; audio switched and
 given back; status file contents), SIGTERM while busy (rate 0 is the last report, audio back), always-on, reconnect
-while busy, the Dream Air at 72 Hz with its own description, SIGHUP reloads, the 2 s status rewrite, and the option
-parsing. The followed process, pactl and sysfs are fakes; the status file goes to a temporary `XDG_RUNTIME_DIR`.
+while busy, the Dream Air at 72 Hz with its own description, SIGHUP reloads, the 2 s status rewrite, the option
+parsing, and the original Crystal against a fake link (connect frames, the Lighthouse switch both ways, SteamVR and
+the app only after the Lighthouse module and the DisplayPort settle, the restart for a tracking change or on request,
+the live tracking flags, its sound taken when the output shows up and given back, the Lighthouse module in a fake sysfs). The followed process, pactl and sysfs are fakes; the status file goes to a temporary `XDG_RUNTIME_DIR`.
 
 ## Not ported
 

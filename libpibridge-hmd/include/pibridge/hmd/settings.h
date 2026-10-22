@@ -29,6 +29,11 @@ struct Settings {
     /// Path of the eye profile; empty = the default path.
     std::string eye_profile;
     bool eye_flip_x = true;
+    /// The original Crystal (P3B): the tracking it is switched to when it connects: "lighthouse" (the faceplate,
+    /// SteamVR's lighthouse driver + CustomHeadsetOpenVR), "slam" (its own inside-out tracking) or "keep" (as it is).
+    std::string crystal_tracking = "lighthouse";
+    /// The original Crystal: start SteamVR when the headset connects (it is switched on with its own button).
+    bool crystal_autostart_steamvr = true;
 
     /// Bad lines and values, in plain words with their line number.
     std::vector<std::string> warnings;

@@ -1,6 +1,7 @@
-# The C ABI this directory implements, pinned (docs/research/rust-port-plan.md, M0).
-# Spec: omarchyvr (MIT OR Apache-2.0), commit below; the headers in include/ are verbatim copies of these files at
-# that commit, checked by include/SHA256SUMS (test monado_abi_headers).
+# The C ABI this directory implements (docs/research/rust-port-plan.md, M0).
+# Spec: omarchyvr (MIT OR Apache-2.0), commit below; the headers in include/ started as copies of these files at that
+# commit and are PiBridge's own since (comments, PIMAX_CAM_FLAG_NO_DEV_TIME, pimax_ipd_poll_request); include/SHA256SUMS
+# pins the current ones (test monado_abi_headers). The commit also goes into the PIBRIDGE_PIMAX_ABI marker string.
 commit 5ffbcc5
 pimax.h          libpimax/include/pimax.h
 pimax_hands.h    rust/pimax-hands/include/pimax_hands.h

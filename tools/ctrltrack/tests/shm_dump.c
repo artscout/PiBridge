@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Read a pose file through Monado's own reader (pimax_ctrltrack_shm.h of the Pimax driver, included from the
-// omarchyvr checkout, not copied) and print what Monado sees: per hand whether it was ever seen and every field as
+// Read a pose file through Monado's own reader (pimax_ctrltrack_shm.h of the Pimax driver, included from
+// third_party/monado, not copied) and print what Monado sees: per hand whether it was ever seen and every field as
 // exact hex floats. The times (frame_ns, publish_ns) are clock values of the run, so only "seen" is printed. Then the
 // header and the heartbeat fields that do not depend on timing.
 #include "pimax_ctrltrack_shm.h"

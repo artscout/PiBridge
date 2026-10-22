@@ -32,8 +32,15 @@ inline constexpr std::uint8_t EP_BULK_OUT = 0x05;
 inline constexpr std::uint8_t EP_BULK_IN = 0x83;
 /// USB vendor id of the EyeChip.
 inline constexpr std::uint16_t EYE_VID = 0x2104;
-/// USB product id of the EyeChip.
+/// USB product id of the EyeChip (Dream Air, Crystal Super).
 inline constexpr std::uint16_t EYE_PID = 0x0561;
+/// USB product id of the eye tracker of the original Crystal (P3B, platform VR4PIMAXP3B). It speaks the same TTP on the
+/// same endpoints (Windows capture 2026-10-22: one vendor interface, bulk 0x83 IN / 0x04 / 0x05 OUT, the same vendor
+/// control requests, gaze stream 0x0505 in 1242-byte frames with the same 35 fields) and needs its own start list
+/// (frames::p3b_list).
+inline constexpr std::uint16_t EYE_PID_P3B = 0x0220;
+/// Whether `pid` (vendor EYE_VID) is one of the eye chips above.
+constexpr bool is_eye_pid(std::uint16_t pid) { return pid == EYE_PID || pid == EYE_PID_P3B; }
 
 /// What the captured response to a request looked like.
 struct Expect {

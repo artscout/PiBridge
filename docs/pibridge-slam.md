@@ -63,22 +63,15 @@ tracking better: prediction error against the tracker at display time (by head t
 removed), jitter at rest and moving, mark error between the protocol's mark steps (`--steps`: the recorder's
 `steps.json`), creep at rest, tilt error against gravity (`--calib`: the accel bias for that reference and the 3DoF
 gyro bias; else the driver's cache), losses / resets / re-zeros, drift held, CPU per query. The replay is the one of
-monado-abi's difftest (`slam_difftest replay`); every `PIMAX_SLAM_*` / `PIBRIDGE_HEAD_PARITY` switch is read from the
+monado-abi's former SLAM difftest; every `PIMAX_SLAM_*` / `PIBRIDGE_HEAD_PARITY` switch is read from the
 environment as in Monado. Method and results: `docs/research/head-tracking-improvements.md`.
 
 ## Tests
 
 - `pibridge_slam_export` (`tests/test_export.cpp`): twins of the 4 `export.rs` tests (the lab-data one runs on the
   shipped reference), the `imu.rs` test and the load part of the `euroc.rs` test, plus the paths.toml reader.
-- `pibridge_slam_export_*`: `pibridge-slam export` against `omarchyvr-slam export` of the pinned commit
-  (`${PIBRIDGE_RUST_ORACLE_DIR}/omarchyvr-slam`), stdout + exit status + every file written, through
-  `monado-abi/difftest/run_difftest.sh` in a scratch HOME: the reference calibration with 2 and 4 cameras, offsets,
-  biases, the GUI flag, the gyro bias from each cache (new, `XDG_CACHE_HOME`, legacy, implausible), a Basalt tree via
-  `paths.toml` and via `PIMAX_SRC_DIR`, the msdmo fallback, `--base` / `--imu` / `PIMAX_SLAM_IMU`, 14 error cases,
-  `--bias-from` on a recorded dataset (lab data), the default calibration search, and the Crystal's own XML (lab data,
-  compared by SHA-256 only, `--hash`).
-- `pibridge_slam_export_ae_*`: `pibridge-slam ae` against `omarchyvr-slam ae` on `first`, `ctrl1`, `ctrl2.pxcam` (lab data)
-  for both models, `--frames`, model spellings, and 6 error cases.
+- The difftests of `pibridge-slam export` / `ae` against `omarchyvr-slam` (`pibridge_slam_export_*`) were removed with
+  the oracle once the port was finished (2026-10-22).
 
 The files of the session's `~/gamedev/ext/slam/` (written by omarchyvr's working tree on 2026-10-19) match the
 port's export of the Crystal XML except where their inputs differ: the gyro bias seed (that day's cache) and the

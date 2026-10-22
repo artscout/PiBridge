@@ -38,8 +38,7 @@ The patches:
 | File | What it does |
 |---|---|
 | `595.99.02/0001-nvidia-dp-fec-reread.patch`, `595.99.02/series` | The only driver change the Crystal Super needs on RTX 50 |
-| `make_crystal_edid.py` | Makes the EDID override from the headset's own EDID: 8 bpc instead of "undefined", plus a Microsoft VSDB (non-desktop VR headset) |
-| `install-nvidia.sh` | As root: installs the patched, signed modules, the EDID override and an initramfs hook (Ubuntu/Debian initramfs-tools) |
+| `install-nvidia.sh` | As root: installs the patched, signed modules (refused when their version is not the NVIDIA libraries') and runs `tools/headset-edid/pibridge-headset-edid apply` for the EDID override; rebuilds the initramfs (Ubuntu/Debian initramfs-tools) |
 | `uninstall-nvidia.sh` | As root: back to the distribution's driver |
 
 Why the patch is needed. The Crystal Super's only modes are 7104x3840 at 90 Hz (2564 MHz) and 72 Hz (2028 MHz). Its
@@ -54,7 +53,9 @@ lists no mode for the headset ("Mode is rejected: DP Bandwidth check failed"), b
    patch adds the check.
 
 A second fix is needed outside the driver: the headset's EDID says "colour depth undefined" (base block byte 20 =
-0x85), NVKMS then validates at 6 bpc and DSC refuses 6 bpc. `make_crystal_edid.py` makes an EDID override with 8 bpc.
+0x85), NVKMS then validates at 6 bpc and DSC refuses 6 bpc. `tools/headset-edid/` makes the EDID override with 8 bpc
+and the non-desktop VR headset flag, for every driver version (the original Crystal reports 8 bpc already, but lacks
+the flag, so the desktop extends onto it).
 
 Left out on purpose: debug prints, the 2Heads1OR changes (never reached on Blackwell) and a DSC slice height module
 parameter (240-line slices instead of the automatic choice changed nothing visible).
@@ -96,14 +97,15 @@ the EDID override: [docs/INSTALL.md](../../docs/INSTALL.md), section 5.2.
 
 ## Install and uninstall (Crystal Super on RTX 50, Ubuntu/Debian)
 
-`sudo blackwell/install-nvidia.sh WORKDIR` (WORKDIR holds `modules/*.ko`, `mok/MOK.der`, `edid/crystal-edid.bin`;
-the headset must be awake) puts the signed modules into `/lib/modules/<kernel>/updates/omarchyvr-nvidia`, the EDID
-override into `/etc/omarchyvr/`, the module options into `/etc/modprobe.d/omarchyvr-nvidia.conf`, an initramfs hook
-into `/etc/initramfs-tools/hooks/omarchyvr-edid`, and rebuilds the initramfs. Reboot afterwards.
-`sudo blackwell/uninstall-nvidia.sh [kernel version]` removes all of it and rebuilds the initramfs; if a boot hangs,
-pick another kernel in GRUB's "Advanced options" and run it there with the hung kernel's version. The names stay
-omarchyvr's (`omarchyvr-nvidia`, signer `omarchyvr local NVIDIA module signing`), so an install made from omarchyvr
-and one made from here are the same and either uninstall script removes it.
+`sudo blackwell/install-nvidia.sh WORKDIR` (WORKDIR holds `modules/*.ko` and `mok/MOK.der`; the headset must be on)
+puts the signed modules into `/lib/modules/<kernel>/updates/pibridge-nvidia`, has `pibridge-headset-edid apply` write
+the EDID override (`/etc/pibridge/`, the module options in `/etc/modprobe.d/pibridge-nvidia.conf`, an initramfs hook
+`/etc/initramfs-tools/hooks/pibridge-edid` when nvidia-modeset loads from the initramfs), and rebuilds the initramfs.
+Reboot afterwards. `sudo blackwell/uninstall-nvidia.sh [kernel version]` removes all of it and rebuilds the
+initramfs; if a boot hangs, pick another kernel in GRUB's "Advanced options" and run it there with the hung kernel's
+version. An install made by omarchyvr's scripts (`omarchyvr-nvidia`, `/etc/omarchyvr/`, `omarchyvr-nvidia.conf`, the
+`omarchyvr-edid` hook) is replaced by `install-nvidia.sh` and removed by `uninstall-nvidia.sh`. The signing key keeps
+omarchyvr's name (`omarchyvr local NVIDIA module signing`), so keys enrolled for omarchyvr work.
 
 ### The debug option
 
@@ -111,7 +113,7 @@ and one made from here are the same and either uninstall script removes it.
 decisions (mode validation, link training, DSC) to the kernel log. Use it only to diagnose a rejected mode, and do not
 leave it on: it fills the kernel log and, with a tree that carries extra prints, the boot screen (tens of thousands of
 lines), which slows the boot and buries real errors. To turn it off run `install-nvidia.sh` again without `--debug`:
-it rewrites `/etc/modprobe.d/omarchyvr-nvidia.conf` without `debug=1` (or removes the file when no option is left)
+it rewrites `/etc/modprobe.d/pibridge-nvidia.conf` without `debug=1` (or removes the file when no option is left)
 and rebuilds the initramfs.
 
 ## Licence and credit

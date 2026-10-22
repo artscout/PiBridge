@@ -233,7 +233,7 @@ bool wait_until(T pred, int ms = 2000) {
 TEST(every_header_function_is_exported) {
     const auto syms = defined_globals();
     const auto lib = header_functions("pimax.h", "pimax_");
-    CHECK(lib.size() == 17); // 14 of the C library + 3 haptics
+    CHECK(lib.size() == 18); // 14 of the C library + 3 haptics + the IPD motor request
     for (const auto& n : lib) {
         if (!exported(syms, n)) {
             std::fprintf(stderr, "missing export %s\n", n.c_str());

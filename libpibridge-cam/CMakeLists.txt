@@ -7,12 +7,11 @@ find_package(ZLIB REQUIRED)
 find_package(JPEG REQUIRED)   # the Motion-JPEG profile of the Crystal Super tracking cameras (src/jpeg.cpp)
 find_package(Threads REQUIRED)
 
-# Parity data (read only; the tests that need them are skipped without them). Relative to the source tree, no home
-# paths: PiBridge, omarchyvr and the lab data folder (ext) sit next to each other.
+# Test data (read only; the tests that need them are skipped without them). Relative to the source tree, no home
+# paths: PiBridge, an omarchyvr checkout (only for its public capture fixtures) and the lab data folder (ext) sit next
+# to each other.
 set(PIBRIDGE_OMARCHYVR_DIR "${PROJECT_SOURCE_DIR}/../omarchyvr" CACHE PATH
-    "omarchyvr checkout (read only): the pinned headers and the Rust oracle are taken from it")
-set(PIBRIDGE_RUST_ORACLE_DIR "${PIBRIDGE_OMARCHYVR_DIR}/rust/target-port2/release" CACHE PATH
-    "Rust oracle build of the pinned commit (libpimax_cam.a, pimax-cam; monado-abi/difftest/build-oracle.sh)")
+    "omarchyvr checkout (read only, optional): the public capture fixtures some tests read (rust/fixtures)")
 set(PIBRIDGE_LAB_CAM_DIR "${PROJECT_SOURCE_DIR}/../ext/cam" CACHE PATH
     "Recorded camera streams (*.pxcam, private lab data, read only)")
 set(PIBRIDGE_LAB_CALIB_DIR "${PROJECT_SOURCE_DIR}/../ext/calib" CACHE PATH

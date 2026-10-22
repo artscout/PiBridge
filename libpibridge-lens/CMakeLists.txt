@@ -5,9 +5,6 @@
 
 find_package(ZLIB REQUIRED)
 
-set(PIBRIDGE_LAB_LENS_DIR "${PROJECT_SOURCE_DIR}/../ext/lens" CACHE PATH
-    "Lens configurations and LUTs of the lab headsets (crystal.conf, crystal-lut.bin; private, read only)")
-
 # The Dream Air reference lens profile (devices/dream-air/reference/lens.conf), embedded like the Rust include_str!.
 set(PIBRIDGE_LENS_REFERENCE_CONF "${PIBRIDGE_SOURCE_DEVICES_DIR}/dream-air/reference/lens.conf" CACHE INTERNAL
     "the embedded reference lens profile")

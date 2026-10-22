@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // The app's read-only reader of the gaze shared memory /dev/shm/pibridge-eye-gaze (136 bytes, magic "OVEG",
-// seqlock; layout of omarchyvr pimax-eye/src/shm.rs and linux/crystal-super/omarchyvr_eye_gaze.h). The app only
+// seqlock; layout of libpibridge-eye/include/pibridge/eye/shm.h and patches/chovr/pibridge_eye_gaze.h). The app only
 // reads it for the live dot on the dashboard; it never creates or writes it.
 #pragma once
 
