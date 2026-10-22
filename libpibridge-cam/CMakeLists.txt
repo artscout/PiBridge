@@ -4,6 +4,7 @@
 # pimax-cam (MIT OR Apache-2.0). No Qt: Monado links it through monado-abi (libpibridge_pimax.a).
 
 find_package(ZLIB REQUIRED)
+find_package(JPEG REQUIRED)   # the Motion-JPEG profile of the Crystal Super tracking cameras (src/jpeg.cpp)
 find_package(Threads REQUIRED)
 
 # Parity data (read only; the tests that need them are skipped without them). Relative to the source tree, no home
@@ -63,6 +64,7 @@ add_library(pibridge_cam_obj OBJECT
     src/source.cpp
     src/record.cpp
     src/v4l2.cpp
+    src/jpeg.cpp
     src/resilient.cpp
     src/camera.cpp
     src/stats.cpp
@@ -77,16 +79,16 @@ add_library(pibridge_cam_obj OBJECT
 target_include_directories(pibridge_cam_obj PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(pibridge_cam_obj PUBLIC cxx_std_23)
 target_compile_options(pibridge_cam_obj PRIVATE ${PIBRIDGE_CAM_PARITY_FLAGS})
-target_link_libraries(pibridge_cam_obj PUBLIC ZLIB::ZLIB)
+target_link_libraries(pibridge_cam_obj PUBLIC ZLIB::ZLIB JPEG::JPEG)
 
 # The library for PiBridge's own tools and tests.
 add_library(pibridge_cam STATIC $<TARGET_OBJECTS:pibridge_cam_obj>)
 target_include_directories(pibridge_cam PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(pibridge_cam PUBLIC cxx_std_23)
-target_link_libraries(pibridge_cam PUBLIC ZLIB::ZLIB Threads::Threads)
+target_link_libraries(pibridge_cam PUBLIC ZLIB::ZLIB JPEG::JPEG Threads::Threads)
 
 if(PIBRIDGE_BUILD_TESTS)
-    foreach(t rustfmt frame clock geom kb4 xml calib json overlay record stats camera resilient v4l2 broker
+    foreach(t rustfmt frame clock geom kb4 xml calib json overlay record stats camera resilient v4l2 jpeg broker
             slam headpose headpibridge drift imulog ae)
         add_executable(pibridge_cam_test_${t} tests/test_${t}.cpp)
         target_link_libraries(pibridge_cam_test_${t} PRIVATE pibridge_cam pibridge_common)

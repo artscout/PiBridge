@@ -3,6 +3,8 @@
 #include "pibridge/cam/v4l2.h"
 
 #include "pibridge/cam/clock.h"
+#include "pibridge/cam/frame.h"
+#include "pibridge/cam/jpeg.h"
 #include "pibridge/cam/rustfmt.h"
 
 #include <algorithm>
@@ -183,16 +185,35 @@ Result<std::unique_ptr<V4l2Capture>> V4l2Capture::open(const std::string& path, 
         return fail(r.error());
     }
     pix = fmt.fmt.pix;
+    bool jpeg = false;
     if (pix.pixelformat != PIX_FMT_YUYV || pix.width != 1280 || pix.height != 832) {
-        return fail(IoError::other(std::format("driver chose {:#x} {}x{}, expected YUYV 1280x832", pix.pixelformat,
-                                               pix.width, pix.height)));
+        // A 480 Mbps USB link (a 2.0 port or hub) makes the cameras report Motion-JPEG only. Its luma plane is the two
+        // tracking cameras side by side, so the stream stays usable: advance() decodes each buffer into the
+        // canonical frame instead of reading it straight out of the mmap.
+        std::memset(&fmt.fmt, 0, sizeof fmt.fmt);
+        pix = v4l2_pix_format{};
+        pix.width = 1280;
+        pix.height = 832;
+        pix.pixelformat = PIX_FMT_MJPG;
+        pix.field = V4L2_FIELD_NONE;
+        fmt.fmt.pix = pix;
+        if (auto r = xioctl(f, VIDIOC_S_FMT, &fmt); !r) {
+            return fail(r.error());
+        }
+        pix = fmt.fmt.pix;
+        if (pix.pixelformat != PIX_FMT_MJPG || pix.width != 1280 || pix.height != 832) {
+            return fail(IoError::other(
+                std::format("driver chose {:#x} {}x{}, expected YUYV or MJPEG 1280x832", pix.pixelformat, pix.width,
+                            pix.height)));
+        }
+        jpeg = true;
     }
 
     std::vector<double> offered;
     for (std::uint32_t i = 0; i < 16; i++) {
         v4l2_frmivalenum e{};
         e.index = i;
-        e.pixel_format = PIX_FMT_YUYV;
+        e.pixel_format = jpeg ? PIX_FMT_MJPG : PIX_FMT_YUYV;
         e.width = 1280;
         e.height = 832;
         if (!xioctl(f, VIDIOC_ENUM_FRAMEINTERVALS, &e)) {
@@ -255,6 +276,12 @@ Result<std::unique_ptr<V4l2Capture>> V4l2Capture::open(const std::string& path, 
     c->info.sizeimage = pix.sizeimage;
     c->info.fps = got_fps;
     c->info.offered_fps = offered;
+    c->info.jpeg = jpeg;
+    if (jpeg) {
+        c->grey_.resize(FRAME_H * 1280);
+        // Tiles 2 and 3 (the controller-LED cameras of the raw stream) get no pixels in this profile and stay zero.
+        c->canon_.assign(FRAME_BYTES, 0);
+    }
     for (std::uint32_t i = 0; i < c->maps_.size(); i++) {
         if (auto r = c->queue(i); !r) {
             return fail(r.error());
@@ -311,7 +338,8 @@ Result<bool> V4l2Capture::advance(int timeout_ms) {
             }
             return fail(d.error());
         }
-        const std::size_t need = info.sizeimage;
+        // A JPEG is shorter than sizeimage (which is the size of the uncompressed frame).
+        const std::size_t need = info.jpeg ? 2 : info.sizeimage;
         if ((b.flags & V4L2_BUF_FLAG_ERROR) != 0 || b.bytesused < need || b.index >= maps_.size()) {
             corrupt++;
             if (b.index < maps_.size()) {
@@ -328,6 +356,25 @@ Result<bool> V4l2Capture::advance(int timeout_ms) {
             non_monotonic_ts++;
         }
         const Mapping& m = maps_[b.index];
+        if (info.jpeg) {
+            // Decode here, so current() can never fail on a buffer the caller already got back.
+            const std::span<const std::uint8_t> at(static_cast<const std::uint8_t*>(m.ptr),
+                                                   std::min<std::size_t>(b.bytesused, m.len));
+            std::uint32_t dw = 0, dh = 0;
+            if (!decode_grey_jpeg(at, grey_, dw, dh) || dw != 1280 || dh != FRAME_H) {
+                corrupt++;
+                if (auto q = queue(b.index); !q) {
+                    return fail(q.error());
+                }
+                if (monotonic_ns() >= deadline) {
+                    return false;
+                }
+                continue;
+            }
+            for (std::size_t y = 0; y < FRAME_H; y++) {
+                std::memcpy(canon_.data() + y * FRAME_W, grey_.data() + y * dw, dw);
+            }
+        }
         held_ = Held{b.index, std::min<std::size_t>(b.bytesused, m.len),
                      static_cast<std::uint64_t>(b.timestamp.tv_sec) * 1'000'000'000ull +
                          static_cast<std::uint64_t>(b.timestamp.tv_usec) * 1000ull,
@@ -340,6 +387,9 @@ std::optional<RawFrame> V4l2Capture::current() const {
     if (!held_) {
         return std::nullopt;
     }
+    if (info.jpeg) {
+        return RawFrame{std::span<const std::uint8_t>(canon_), FRAME_W, held_->host_ts_ns, held_->sequence};
+    }
     const Mapping& m = maps_[held_->index];
     return RawFrame{std::span<const std::uint8_t>(static_cast<const std::uint8_t*>(m.ptr), held_->len),
                     info.bytesperline, held_->host_ts_ns, held_->sequence};
@@ -347,9 +397,9 @@ std::optional<RawFrame> V4l2Capture::current() const {
 
 std::string V4l2Capture::describe() const {
     std::vector<double> o = info.offered_fps;
-    return std::format("{} ({}, {}, {}) {}x{} YUYV bpl {} size {} at {} fps (offered {})", rfmt::utf8_lossy(info.path),
-                       info.driver, info.card, info.bus, info.width, info.height, info.bytesperline, info.sizeimage,
-                       rfmt::fixed(info.fps, 2), rfmt::debug_f64s(o));
+    return std::format("{} ({}, {}, {}) {}x{} {} bpl {} size {} at {} fps (offered {})", rfmt::utf8_lossy(info.path),
+                       info.driver, info.card, info.bus, info.width, info.height, info.jpeg ? "MJPEG/grey" : "YUYV",
+                       info.bytesperline, info.sizeimage, rfmt::fixed(info.fps, 2), rfmt::debug_f64s(o));
 }
 
 V4l2Capture::~V4l2Capture() {

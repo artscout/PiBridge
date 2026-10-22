@@ -11,8 +11,8 @@
 // Protocol PXCB v1, byte-compatible with the Rust broker in both directions (Unix SOCK_SEQPACKET socket, default
 // $XDG_RUNTIME_DIR/omarchyvr-cam-broker.sock, else /tmp/omarchyvr-cam-broker-<uid>.sock):
 // * on connect the server sends one hello datagram (Hello) with the ring's memfd attached (SCM_RIGHTS):
-//   magic "PXCB", then u32 LE version 1, slots, slot_bytes, data_bytes, flags (FLAG_REPLAY = 1), desc_len, then
-//   desc (<= 200 bytes);
+//   magic "PXCB", then u32 LE version 1, slots, slot_bytes, data_bytes, flags (FLAG_REPLAY = 1, FLAG_PROFILE_JPEG2 = 2),
+//   desc_len, then desc (<= 200 bytes);
 // * then one 8-byte datagram per published frame: its index k (u64 LE); the frame sits in slot k % slots.
 //
 // Ring: a 4096-byte header page ("PXCB", u32 version at 4; u64 at 64 = newest complete index + 1, 72 = frames
@@ -46,6 +46,9 @@ inline constexpr std::uint32_t VERSION = 1;
 inline constexpr std::uint32_t DEFAULT_SLOTS = 8;
 /// Hello flag: the server's source is a recording.
 inline constexpr std::uint32_t FLAG_REPLAY = 1;
+/// Hello flag: the server's frames are the Motion-JPEG two-tile profile (source.h StreamProfile::JpegTiles2), so
+/// clients read them the same way the broker does.
+inline constexpr std::uint32_t FLAG_PROFILE_JPEG2 = 2;
 /// Longest source description in a hello.
 inline constexpr std::size_t MAX_DESC = 200;
 
@@ -168,6 +171,10 @@ public:
     std::string describe() const override;
     bool finished() const override { return eof_ && is_replay(); }
     bool is_replay() const override { return (ring_->layout().flags & FLAG_REPLAY) != 0; }
+    StreamProfile profile() const override {
+        return (ring_->layout().flags & FLAG_PROFILE_JPEG2) != 0 ? StreamProfile::JpegTiles2
+                                                                 : StreamProfile::GreyTiles4;
+    }
     std::uint64_t generation() const override { return std::get<1>(ring_->camera()); }
     bool up() const override { return std::get<0>(ring_->camera()) != std::optional<bool>(false); }
 

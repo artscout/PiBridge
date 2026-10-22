@@ -89,6 +89,7 @@ public:
     bool finished() const override;
     std::uint64_t corrupt_frames() const override;
     bool is_replay() const override;
+    StreamProfile profile() const override;
     std::uint64_t generation() const override;
     bool up() const override;
 

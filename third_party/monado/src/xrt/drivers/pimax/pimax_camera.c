@@ -220,7 +220,7 @@ struct pimax_camera
 	struct u_sink_debug debug[PIMAX_CAM_TILES];
 
 	//! Stats (capture thread writes; u_var reads, races are harmless).
-	uint64_t frames, tracking_frames, pairs_pushed, imu_timed, errors, timeouts;
+	uint64_t frames, tracking_frames, pairs_pushed, imu_timed, host_timed, errors, timeouts;
 	float fps, tracking_fps;
 	int64_t win_start_ns;
 	uint64_t win_frames, win_tracking;
@@ -266,6 +266,8 @@ struct pimax_camera
 	uint64_t pt_acquired, pt_lost;
 	//! PIMAX_CTRL_ENGINE: the controller LED frames go to Pimax's LED engine (pimax_winbridge.h), camera thread only.
 	bool leds_on;
+	//! The Motion-JPEG profile of this firmware was seen on a frame (logged once).
+	bool jpeg_seen;
 	struct pimax_wb wb;
 	uint8_t *led_buf; //!< 4 tiles 640x480
 	uint64_t leds_pushed;
@@ -295,9 +297,18 @@ parse_u32_pair(const char *s, uint32_t out[2])
 }
 
 static uint64_t
-frame_time(struct pimax_camera *pc, const pimax_cam_frame_info *fi, bool *out_imu_timed)
+frame_time(struct pimax_camera *pc, const pimax_cam_frame_info *fi, bool *out_timed)
 {
-	*out_imu_timed = false;
+	*out_timed = false;
+	// The Motion-JPEG stream of a Crystal Super carries no device timestamp (its metadata block does not survive
+	// JPEG), so there is nothing to map: the host time of the frame is already on the monotonic timeline the IMU
+	// samples are mapped onto. Frame-to-IMU alignment then carries the USB delivery latency instead of the
+	// device-clock sync, which is what every other UVC camera driver lives with.
+	if ((fi->flags & PIMAX_CAM_FLAG_NO_DEV_TIME) != 0) {
+		pc->host_timed++;
+		*out_timed = true;
+		return fi->mono_ts_ns;
+	}
 	// A replay's device timestamps come from another session: use its rebased monotonic time instead.
 	if ((fi->flags & PIMAX_CAM_FLAG_REPLAY) == 0 && pc->clock != NULL) {
 		struct pimax_camera_clock_ref ref;
@@ -307,7 +318,7 @@ frame_time(struct pimax_camera *pc, const pimax_cam_frame_info *fi, bool *out_im
 			uint64_t t = pimax_cam_dev_to_mono_ns(fi->dev_ts_us, &r);
 			if (t != 0) {
 				pc->imu_timed++;
-				*out_imu_timed = true;
+				*out_timed = true;
 				return t;
 			}
 		}
@@ -380,10 +391,15 @@ update_stats(struct pimax_camera *pc, int64_t now)
 	pc->tracking_fps = (float)(pc->win_tracking / dt);
 	pimax_cam_stats st = {0};
 	pimax_cam_get_stats(pc->cam, &st);
+	// Only the Motion-JPEG profile counts here; the note stays out of the line otherwise.
+	char host_note[48] = "";
+	if (pc->host_timed != 0) {
+		snprintf(host_note, sizeof host_note, ", %" PRIu64 " host-timed", pc->host_timed);
+	}
 	CAM_INFO(pc,
 	         "camera: %.2f fps (tracking %.2f), total %" PRIu64 " frames, lost %" PRIu64 ", corrupt %" PRIu64
 	         ", IMU-timed %" PRIu64 ", Mercury pairs pushed %" PRIu64 "%s",
-	         pc->fps, pc->tracking_fps, st.frames, st.dropped, st.corrupt, pc->imu_timed, pc->pairs_pushed, "");
+	         pc->fps, pc->tracking_fps, st.frames, st.dropped, st.corrupt, pc->imu_timed, pc->pairs_pushed, host_note);
 	if (pc->slam_on || pc->record_on) {
 		CAM_INFO(pc,
 		         "slam: %" PRIu64 " frame sets, %" PRIu64 " IMU samples (%" PRIu64 " held from the tracker in %" PRIu64
@@ -1170,8 +1186,19 @@ capture_thread(void *ptr)
 		consecutive_errors = 0;
 		pc->frames++;
 		pc->win_frames++;
-		bool imu_timed = false;
-		uint64_t ts = frame_time(pc, &fi, &imu_timed);
+		if ((fi.flags & PIMAX_CAM_FLAG_NO_DEV_TIME) != 0 && !pc->jpeg_seen) {
+			pc->jpeg_seen = true;
+			CAM_INFO(pc, "camera: Motion-JPEG profile (a 480 Mbps USB link): tiles 0 and 1 only, no controller-LED "
+			           "exposure, frames timed on the host clock");
+			if (pc->ae != NULL) {
+				// The controller steers on the exposure and gain reported by the metadata; this profile has neither.
+				CAM_INFO(pc, "camera: auto-exposure off, the Motion-JPEG profile reports no exposure or gain");
+				pimax_cam_ae_destroy(pc->ae);
+				pc->ae = NULL;
+			}
+		}
+		bool timed = false;
+		uint64_t ts = frame_time(pc, &fi, &timed);
 		pc->last_frame_ts = (int64_t)ts;
 
 		// Debug GUI: every tile of every frame (tracking and LED exposure).
@@ -1217,7 +1244,7 @@ capture_thread(void *ptr)
 		if (want_ht) {
 			need[pc->ht_cams[0]] = need[pc->ht_cams[1]] = true;
 		}
-		if (want_slam && imu_timed) {
+		if (want_slam && timed) {
 			for (uint32_t i = 0; i < pc->slam_n; i++) {
 				need[pc->slam_cams[i]] = true;
 			}
@@ -1236,7 +1263,7 @@ capture_thread(void *ptr)
 #endif
 			pc->pairs_pushed++;
 		}
-		if (want_slam && imu_timed) {
+		if (want_slam && timed) {
 			push_slam_frames(pc, tiles, (int64_t)ts, fi.exposure);
 		}
 		for (uint32_t t = 0; t < PIMAX_CAM_TILES; t++) {

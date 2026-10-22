@@ -229,6 +229,10 @@ bool Resilient::is_replay() const {
     return inner_ && inner_->is_replay();
 }
 
+StreamProfile Resilient::profile() const {
+    return inner_ ? inner_->profile() : StreamProfile::GreyTiles4;
+}
+
 std::uint64_t Resilient::generation() const {
     const std::uint64_t inner = inner_ ? inner_->generation() : 0;
     const std::uint64_t opens = health_.opens > 0 ? health_.opens - 1 : 0;

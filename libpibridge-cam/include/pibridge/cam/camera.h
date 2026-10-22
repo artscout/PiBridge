@@ -23,7 +23,16 @@ inline constexpr std::uint32_t FLAG_META_VALID = 1;
 inline constexpr std::uint32_t FLAG_ROWS_SCANNED = 2;
 /// Frame info flag: frame comes from a recording.
 inline constexpr std::uint32_t FLAG_REPLAY = 4;
+/// Frame info flag: the stream carries no device timestamp for this frame (the Motion-JPEG profile of the Crystal
+/// Super: its metadata block does not survive JPEG). dev_ts_us and counter are then 0 and mono_ts_ns is the host
+/// CLOCK_MONOTONIC time of the frame.
+inline constexpr std::uint32_t FLAG_NO_DEV_TIME = 8;
 
+/// A Motion-JPEG frame whose tiles start above this row comes from the short-exposure (controller-LED) window. The
+/// firmware runs its two exposure programs alternately and they read out from different rows: the raw stream's
+/// metadata reports 278 for the tracking window and 10 for the LED one (pimax_cam.h), while a Crystal Super MJPEG
+/// stream shows 96 and 9, so the two are told apart by which part of the sensor they start in.
+inline constexpr std::uint16_t LED_WINDOW_MAX_ROW = 48;
 /// Per-frame result (the layout of the C struct pimax_cam_frame_info).
 struct FrameInfo {
     /// Host CLOCK_MONOTONIC ns when the driver saw the frame (V4L2 timestamp; rebased for replays).

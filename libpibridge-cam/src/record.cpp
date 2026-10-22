@@ -84,7 +84,8 @@ Result<void> write_all(std::FILE* f, const void* p, std::size_t n) {
  */
 
 Result<std::unique_ptr<Recorder>> Recorder::create(const std::string& path, std::size_t stride,
-                                                   std::optional<std::uint8_t> compress_level) {
+                                                   std::optional<std::uint8_t> compress_level,
+                                                   StreamProfile profile) {
     std::FILE* f = std::fopen(path.c_str(), "wbe");
     if (f == nullptr) {
         return fail(IoError::last_os());
@@ -102,6 +103,7 @@ Result<std::unique_ptr<Recorder>> Recorder::create(const std::string& path, std:
     put16(h + 14, static_cast<std::uint16_t>(FRAME_H));
     put32(h + 16, static_cast<std::uint32_t>(stride));
     put32(h + 20, compress_level ? 1u : 0u);
+    put32(h + 24, static_cast<std::uint32_t>(profile));
     if (auto w = write_all(f, h, HDR_LEN); !w) {
         return fail(w.error());
     }
@@ -176,8 +178,8 @@ Result<std::pair<std::uint64_t, std::uint64_t>> Recorder::finish() {
 
 Result<std::unique_ptr<AsyncRecorder>> AsyncRecorder::start(const std::string& path, std::size_t stride,
                                                              std::optional<std::uint8_t> compress_level,
-                                                             std::size_t depth) {
-    auto rec = Recorder::create(path, stride, compress_level);
+                                                             std::size_t depth, StreamProfile profile) {
+    auto rec = Recorder::create(path, stride, compress_level, profile);
     if (!rec) {
         return fail(rec.error());
     }
@@ -315,6 +317,9 @@ Result<std::unique_ptr<Reader>> Reader::open(const std::string& path) {
         }
     }
     r->stride = stride;
+    r->profile = rd32(h + 24) == static_cast<std::uint32_t>(StreamProfile::JpegTiles2)
+                     ? StreamProfile::JpegTiles2
+                     : StreamProfile::GreyTiles4;
     r->flags = rd32(h + 20);
     return r;
 }

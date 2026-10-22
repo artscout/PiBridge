@@ -3,7 +3,8 @@
 The Pimax tracking cameras (UVC `34a4:0014`, four OV7251 fisheye cameras in one 2560x832 grey stream): frame layout
 and metadata, V4L2 capture, `.pxcam` recording and replay, the camera broker (PXCB v1), the self-healing live source,
 the factory calibration (KB4 intrinsics, rig and body extrinsics), the device-to-monotonic clock, the capture
-statistics, and the 6DoF support Monado links: the Basalt calibration export, the tracker supervisor, the head pose
+statistics, the stream profiles (the grey four-tile stream and the Motion-JPEG two-tile stream of a Crystal Super
+firmware), and the 6DoF support Monado links: the Basalt calibration export, the tracker supervisor, the head pose
 output layer (IMU-rate prediction, blended corrections, still hold and re-zero, gravity tilt, exact freeze, drift
 governor), the head IMU log and the camera auto-exposure (Dream Air and Crystal Super models). Ported from omarchyvr
 `rust/pimax-cam` (MIT OR Apache-2.0) at commit `5ffbcc5` (`monado-abi/spec.txt`; M1, M2 and M4 were ported at
@@ -13,7 +14,7 @@ twins here. Milestones M1, M2, M3 and M4 of `docs/research/rust-port-plan.md`.
 CMake targets `pibridge_cam_obj` (objects) and `pibridge_cam` (static, for PiBridge's tools and tests), namespace
 `pibridge::cam::`, headers in `libpibridge-cam/include/pibridge/cam/`. No Qt: Monado links these objects through
 `monado-abi` (`libpibridge_pimax.a`, `docs/monado-abi.md`). Dependencies: zlib (required: compressed `.pxcam` records),
-pthreads, `<linux/videodev2.h>`.
+libjpeg (required: the Motion-JPEG stream profile, `src/jpeg.cpp`), pthreads, `<linux/videodev2.h>`.
 
 Built with `-ffp-contract=off -fno-fast-math -fwrapv` (no fused multiply-add, so every f64 result is the Rust one bit for
 bit; both use glibc's libm), `-fvisibility=hidden -fvisibility-inlines-hidden -fno-gnu-unique`. Every arithmetic
@@ -36,7 +37,8 @@ casts, `f64::min/max/clamp`, `to_radians`, `sum()` starting at -0.0 and its text
 | `io.h` | `IoError` (Rust `io::Error`: `text()` is its Display, "No such file or directory (os error 2)"), `Result<T>`, file helpers | std::io |
 | `source.h` | `Source`, `RawFrame`, `ReplayOptions`, `open_source` (spec: "", "auto", "/dev/videoN", "broker[:SOCKET]", a `.pxcam`), `open_once`, `is_broker_spec` | source.rs |
 | `record.h` | `.pxcam` `Recorder`, `AsyncRecorder` (writer thread, queue of 64, pool of 8), `Reader`, `Replay` (rebased host times, loop, realtime pacing) | record.rs |
-| `v4l2.h` | `V4l2Capture` (raw ioctls, mmap, 6 buffers), `find_device`, `pick_node` | v4l2.rs |
+| `v4l2.h` | `V4l2Capture` (raw ioctls, mmap, 6 buffers), `find_device`, `pick_node`; negotiates YUYV and falls back to Motion-JPEG (`DeviceInfo::jpeg`) | v4l2.rs |
+| `jpeg.h` | `looks_like_jpeg`, `decode_grey_jpeg` (libjpeg, luma plane only, no error output) | (new in PiBridge) |
 | `resilient.h` | `Resilient` (reopen after an error or a 5 s stall, backoff 0.25 s doubling to 2 s / 1 s), `Policy`, `reconnect_enabled` | resilient.rs |
 | `camera.h` | `Camera` (source -> metadata -> rows -> clock -> stats, recording), `FrameInfo` (= `pimax_cam_frame_info`), `Stats`, `TileView` | camera.rs |
 | `stats.h` | `Series`, `CaptureStats` and its `report()` (the `stats` text) | stats.rs |
@@ -47,6 +49,30 @@ casts, `f64::min/max/clamp`, `to_radians`, `sum()` starting at -0.0 and its text
 | `imulog.h` | `HeadImuLog` (`PIMAX_HEAD_IMU_LOG`, writer thread, bounded queue of 8192, minutes + flag file), `rotate` / keep dir, `parse` | imulog.rs |
 | `ae.h` | auto-exposure: `AeModel` (Dream Air / Crystal Super: ladders, gain codes, the Crystal's settings above the soft cap, power-on values, Windows' pair ranges, `model_allows`, `model_detect` from `PIMAX_CAM_AE_MODEL` or USB `34a4:0040`/`0044` in sysfs), `payload` / `parse_payload` (`58 19 51 00 01 32 ...`), `Histogram`, `scene_metric` (masked mean of the unclipped 16x16 cells), `is_good_frame` / `StepWatch`, `AeParams` (`for_model`, `old_law`, `from_env_model`: every `PIMAX_CAM_AE_*` override, `pair_caps`, `split_pair`, `fit_pair`), `LightGov` (extended range, low-light warning, clip-driven low stage), `AutoExposure` (`update`, `frame_stats`), the log texts (`model_line` = `PIMAX_AE_MODEL: ...`, `start_line`, `event_line`, the WayVR toast) | ae.rs, capi_ae.rs |
 | `rustfmt.h` | Rust's `{:?}`/`{}`/`{:.N}` of f64, `{:?}` of strings and slices, lossy UTF-8, `trim`/`split_whitespace`, `parse::<f64>()`, saturating casts | (Rust core) |
+
+## Stream profiles
+
+`Source::profile()` says what the frames of that source are packed as; every source hands `Camera` the same canonical
+2560x832 grey frame, so the ABI, the `.pxcam` format, the broker and the SLAM side do not change per profile.
+
+- `StreamProfile::GreyTiles4` — what the Rust code documents: the device reports YUYV 1280x832, every byte is one
+  grey pixel, so a frame is 2560 bytes wide and holds four 640x480 tiles, rows 0..7 the 96-byte metadata block.
+- `StreamProfile::JpegTiles2` — the same cameras over a link that came up at 480 Mbps (a USB 2.0 port or a 2.0 hub
+  in the chain): `34a4:0014` then exposes one 1280x832 MJPEG frame at 166666/200000 us and no YUYV, because YUYV is
+  2.1 MB a frame and does not fit. `V4l2Capture` negotiates MJPEG, decodes
+  each buffer, and copies its luma plane into the canonical frame, so tiles 0 and 1 (the two tracking cameras, side
+  by side in the luma plane) are real and tiles 2 and 3 are zero. What JPEG takes away, it cannot give back:
+  - the metadata block is gone with its exact bytes (it is picture data now, and 4:2:0 subsampling destroys the
+    chroma the outer cameras were folded into), so no device timestamp, no frame counter, no exposure and gain,
+    no metadata row offsets (hence `FLAG_NO_DEV_TIME`, and tile rows by scanning);
+  - the controller cameras are not in the stream at all.
+
+What does survive is the alternation of the two exposure programs: such a stream runs at 60 fps and the frames
+alternate between a tracking window starting at row 96 and a short (controller-LED) window starting at row 9 — the
+same pair the raw stream reports as `y_offset` 278 and 10. `Camera` picks the kind from that row
+(`LED_WINDOW_MAX_ROW`), which gives SLAM its 30 Hz of normal-exposure frames and leaves the LED half to the
+controller tracker. `Recorder` stores the profile in the `.pxcam` header (byte 24, zero in every file the Rust writer
+wrote), so a replay reads it back; the broker forwards it to clients in its hello flags (`FLAG_PROFILE_JPEG2`).
 
 ## PiBridge's 6DoF improvements (not in the Rust code)
 
@@ -113,7 +139,7 @@ Evaluated and off by default: the still re-zero back-off (`PIMAX_SLAM_STILL_BACK
 
 `ctest -R pibridge_cam_` runs the twins of the Rust unit tests of these modules (frame 6, clock 3, kb4 4, geom 3, xml 2,
 calib 7 + 1 PiBridge-only, json 3, overlay 5, record 4 + the 2 of `tests/replay.rs`, stats 1 + 1, camera 1, resilient 6,
-v4l2 3, broker 9 + the PXCB wire layout byte by byte, slam 15, headpose 21, drift 2, imulog 3, ae 27 + the 2 text tests of
+v4l2 3, jpeg 5 (JPEG -> grey, junk buffers, the profile through `Camera`, the recorded profile), broker 9 + the PXCB wire layout byte by byte, slam 15, headpose 21, drift 2, imulog 3, ae 27 + the 2 text tests of
 capi_ae.rs; plus `pibridge_cam_headpibridge`, 10 PiBridge-only cases of the improvements above) and the parity tests against the Rust tool
 (`pibridge_cam_tool_*`, `pibridge_cam_broker_cross`, see `docs/pibridge-cam.md`). The calibration twins read the embedded
 reference (the Rust fixture has the same numbers, only its `deviceUID` differs); so do the slam.rs tests that read
