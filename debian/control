@@ -13,6 +13,7 @@ Build-Depends:
  libgl-dev,
  libegl-dev,
  zlib1g-dev,
+ libjpeg-dev,
  patchelf,
 Standards-Version: 4.6.2
 Rules-Requires-Root: no
