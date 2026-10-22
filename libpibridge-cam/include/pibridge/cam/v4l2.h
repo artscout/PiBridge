@@ -19,6 +19,9 @@ inline constexpr std::string_view CAM_VID = "34a4";
 inline constexpr std::string_view CAM_PID = "0014";
 /// V4L2_PIX_FMT_YUYV.
 inline constexpr std::uint32_t PIX_FMT_YUYV = 0x5659'5559;
+/// V4L2_PIX_FMT_MJPEG (fourcc "MJPG"). A Crystal Super's tracking cameras report this format, and no YUYV, when
+/// their USB link runs at 480 Mbps (a USB 2.0 port or a hub in the chain).
+inline constexpr std::uint32_t PIX_FMT_MJPG = 0x4750'4a4d;
 
 /// Static facts about an opened device.
 struct DeviceInfo {
@@ -33,8 +36,11 @@ struct DeviceInfo {
     std::uint32_t sizeimage = 0;
     /// Negotiated frame interval as fps (0 if unknown).
     double fps = 0;
-    /// Frame intervals offered for YUYV at this size (fps).
+    /// Frame intervals offered for the negotiated format at this size (fps).
     std::vector<double> offered_fps;
+    /// MJPEG was negotiated: every buffer is one JPEG image and the frame comes from its luma plane (profile
+    /// JpegTiles2).
+    bool jpeg = false;
 };
 
 /// One /dev/videoN candidate for pick_node.
@@ -60,7 +66,8 @@ std::optional<std::string> find_device();
 /// An open, streaming capture device.
 class V4l2Capture final : public Source {
 public:
-    /// Open path, set YUYV 1280x832, request fps (0 = keep the driver default), map nbufs buffers, start streaming.
+    /// Open path, set YUYV 1280x832 (Motion-JPEG 1280x832 when the link runs at 480 Mbps), request fps (0 = keep
+    /// the driver default), map nbufs buffers, start streaming.
     static Result<std::unique_ptr<V4l2Capture>> open(const std::string& path, std::uint32_t fps, std::uint32_t nbufs);
     ~V4l2Capture() override;
 
@@ -68,6 +75,9 @@ public:
     std::optional<RawFrame> current() const override;
     std::string describe() const override;
     std::uint64_t corrupt_frames() const override { return corrupt; }
+    StreamProfile profile() const override {
+        return info.jpeg ? StreamProfile::JpegTiles2 : StreamProfile::GreyTiles4;
+    }
 
     /// What was negotiated.
     DeviceInfo info;
@@ -95,6 +105,10 @@ private:
     std::vector<Mapping> maps_;
     std::optional<Held> held_;
     bool streaming_ = false;
+    /// MJPEG mode: the decoded luma (1280x832) and the canonical frame it is repacked into (2560x832, tiles 2 and 3
+    /// stay zero). advance() fills both; current() only points at them.
+    std::vector<std::uint8_t> grey_;
+    std::vector<std::uint8_t> canon_;
 };
 
 } // namespace pibridge::cam

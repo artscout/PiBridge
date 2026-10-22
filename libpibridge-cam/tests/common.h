@@ -102,6 +102,8 @@ public:
     std::vector<std::pair<std::vector<std::uint8_t>, std::uint64_t>> frames;
     std::size_t pos = 0;
     std::optional<std::size_t> cur;
+    /// What the frames are packed as (a test of the Motion-JPEG profile sets this).
+    StreamProfile stream_profile = StreamProfile::GreyTiles4;
 
     Result<bool> advance(int) override {
         if (pos >= frames.size()) {
@@ -117,6 +119,7 @@ public:
         return RawFrame{frames[*cur].first, FRAME_W, frames[*cur].second, static_cast<std::uint32_t>(*cur)};
     }
     std::string describe() const override { return "vec"; }
+    StreamProfile profile() const override { return stream_profile; }
 };
 
 } // namespace pibridge::cam::testing

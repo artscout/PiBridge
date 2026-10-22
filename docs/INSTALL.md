@@ -18,17 +18,17 @@ IBM Plex fonts (the app's look; it falls back to Noto/DejaVu) are optional.
 
 Ubuntu / Debian:
 ```
-sudo apt install cmake ninja-build g++ qt6-base-dev libopenxr-dev zlib1g-dev fonts-ibm-plex
+sudo apt install cmake ninja-build g++ qt6-base-dev libopenxr-dev zlib1g-dev libjpeg-dev fonts-ibm-plex
 ```
 
 Arch:
 ```
-sudo pacman -S --needed cmake ninja gcc qt6-base openxr zlib ttf-ibm-plex
+sudo pacman -S --needed cmake ninja gcc qt6-base openxr zlib libjpeg-turbo ttf-ibm-plex
 ```
 
 Fedora:
 ```
-sudo dnf install cmake ninja-build gcc-c++ qt6-qtbase-devel openxr-devel zlib-devel ibm-plex-sans-fonts ibm-plex-mono-fonts
+sudo dnf install cmake ninja-build gcc-c++ qt6-qtbase-devel openxr-devel zlib-devel libjpeg-turbo-devel ibm-plex-sans-fonts ibm-plex-mono-fonts
 ```
 
 Check the compiler: `g++ --version` must say 13 or newer (Ubuntu 22.04 ships 11: install `g++-13` and add

@@ -59,7 +59,7 @@ The binary package stages the **prebuilt** Monado driver from
 ```sh
 # install build-deps once:
 sudo apt install cmake ninja-build g++ qt6-base-dev libopenxr-dev \
-     libvulkan-dev libgl-dev libegl-dev zlib1g-dev patchelf debhelper
+     libvulkan-dev libgl-dev libegl-dev zlib1g-dev libjpeg-dev patchelf debhelper
 
 # binary .deb (run heavy build nicely):
 cd ~/gamedev/pibridge
@@ -95,11 +95,11 @@ or Windows build outputs.)
 System packages to build the app and engine binaries:
 
 - **Ubuntu/Debian:**
-  `apt install cmake ninja-build g++ qt6-base-dev libopenxr-dev zlib1g-dev libvulkan-dev libgl-dev libegl-dev libopencv-dev ffmpeg mingw-w64 wine`
+  `apt install cmake ninja-build g++ qt6-base-dev libopenxr-dev zlib1g-dev libjpeg-dev libvulkan-dev libgl-dev libegl-dev libopencv-dev ffmpeg mingw-w64 wine`
 - **Arch:**
-  `pacman -S cmake ninja gcc qt6-base openxr zlib vulkan-icd-loader vulkan-headers opencv ffmpeg mingw-w64-gcc wine`
+  `pacman -S cmake ninja gcc qt6-base openxr zlib libjpeg-turbo vulkan-icd-loader vulkan-headers opencv ffmpeg mingw-w64-gcc wine`
 - **Fedora:**
-  `dnf install cmake ninja-build gcc-c++ qt6-qtbase-devel openxr-devel zlib-devel vulkan-loader-devel mesa-libGL-devel mesa-libEGL-devel opencv-devel ffmpeg mingw64-gcc-c++ wine`
+  `dnf install cmake ninja-build gcc-c++ qt6-qtbase-devel openxr-devel zlib-devel libjpeg-turbo-devel vulkan-loader-devel mesa-libGL-devel mesa-libEGL-devel opencv-devel ffmpeg mingw64-gcc-c++ wine`
 
 ```sh
 cmake -S . -B build-deb -G Ninja -DCMAKE_INSTALL_PREFIX=/usr \
