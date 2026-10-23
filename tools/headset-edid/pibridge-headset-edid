@@ -15,14 +15,18 @@ the headset's EDID: only outputs a Pimax was really seen on get one, and `forget
                       initramfs only when nvidia-modeset loads from it. Reboot afterwards
   forget <output>     (root) drops the override of an output (NVKMS name like DP-4, or DRM name like card1-DP-6)
   remove              (root) drops every override
-Files: /etc/pibridge/{nvidia-modeset.conf,pimax-edid.bin}, /etc/modprobe.d/pibridge-nvidia.conf,
-/etc/initramfs-tools/hooks/pibridge-edid, the headsets seen in /var/lib/pibridge/edid/. The same files under their
-omarchyvr names (an install made by omarchyvr's or an older PiBridge's install-nvidia.sh) are taken over and removed.
+  selftest            checks what it writes for the initrd on this system, no root, no hardware
+Files: /etc/pibridge/{nvidia-modeset.conf,pimax-edid.bin}, /etc/modprobe.d/pibridge-nvidia.conf, an initrd carry-over
+that follows the generator this system uses (an initramfs-tools hook /etc/initramfs-tools/hooks/pibridge-edid, or
+/etc/dracut.conf.d/pibridge-edid.conf with install_items), the headsets seen in /var/lib/pibridge/edid/. The same
+files under their omarchyvr names (an install made by omarchyvr's or an older PiBridge's install-nvidia.sh) are taken
+over and removed.
 """
 import glob
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -35,6 +39,7 @@ CONF = f'{CONF_DIR}/nvidia-modeset.conf'
 EDID_FILE = f'{CONF_DIR}/pimax-edid.bin'
 MODPROBE = '/etc/modprobe.d/pibridge-nvidia.conf'
 HOOK = '/etc/initramfs-tools/hooks/pibridge-edid'
+DRACUT_CONF = '/etc/dracut.conf.d/pibridge-edid.conf'
 STATE = '/var/lib/pibridge/edid'       # the headsets seen here (raw EDIDs)
 PENDING = f'{STATE}/pending-reboot'    # the boot the override was written in
 OLD_CONF = '/etc/omarchyvr/nvidia-modeset.conf'
@@ -52,6 +57,13 @@ case "$1" in prereqs) prereqs; exit 0 ;; esac
 [ -f /etc/pibridge/nvidia-modeset.conf ] || exit 0
 mkdir -p "$DESTDIR/etc/pibridge"
 cp /etc/pibridge/nvidia-modeset.conf /etc/pibridge/pimax-edid.bin "$DESTDIR/etc/pibridge/"
+'''
+
+# dracut makes the initrd on Ubuntu 26.04 (update-initramfs calls it), Arch and Fedora. It runs no initramfs-tools
+# hooks, so the two files have to be listed here instead; keeping both kinds of carry-over would leave a stale one.
+DRACUT_CONF_TEXT = '''# PiBridge (pibridge-headset-edid): nvidia-modeset reads config_file when it loads, and from the initrd that file
+# must exist there too. dracut has no initramfs-tools hooks; install_items is how a file gets into its images.
+install_items+=" /etc/pibridge/nvidia-modeset.conf /etc/pibridge/pimax-edid.bin "
 '''
 
 
@@ -140,6 +152,11 @@ def known_edids():
     return out
 
 
+def initrd_generator():
+    """'dracut' when this system makes its initrd with dracut, else 'initramfs-tools'."""
+    return 'dracut' if shutil.which('dracut') else 'initramfs-tools'
+
+
 def initramfs_has_nvidia_modeset():
     try:
         files = subprocess.run(['lsinitramfs', f'/boot/initrd.img-{os.uname().release}'], capture_output=True,
@@ -181,6 +198,8 @@ def install(ports, base_edid, dry):
     if dry:
         print('would write:', conf.rstrip('\n') if ports else '(no override)',
               f'options nvidia-modeset {" ".join(opts)}' if opts else '(no module options)', sep='\n')
+        if ports:
+            print('initrd carry-over:', DRACUT_CONF if initrd_generator() == 'dracut' else HOOK)
         return
     changed = False
     for f in OLD_FILES:
@@ -190,9 +209,17 @@ def install(ports, base_edid, dry):
     if ports:
         changed |= write_if_changed(EDID_FILE, edid)
         changed |= write_if_changed(CONF, conf)
-        changed |= write_if_changed(HOOK, HOOK_TEXT, 0o755)
     else:
-        for f in (CONF, EDID_FILE, HOOK):
+        for f in (CONF, EDID_FILE):
+            changed |= remove(f)
+    if ports and initrd_generator() == 'dracut':
+        changed |= write_if_changed(DRACUT_CONF, DRACUT_CONF_TEXT)
+        changed |= remove(HOOK)
+    elif ports:
+        changed |= write_if_changed(HOOK, HOOK_TEXT, 0o755)
+        changed |= remove(DRACUT_CONF)
+    else:
+        for f in (HOOK, DRACUT_CONF):
             changed |= remove(f)
     if opts:
         changed |= write_if_changed(MODPROBE, f'options nvidia-modeset {" ".join(opts)}\n')
@@ -241,10 +268,19 @@ def forget(name):
     install(keep, None, False)
 
 
+def selftest():
+    assert 'install_items+=' in DRACUT_CONF_TEXT and '/etc/pibridge/pimax-edid.bin' in DRACUT_CONF_TEXT
+    assert 'DESTDIR/etc/pibridge' in HOOK_TEXT
+    assert initrd_generator() in ('dracut', 'initramfs-tools')
+    print(f'ok: this system makes its initrd with {initrd_generator()}')
+
+
 def main(argv):
     cmd = argv[0] if argv else 'status'
     if cmd == 'status':
         return status()
+    if cmd == 'selftest':
+        return selftest()
     if os.geteuid() != 0 and '--dry-run' not in argv:
         sys.exit('run with sudo')
     if cmd == 'apply':

@@ -191,8 +191,9 @@ sudo /usr/share/pibridge/edid/pibridge-headset-edid apply        # then reboot
 `/etc/pibridge/pimax-edid.bin`, `/etc/pibridge/nvidia-modeset.conf` (`override.[<GPU>].<output>=...`) and
 `/etc/modprobe.d/pibridge-nvidia.conf` (`options nvidia-modeset config_file=...`). The driver reads them once, when it
 loads, so a reboot is needed; `status` then says `vr`. When nvidia-modeset loads from the initramfs, the script also
-installs an initramfs hook and rebuilds it (Ubuntu/Debian initramfs-tools; on Arch / Fedora add the two files by hand:
-`FILES=` in `/etc/mkinitcpio.conf`, `install_items+=` in a `/etc/dracut.conf.d/` file).
+puts the two files there and rebuilds it, following the generator this system uses: an initramfs-tools hook, or
+`install_items+=` in `/etc/dracut.conf.d/pibridge-edid.conf` on dracut (Ubuntu 26.04 and newer, Arch, Fedora; with
+mkinitcpio add the two files to `FILES=` in `/etc/mkinitcpio.conf` by hand).
 
 - The override belongs to the GPU output, not to the headset. Plugged into another DisplayPort, the headset needs
   `apply` and a reboot again. An overridden output counts as connected even when empty, and a monitor plugged into it

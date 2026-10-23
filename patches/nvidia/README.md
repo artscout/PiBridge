@@ -99,8 +99,9 @@ the EDID override: [docs/INSTALL.md](../../docs/INSTALL.md), section 5.2.
 
 `sudo blackwell/install-nvidia.sh WORKDIR` (WORKDIR holds `modules/*.ko` and `mok/MOK.der`; the headset must be on)
 puts the signed modules into `/lib/modules/<kernel>/updates/pibridge-nvidia`, has `pibridge-headset-edid apply` write
-the EDID override (`/etc/pibridge/`, the module options in `/etc/modprobe.d/pibridge-nvidia.conf`, an initramfs hook
-`/etc/initramfs-tools/hooks/pibridge-edid` when nvidia-modeset loads from the initramfs), and rebuilds the initramfs.
+the EDID override (`/etc/pibridge/`, the module options in `/etc/modprobe.d/pibridge-nvidia.conf`, and the initrd
+carry-over that nvidia-modeset needs when it loads from the initrd: an initramfs-tools hook, or dracut
+`install_items+=`), and rebuilds the initramfs.
 Reboot afterwards. `sudo blackwell/uninstall-nvidia.sh [kernel version]` removes all of it and rebuilds the
 initramfs; if a boot hangs, pick another kernel in GRUB's "Advanced options" and run it there with the hung kernel's
 version. An install made by omarchyvr's scripts (`omarchyvr-nvidia`, `/etc/omarchyvr/`, `omarchyvr-nvidia.conf`, the
