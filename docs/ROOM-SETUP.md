@@ -25,7 +25,7 @@ so it can find its bearings; if your room is already recognised it skips that.
 3. Press **Save**. Done.
 
 The floor, the centre (where you stand), the forward direction (where you look) and the boundary go straight into
-**SteamVR's play area / chaperone** — nothing is stored on the Monado side. It comes back every time you start VR. You
+**SteamVR's play area / chaperone** — nothing is stored on the tracker's side. It comes back every time you start VR. You
 can manage saved rooms and the floor plan later on the app's **Room** page.
 
 ---
@@ -167,22 +167,23 @@ never starts SteamVR; without SteamVR it fails at once.
 - the zone settings: `IVRSettings::SetFloat / SetInt32 / RemoveKeyInSection`.
 
 **Universe ids.** SteamVR keeps one boundary per tracking universe. Lighthouse universes get a large random id from
-SteamVR's room setup. Monado's SteamVR driver (`driver_monado.so`, `forks/monado` in omarchyvr,
-`src/xrt/state_trackers/steamvr_drv/ovrd_driver.cpp`) sets `Prop_CurrentUniverseId_Uint64` to the constant **2** for
-its headset: every Monado-tracked headset under SteamVR shares universe 2, whatever room it is in.
+SteamVR's room setup. The inside-out headset (CustomHeadsetOpenVR's SLAM headset: pibridge-headtrack for the Crystal
+Super / Dream Air, the original Crystal's own tracking; `k_UniverseId`) reports universe **30**, as Pimax's Windows
+driver does. (Monado's SteamVR driver used **2**; a universe 2 left in the chaperone file from that time is not used.)
 
-## The inside-out mode (SteamVR + Monado)
+## The inside-out mode
 
-With the tracking mode Inside-out (Tracking page) the Room page works on universe **2**, driver_monado's (unless
-SteamVR, running, reports another one), and says at the top that each start begins a new tracking world which the
-room map (below) puts back on the room. The universe list marks it INSIDE-OUT. `pibridge-roomsetup` gets `--universe 2` the same way.
+With the tracking mode Inside-out (Tracking page) the Room page works on universe **30** (while SteamVR runs, the
+universe SteamVR reports), and says at the top that each start begins a new tracking world which the room map (below)
+puts back on the room. The universe list marks it INSIDE-OUT. `pibridge-roomsetup` works on the universe SteamVR
+reports.
 - The Lighthouse universes and their saved rooms are never changed by it: the page never falls back to a Lighthouse
-  universe when universe 2 is missing (it says so and offers **CREATE INSIDE-OUT BOUNDARY**: universe 2 with a 2 x 2 m
+  universe when universe 30 is missing (it says so and offers **CREATE INSIDE-OUT BOUNDARY**: universe 30 with a 2 x 2 m
   boundary added to the chaperone file, backup first, only while SteamVR is closed); **Save as room** refuses a name
   whose saved room belongs to another universe (in both modes: "Door open" of universe 1111111111 is not overwritten by
   an inside-out "Door open"; it suggests "Door open inside-out"); a saved room of a universe that is not in the file is
-  not put on universe 2 (`core/roomsetup.h`: `roomTargetUniverse`, `saveRoomGate`, `showRoomGate`,
-  `addMonadoUniverse`; tests in `pibridge_room_page_tests`).
+  not put on universe 30 (`core/roomsetup.h`: `roomTargetUniverse`, `saveRoomGate`, `showRoomGate`,
+  `addInsideOutUniverse`; tests in `pibridge_room_page_tests`).
 - Not handled yet: pibridge-roomsetup's own SAVED SPACES in the headset have no such check.
 
 ### Room map (inside-out)
@@ -194,19 +195,18 @@ start. The app only starts it and reads its files (`app/src/core/roommap_link.*`
 
 - **MAP THE ROOM** (Room page, card "Room map (inside-out)", shown in the inside-out mode) runs the room mapping in
   the headset, `pibridge-roomsetup --map --room <room> --roommap <pibridge-roommap> --ring <head ring>`, against the running
-  session (Monado's head ring + the camera broker): the room through the headset cameras with the steps over it
+  session (pibridge-headtrack's head ring + the camera broker): the room through the headset cameras with the steps over it
   ("Map the room in the headset" below), driving `pibridge-roommap setup fast --name <room> --guide DIR`. The tool saves the map, the floor and the
   room setup under `~/.local/share/pibridge/roommap/<room>/` (`PIBRIDGE_ROOMMAP_DIR` overrides; omarchyvr's
   `~/.local/share/omarchyvr/roommap` is used when only that exists) and writes the world offset through the writer
   lease (role setup): the floor at y = 0, the centre under you, forward -Z. Refused, in plain words, when the mode is
-  not inside-out, the tool is missing, no session with a live head ring runs ("Press START TRACKING ..."), the head is
+  not inside-out, the tool is missing, no session with a live head ring runs (START VR first), the head is
   not tracked yet, or a run is going on. The room name is `io_room` in pibridge.conf (default `home`); there is no
   chooser on the page yet.
-- **At every start** (START TRACKING with SteamVR + Monado, and "Monado directly"): the driver gets `PIMAX_ANCHOR=1`
-  whenever `pibridge-roommap` is found (so MAP THE ROOM works in the session that runs; without an offset file the hook
-  changes nothing, Monado deletes a stale one at its start). When the room has a saved map, the session starts
-  `pibridge-roommap auto --name <room> --wait 120` once the runtime is up (Monado's socket / SteamVR reporting the
-  headset), output in `<session>/logs/roommap.log`. It waits for the head ring, takes the lease (role auto),
+- **At every start** (START VR in the inside-out mode): the tracker gets `PIMAX_ANCHOR=1` whenever `pibridge-roommap`
+  is found (so MAP THE ROOM works in the session that runs; without an offset file nothing changes). When the room has
+  a saved map, the session starts `pibridge-roommap auto --name <room> --wait 120` once SteamVR reports the headset,
+  output in `<session>/logs/roommap.log`. It waits for the head ring, takes the lease (role auto),
   relocalises in 15 s windows for up to 120 s, applies floor + centre + forward and exits. The first offset of a
   session is placed at once; later ones glide (`PIMAX_ANCHOR_GLIDE`). Stop ends it first, by PID (SIGTERM, SIGKILL
   after 3 s). Without a saved room nothing is started. If it fails, VR keeps running at the start pose.
@@ -215,7 +215,7 @@ start. The app only starts it and reads its files (`app/src/core/roommap_link.*`
   **Room recognised**, **Searching for the room** or **Room not found** with the tool's sentence; a file from another
   session (another pid, or written before this start) is not shown.
 - Tests (`pibridge_tracking_tests`, `pibridge_steamvr_monado_tests`, fake processes only): auto starts once the runtime is
-  up and only with a saved room and the tool, once per session, gets SIGTERM before Monado / SteamVR, SIGKILL when it
+  up and only with a saved room and the tool, once per session, gets SIGTERM before SteamVR, SIGKILL when it
   ignores it, a start failure is shown in words; the status file and the words; the gate; the room name and dir.
   Not run live yet.
 
@@ -251,7 +251,7 @@ OpenXR side `runMapXr` in `xrapp.cpp`) shows it and starts `pibridge-roommap set
 
 **SET FLOOR FROM MY HEIGHT** (Room page, inside-out, the room recognised in this session) runs `pibridge-roomsetup
 --floor-height --room <room> --eye-height M --roommap ... --ring ...`: the same panel over the passthrough with only
-that step; the floor goes into the map (`pibridge-roommap floor set --y`) and Monado's offset (`pibridge-roommap apply`, the
+that step; the floor goes into the map (`pibridge-roommap floor set --y`) and the room offset (`pibridge-roommap apply`, the
 writer lease), log `roomsetup-floor.log` in the session's logs.
 
 The floor is always found again in the map (an older floor.toml is set aside as floor.toml.prev). A touch needs a
@@ -267,9 +267,9 @@ proposed boundary in the room frame) and `DIR/answer` (headset -> pibridge-roomm
 touch Y, path X Z ..., forward CX CZ YAW HEADY, cancel). pibridge-roommap stops when the headset tool is gone, the head
 feed is lost for 2 s, or no answer came in 300 s. The headless `setup fast` (without `--guide`) is unchanged.
 
-**Frames.** The headset draws in OpenXR's stage. The map speaks its room frame (`room = conv(raw)`, raw = Monado's raw
-SLAM frame of the head ring). The tool finds stage_from_raw (a yaw and a shift: Monado's offset and, under SteamVR +
-driver_monado, SteamVR's own standing frame) from the same head pose seen in both: the ring's newest pose (times the
+**Frames.** The headset draws in OpenXR's stage. The map speaks its room frame (`room = conv(raw)`, raw = the tracker's raw
+SLAM frame of the head ring). The tool finds stage_from_raw (a yaw and a shift: the room offset and SteamVR's own
+standing frame) from the same head pose seen in both: the ring's newest pose (times the
 view offset `default_head_in_imu`) against the OpenXR view located at the ring sample's time (`StageLink`, a window of
 60 pairs, restarted when 10 pairs in a row jump by more than 10 cm or 4 deg, e.g. a new offset). So nothing depends
 on where SteamVR puts its stage, and nothing assumes a right world scale beyond what the map gives (the floor, the
@@ -315,12 +315,12 @@ trigger and by holding still with the frame conversions, stop, the end, no answe
 
 Not verified live (agents never touch a running session): the passthrough in the headset (the image orientation and
 the camera-to-head offset on the real headset, the upper cameras' seams and gains (also with the auto exposure on), the clock conversion and the past-time pose under SteamVR, the
-brightness), the stage link under SteamVR + driver_monado, the controller ray and touch heights, the whole run against
-a live Monado and the broker.
+brightness), the stage link under SteamVR with pibridge-headtrack, the controller ray and touch heights, the whole run
+against a live session and the broker.
 
 ### The floor under SteamVR (fixed 2026-10-19)
 
-Live test (SteamVR + driver_monado, Crystal): after MAP THE ROOM the floor was wrong. Two causes, both fixed:
+Live test (with the Monado SteamVR driver PiBridge used then, Crystal): after MAP THE ROOM the floor was wrong. Two causes, both fixed:
 - **The frame.** The room-map tool (as the Rust original) put the floor at app y = -1.6: monado-service's tracking
   origin is 1.6 m above the STAGE floor. Inside vrserver, driver_monado's tracking origin offset is 0 ("use steamvr
   room setup instead", `ovrd_driver.cpp`): the app space is SteamVR's raw space and SteamVR shows its standing frame
@@ -329,7 +329,7 @@ Live test (SteamVR + driver_monado, Crystal): after MAP THE ROOM the floor was w
   `$XDG_RUNTIME_DIR/pibridge/steamvr-stage`; when the session pid is a vrserver, pibridge-roommap uses its standing height
   for the floor and composes its yaw and horizontal origin on top, so the floor lands on SteamVR's standing y = 0
   and the centre / forward on its origin / -Z (libpibridge-roommap `floor.h` `SteamVrStage`; without the file: raw
-  y = 0, with a note). monado-service sessions keep the 1.6 m rule (Rust parity).
+  y = 0, with a note). Other sessions keep the 1.6 m rule (Rust parity).
 - **The table.** The fast setup took a desk 0.76 m below the head as the floor (the Rust gate is 0.4 m). The fast
   setup is done standing, so a points floor less than 1.0 m below the head is set aside (`floor.toml.rejected`), the
   map is searched again with `floor detect --min-below 1.0`, and with no such layer the controller touch is asked
@@ -341,54 +341,51 @@ against the stage floor that was being fixed (off by more than a metre). Now the
 head (same frame, `recenterFloorPlausible` in `tools/roomsetup/src/recenter.*`).
 
 pibridge-roomsetup's controllers: the tool drew its box and the FLOOR-mode pointer along the grip pose's -Z. OpenXR's
-grip -Z runs along the handle; on the Touch profile that driver_monado gives the Pimax controllers it is 60 deg above
+grip -Z runs along the handle; on the Touch profile the Pimax controllers get it is 60 deg above
 the aim ray, plus PIMAX_CTRL_ANGLE 30 deg: straight up. The tool now uses the aim pose for its controller frame (the
 grip only without an aim pose). The "generic model" is the tool's own wire box: it draws no render models (SteamVR does
 not draw controllers inside an OpenXR scene); the real models are a follow-up.
 
 ### The order of the room offset and the recenter
 
-Three things move the inside-out world; in the driver they apply in this order (`pimax_hmd.c`
-`pimax_hmd_head_relation`): raw SLAM pose -> the head ring records it -> the **room anchor offset**
-(`pimax-anchor.offset`, written by MAP THE ROOM, `auto` or RECENTER IN HEADSET below, one writer at a time through the
-lease) -> the driver's **manual recenter** on top (a 1.5 s press of a controller's menu / Pimax button,
-`pimax_hmd_apply_recenter`: yaw and horizontal position, floor kept, for this session only). So the room map puts the
+Three things move the inside-out world; pibridge-headtrack applies them in this order (`tools/headtrack/src/world.cpp`,
+as the Pimax driver's `pimax_hmd_head_relation`): raw SLAM pose -> the head ring records it -> the **room anchor
+offset** (`pimax-anchor.offset`, written by MAP THE ROOM, `auto` or RECENTER IN HEADSET below, one writer at a time
+through the lease) -> the **manual recenter** on top (a long press, 0.8 s, of a controller's Pimax button: yaw and
+horizontal position, floor kept, for this session only). So the room map puts the
 floor and the room in place, and a long press only turns / shifts on top of it; the floor height from the room map
 is always kept.
 
-The rule for the user: recenter with the long press only after "Room recognised". The driver keeps its recenter when
-the offset changes later, so a long press made before the room was recognised stays on top of the room offset and
-moves the room's centre and forward by that much (the floor is still right). A clean rule needs a driver change
-(not made here): reset the recenter to identity whenever the anchor applies a new offset target (pimax_anchor.h would
-bump a counter when it accepts a new offset file; pimax_hmd_apply_recenter clears `g_recenter` when the counter
-changed and logs "PIMAX_RECENTER: cleared (the room anchor placed the world)").
+A new room offset (recognised or set up) replaces an earlier recenter in pibridge-headtrack, so a long press made
+before the room was recognised does not shift the room afterwards. (Monado's Pimax driver kept its recenter on top of
+a later offset; the rule there was to recenter only after "Room recognised".)
 
 ### Recenter (inside-out)
 
 Without a mapped room the world starts where the headset is; RECENTER IN HEADSET or the long press puts the
 centre and forward right for one session.
-**RECENTER IN HEADSET** (Room page, inside-out mode; needs START TRACKING running and **Room anchor** on, Tracking
-page: `PIMAX_ANCHOR=1`, Monado's offset hook and head ring) starts `pibridge-roomsetup --recenter --recenter-out
+**RECENTER IN HEADSET** (Room page, inside-out mode; needs the inside-out session running (START VR) and **Room anchor**
+on, Tracking page: `PIMAX_ANCHOR=1`, the offset file and the head ring) starts `pibridge-roomsetup --recenter --recenter-out
 $XDG_STATE_HOME/pibridge/recenter.txt --ring $XDG_RUNTIME_DIR/pimax-anchor.head` (`tools/roomsetup/src/recenter.*`):
 1. in the headset: "Stand where the play area centre should be. Look forward. Pull the trigger." The newest raw head
-   pose of Monado's head ring (before its offset) is taken;
+   pose of the head ring (before its offset) is taken;
 2. "Touch the floor with a controller and pull its trigger, or press B / menu to keep it." (the controller's height
    in the stage; more than 1.5 m off is refused);
 3. the tool writes `pibridge-recenter 1 / pid N / head px py pz qx qy qz qw / floor keep|Y` and ends.
 
-The app then writes Monado's offset (`app/src/core/anchor_offset.*`, one function `writeRecenterOffset`, a private
+The app then writes the room offset (`app/src/core/anchor_offset.*`, one function `writeRecenterOffset`, a private
 port of omarchyvr `omarchyvr-anchor/src/world.rs` until libpibridge-anchor (R1) is there): yaw only (gravity stays),
 the head's forward onto -Z, the head's floor point to the origin, the height kept from the current offset or moved by
 the floor touch. The formats are omarchyvr's byte for byte: `pimax-anchor.offset` ("pimax-anchor-offset 1", "pid N",
 "pose ..." with 6 / 7 decimals, written to `.tmp` and renamed), the lease `omarchyvr-anchor.offset.owner`
 ("roommap <session> / lease 2 / writer <PiBridge's pid> / role setup") under `flock(omarchyvr-anchor.offset.lock)`.
-The session is the ring's writer pid (vrserver under SteamVR + Monado). PiBridge never ends another writer: while a live
+The session is the ring's writer pid (pibridge-headtrack). PiBridge never ends another writer: while a live
 one holds the lease (omarchyvr's room setup, auto, the AprilTag) the recenter is refused in plain words, and an
 AprilTag offset of the session is not mixed with it. Saved boundaries are in the stage, so after a recenter they land
 on the room again. Tests: `pibridge_roomsetup_recenter` (the ring layout of world.rs `ring_bytes`, the steps with
 scripted controllers, the result text), `pibridge_steamvr_monado_tests` (offset and lease texts against world.rs, the
-math, the writer's lease rules on made-up files), `pibridge_room_page_tests` (the gate). Not run live: Monado's hook
-under SteamVR, the in-headset panel, the floor shift when no offset existed yet (the height then starts from 0).
+math, the writer's lease rules on made-up files), `pibridge_room_page_tests` (the gate). Not run live: the offset in
+pibridge-headtrack under SteamVR, the in-headset panel, the floor shift when no offset existed yet (the height then starts from 0).
 
 ## Live tracing and pose sources
 
@@ -396,16 +393,15 @@ under SteamVR, the in-headset panel, the floor shift when no offset existed yet 
 `FakePoseSource` walks a polygon (the tests and the self test trace rooms with it); the headset tool's own OpenXR input
 is the real source and TRACE OUTLINE uses it. `TraceRecorder` / `TraceFollow` collect a floor point every 5 cm while
 the trigger is held and turn the walk into a simple counter-clockwise polygon (`polygonFromTrace`). Not written yet: a
-**Monado** source. Plan: libmonado (`monado/src/xrt/targets/libmonado`, the IPC that `monado-ctl` uses) for the device
-poses without an OpenXR session, in Monado's tracking origin.
+source that reads the poses without an OpenXR session.
 
 ## Inside-out (SLAM) tracking: the world frame
 
 A saved boundary only makes sense in a world frame that is the same at every start. Lighthouse gives that (the base
-stations are the frame; SteamVR's universe id names it). Inside-out tracking (Monado's Pimax driver with Basalt) starts
+stations are the frame; SteamVR's universe id names it). Inside-out tracking (pibridge-headtrack, either engine) starts
 a new map, and with it a new origin, each session; the room map (above) relocalises against the saved map at the start
 and moves the world back onto the room, so the stage (and a boundary saved in it) is the same each time once the room
-is recognised. All Monado-tracked headsets under SteamVR still share universe 2.
+is recognised.
 
 ## Tests and self test
 
@@ -433,5 +429,5 @@ SteamVR glue with a fake helper runner, the self test (also run as `pibridge-roo
   SteamVR's settings and file as documented by the OpenVR header; not checked live.
 - Not ported from ZoneTweak: the set dressing and sound, the graphics quality page, the Pimax service restart and its
   live settings, the Lighthouse base station display, the desktop mirror window.
-- Monado pose source; the room map (MAP THE ROOM, auto at the start) has not run against a live session from the app yet. The app's floor plan has no live tracing of its own: tracing
+- A pose source outside OpenXR; the room map (MAP THE ROOM, auto at the start) has not run against a live session from the app yet. The app's floor plan has no live tracing of its own: tracing
   is done in the headset.

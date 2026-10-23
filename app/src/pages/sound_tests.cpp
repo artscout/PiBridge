@@ -10,6 +10,7 @@
 #include "../core/paths.h"
 #include "../core/runner.h"
 #include "../core/sound_test.h"
+#include "../ui/icons.h"
 #include "../ui/theme.h"
 #include "../ui/widgets.h"
 
@@ -54,31 +55,30 @@ SoundTestPanel::SoundTestPanel(bool fake, QWidget* parent) : QWidget(parent), fa
     auto* v = new QVBoxLayout(this);
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(8);
-    v->addWidget(pibridge::ui::capsLabel(QStringLiteral("Headset sound test"), 13));
-    auto* row = new QHBoxLayout;
-    row->setSpacing(8);
-    // Labelled and hinted like omarchyvr's Headset sound / Headset mic tests (one plays notes, the other records and
-    // plays back). The backend (core/sound_test.h) already does exactly this; only the labels and hints are matched.
-    speakers_ = pibridge::ui::toolButton(QStringLiteral("TEST SPEAKERS"));
+    // Labelled like omarchyvr's Headset sound / Headset mic tests (one plays notes, the other records and plays back).
+    const auto testButton = [](const QString& text, pibridge::ui::Icon icon) {
+        auto* b = pibridge::ui::toolButton(text);
+        b->setFont(pibridge::ui::labelFont(11));
+        b->setIcon(pibridge::ui::lineIcon(icon, pibridge::ui::color::dim));
+        b->setIconSize(QSize(14, 14));
+        b->setMinimumHeight(28);
+        return b;
+    };
+    speakers_ = testButton(QStringLiteral("TEST SOUND"), pibridge::ui::Icon::Sound);
     speakers_->setToolTip(QStringLiteral("Plays a low tone on the left ear, then a high one on the right ear of the "
                                          "headset. The default output is not changed."));
-    mic_ = pibridge::ui::toolButton(QStringLiteral("TEST MIC"));
-    mic_->setToolTip(QStringLiteral("Records %1 s from the headset's microphone and plays it back in the headset. "
-                                    "Nothing is kept.")
+    mic_ = testButton(QStringLiteral("TEST MICROPHONE"), pibridge::ui::Icon::Mic);
+    mic_->setToolTip(QStringLiteral("Records %1 s from the headset's microphone and plays it back in the headset - "
+                                    "start VR first, the headset mic is silent while the display is off. Nothing is kept.")
                          .arg(kMicSeconds));
-    row->addWidget(speakers_);
-    row->addWidget(pibridge::ui::helpBadge(QStringLiteral("Plays two soft notes on the headset.")));
-    row->addWidget(mic_);
-    row->addWidget(pibridge::ui::helpBadge(
-        QStringLiteral("Records %1 s and plays it back - start VR first, the headset mic is silent while the "
-                       "display is off.")
-            .arg(kMicSeconds)));
-    row->addStretch(1);
-    v->addLayout(row);
     meter_ = new LevelMeter;
     meter_->setToolTip(QStringLiteral("Microphone level while recording"));
     v->addWidget(meter_);
     line_ = pibridge::ui::dimLabel(QString());
+    line_->setWordWrap(true);
+    // two lines always: a longer test result does not push the card (and the row) taller
+    line_->setFixedHeight(2 * line_->fontMetrics().lineSpacing() + 4);
+    line_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     v->addWidget(line_);
 
     connect(speakers_, &QPushButton::clicked, this, [this] {

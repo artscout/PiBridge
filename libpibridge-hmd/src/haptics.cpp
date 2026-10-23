@@ -2,6 +2,14 @@
 // Ported from omarchyvr pimax/src/haptics.rs (MIT OR Apache-2.0).
 #include "pibridge/hmd/haptics.h"
 
+#include <cstddef>
+
+#include <unistd.h>
+
+#include <sys/un.h>
+
+#include <sys/socket.h>
+
 #include "pibridge/hmd/proto.h"
 
 #include <algorithm>
@@ -225,6 +233,49 @@ std::expected<std::optional<Due>, std::string> take_request(const std::filesyste
         return std::optional<Due>(*r);
     }
     return std::unexpected("bad haptic request \"" + s + "\"");
+}
+
+std::string socket_name() {
+    return "pibridge-haptic-" + std::to_string(::getuid());
+}
+
+Receiver::Receiver() {
+    const int fd = ::socket(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        return;
+    }
+    sockaddr_un a{};
+    a.sun_family = AF_UNIX;
+    const std::string n = socket_name();
+    std::memcpy(a.sun_path + 1, n.data(), n.size()); // abstract: sun_path[0] = 0
+    const auto len = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + 1 + n.size());
+    if (::bind(fd, reinterpret_cast<const sockaddr*>(&a), len) != 0) {
+        ::close(fd);
+        return;
+    }
+    fd_ = fd;
+}
+
+Receiver::~Receiver() {
+    if (fd_ >= 0) {
+        ::close(fd_);
+    }
+}
+
+std::optional<Due> Receiver::next() {
+    if (fd_ < 0) {
+        return std::nullopt;
+    }
+    char buf[64];
+    for (;;) {
+        const ssize_t n = ::recv(fd_, buf, sizeof buf - 1, 0);
+        if (n < 0) {
+            return std::nullopt; // EAGAIN: nothing waits
+        }
+        if (auto d = parse_request(std::string_view(buf, static_cast<std::size_t>(n)))) {
+            return d;
+        }
+    }
 }
 
 } // namespace pibridge::hmd::haptics

@@ -120,8 +120,8 @@ source = "take settings t=13.047 (before the rate change)"
 [[hid]]
 id = "read_serial"
 bytes = "58 04 16 {slot:u8} 1e"
-params = ["slot=0|2|3"]               # 0 = headset, 2/3 = controllers
-approved = "user, 2026-10-19 (chat): first command of the controller attach burst (pimax_controller_attach, slots 2/3)"
+params = ["slot=0|2|3|5"]             # 0 = headset, 2/3 = controllers, 5 = the optical module (OPTICS SN in Pimax EVO)
+approved = "user, 2026-10-19 (chat): first command of the controller attach burst (pimax_controller_attach, slots 2/3); slot 5: user, 2026-10-23 (chat), the module serial CustomHeadsetOpenVR reads at every connect (PimaxCommon.cpp GetSerial(0x05))"
 source = "takes cold2, controllers; slot 2/3: cold2 t=39.423/39.420, cold1, controllers t=29.598/40.676, lighthouse, lighthouse2"
 
 [[hid]]

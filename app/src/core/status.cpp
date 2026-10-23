@@ -163,8 +163,7 @@ QString headsetHint(const KeepaliveStatus& k, bool steamvrRunning) {
         return k.error.isEmpty() ? QStringLiteral("The headset service reported an error.") : k.error;
     }
     if (k.state == QLatin1String("paused")) {
-        return QStringLiteral("Paused: inside-out tracking runs, so Monado's Pimax driver owns the headset. The headset "
-                              "service takes it back when tracking stops.");
+        return QString(); // the STATE row says it (Paused: inside-out tracking)
     }
     if (k.state == QLatin1String("no-headset") || !k.headsetPresent) {
         return QStringLiteral("No headset found. Check that the headset is plugged in and powered.");
@@ -194,7 +193,7 @@ QString eyeLine(const EyedStatus& e) {
             .arg(qRound(e.samplesPerS));
     }
     if (e.state == QLatin1String("paused")) {
-        return QStringLiteral("Paused: inside-out tracking runs, Monado's Pimax driver owns the eye tracker");
+        return QStringLiteral("Paused: inside-out tracking runs, pibridge-headtrack owns the headset");
     }
     if (e.state == QLatin1String("searching")) {
         return QStringLiteral("Looking for the eye tracker...");

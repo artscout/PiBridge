@@ -56,6 +56,9 @@ RecordCard::RecordCard(StateSource& source, IoSessionControl& direct, QWidget* p
     left->addWidget(headline_);
     detail_ = pibridge::ui::dimLabel(QString());
     detail_->setWordWrap(true);
+    // three lines always: a longer status does not make the card (and the window) jump
+    detail_->setFixedHeight(3 * detail_->fontMetrics().lineSpacing() + 4);
+    detail_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     left->addWidget(detail_);
     auto* lastRow = new QHBoxLayout;
     last_ = pibridge::ui::dimLabel(QString());

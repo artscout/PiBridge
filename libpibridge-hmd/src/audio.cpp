@@ -186,15 +186,17 @@ bool has_node(const std::optional<std::string>& list, const std::string& name) {
 
 } // namespace
 
-std::pair<std::string, Before> to_headset(const Runner& pactl) {
+std::pair<std::string, Before> to_headset(const Runner& pactl, bool output, bool input) {
     Before b;
     b.sink = pactl({"get-default-sink"});
     b.source = pactl({"get-default-source"});
     std::optional<std::string> sink;
-    if (const auto l = pactl({"list", "short", "sinks"})) {
+    if (!output) {
+        // input only
+    } else if (const auto l = pactl({"list", "short", "sinks"})) {
         sink = pick(*l, SINK_PREFIX);
     }
-    if (!sink) {
+    if (!sink && output) {
         if (const auto dp = dp_port(pactl)) {
             if (dp->active_profile == dp->profile || pactl({"set-card-profile", dp->card, dp->profile})) {
                 b.card = dp->card;
@@ -205,7 +207,9 @@ std::pair<std::string, Before> to_headset(const Runner& pactl) {
         }
     }
     std::optional<std::string> source;
-    if (const auto l = pactl({"list", "short", "sources"})) {
+    if (!input) {
+        // output only
+    } else if (const auto l = pactl({"list", "short", "sources"})) {
         source = pick(*l, SOURCE_PREFIX);
         if (!source) {
             source = pick(*l, CRYSTAL_SOURCE_PREFIX);

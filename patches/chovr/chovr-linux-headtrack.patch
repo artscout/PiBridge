@@ -1,0 +1,227 @@
+diff --git a/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp b/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp
+index fc4ddab..fe20cbc 100644
+--- a/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp
++++ b/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp
+@@ -1,3 +1,9 @@
++#include <unistd.h>
++#include <cstddef>
++#include <sys/un.h>
++#include <sys/socket.h>
++#include <cerrno>
++#include <cstring>
+ #include "PimaxSlam.h"
+ 
+ #ifdef PVR_EXISTS
+@@ -683,9 +689,14 @@ void PimaxSlamDriver::PvrTrackingThread() {
+ #include "../Helpers/SharedMemoryPoseSource.h"
+ #include "../Helpers/MiscHelper.h"
+ 
++#include <algorithm>
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ #include <memory>
+ #include <shared_mutex>
++#include <string>
+ #include <time.h>
+ 
+ // Matches the Windows driver (driver_aapvr).
+@@ -833,6 +844,66 @@ public:
+ 		in.UpdateBooleanComponent(components[ComponentMenu], (pressed & (0x40 | 0x04)) != 0, t);
+ 	}
+ 
++	// A game's vibration for this controller: to PiBridge's pibridge-headtrack, which owns the headset's HID, as a
++	// request "SLOT AMP MS" (slot 2 left, 3 right) in $XDG_RUNTIME_DIR/pimax-haptic-request (written atomically).
++	void Vibrate(const vr::VREvent_HapticVibration_t& data) {
++		if (deviceIndex == vr::k_unTrackedDeviceIndexInvalid ||
++			vr::VRProperties()->TrackedDeviceToPropertyContainer(deviceIndex) != data.containerHandle) {
++			return;
++		}
++		if (vibrations++ % 200 == 0) {
++			DriverLog("Pimax controller %s: vibration %.2f for %.3f s (%llu so far)", role == vr::TrackedControllerRole_LeftHand ? "left" : "right",
++				data.fAmplitude, data.fDurationSeconds, (unsigned long long)vibrations);
++		}
++		// a zero amplitude is SteamVR's "nothing" / stop: it would overwrite the game's pulse before it is taken
++		if (!(data.fAmplitude > 0.0f)) {
++			return; // a duration of 0 is the shortest pulse (Monado's pimax_haptic: 20 ms), not nothing
++		}
++		const int slot = role == vr::TrackedControllerRole_LeftHand ? 2 : 3;
++		const int ampPct = std::clamp((int)lroundf(data.fAmplitude * 100.0f), 1, 100);
++		const int durMs = std::clamp((int)lroundf((data.fDurationSeconds > 0.02f ? data.fDurationSeconds : 0.02f) * 1000.0f), 1, 65535);
++		// one datagram per pulse to pibridge-headtrack's abstract socket "\0pibridge-haptic-<uid>" (no path: the
++		// Steam Runtime container's /tmp and environment do not matter, and no pulse overwrites another)
++		{
++			static int sock = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
++			sockaddr_un a{};
++			a.sun_family = AF_UNIX;
++			const std::string n = "pibridge-haptic-" + std::to_string(getuid());
++			memcpy(a.sun_path + 1, n.data(), n.size());
++			const socklen_t len = (socklen_t)(offsetof(sockaddr_un, sun_path) + 1 + n.size());
++			char msg[32];
++			const int m = snprintf(msg, sizeof msg, "%d %d %d\n", slot, ampPct, durMs);
++			if (sock >= 0 && sendto(sock, msg, m, MSG_DONTWAIT, (const sockaddr*)&a, len) == m) {
++				if (writes++ % 200 == 0) {
++					DriverLog("Pimax controller vibration: sent to @%s (%llu so far)", n.c_str(), (unsigned long long)writes);
++				}
++				return;
++			}
++		}
++		// vrserver may run in the Steam Runtime container without XDG_RUNTIME_DIR (and with a /tmp of its own):
++		// the user's runtime directory by uid then, which the container shares
++		const char* rt = getenv("XDG_RUNTIME_DIR");
++		const std::string dir = rt != nullptr && *rt ? std::string(rt) : "/run/user/" + std::to_string(getuid());
++		const std::string path = dir + "/pimax-haptic-request";
++		const int amp = std::clamp((int)lroundf(data.fAmplitude * 100.0f), 1, 100);
++		const int ms = std::clamp((int)lroundf((data.fDurationSeconds > 0.02f ? data.fDurationSeconds : 0.02f) * 1000.0f), 1, 65535);
++		const std::string tmp = path + ".tmp";
++		FILE* f = fopen(tmp.c_str(), "w");
++		if (writes++ % 200 == 0 || f == nullptr) {
++			DriverLog("Pimax controller vibration request to %s: %s (%llu written)", path.c_str(),
++				f != nullptr ? "ok" : strerror(errno), (unsigned long long)writes);
++		}
++		if (f == nullptr) {
++			return;
++		}
++		fprintf(f, "%d %d %d\n", role == vr::TrackedControllerRole_LeftHand ? 2 : 3, amp, ms);
++		fclose(f);
++		rename(tmp.c_str(), path.c_str());
++	}
++
++	uint64_t vibrations = 0;
++	uint64_t writes = 0;
++
+ 	// From RunFrame.
+ 	void UpdateBattery(int battery) {
+ 		if (deviceIndex == vr::k_unTrackedDeviceIndexInvalid || battery < 0 || battery == lastBattery) {
+@@ -896,11 +967,14 @@ void PimaxSlamDriver::PosTrackedDeviceActivate(uint32_t& unObjectId, vr::EVRInit
+ 
+ 	vr::VRProperties()->SetStringProperty(container, vr::Prop_TrackingSystemName_String, "aapvr");
+ 	vr::VRProperties()->SetStringProperty(container, vr::Prop_ManufacturerName_String, "Pimax");
+-	vr::VRProperties()->SetStringProperty(container, vr::Prop_ModelNumber_String, "Pimax Crystal");
++	const auto type = GetInfo().headsetType;
++	vr::VRProperties()->SetStringProperty(container, vr::Prop_ModelNumber_String,
++		type == Config::HeadsetType::CrystalOG                                       ? "Pimax Crystal"
++		: type == Config::HeadsetType::DreamAir || type == Config::HeadsetType::DreamAirSE ? "Pimax Dream Air"
++		                                                                                   : "Pimax Crystal Super");
+ 	vr::VRProperties()->SetStringProperty(container, vr::Prop_RenderModelName_String, "generic_hmd");
+ 	vr::VRProperties()->SetUint64Property(container, vr::Prop_CurrentUniverseId_Uint64, k_UniverseId);
+-	// the panel mode PiBridge asks the headset for (piPcSwicthIoctl video 120 switches the link, 90 is what the
+-	// Lighthouse session ran at)
++	// 90 Hz unless the headset's refreshRate says otherwise (BaseHeadsetShim::PosTrackedDeviceActivate)
+ 	vr::VRProperties()->SetFloatProperty(container, vr::Prop_DisplayFrequency_Float, 90.0f);
+ 	vr::VRProperties()->SetBoolProperty(container, vr::Prop_DeviceProvidesBatteryStatus_Bool, true);
+ 
+@@ -981,6 +1055,18 @@ void PimaxSlamDriver::RunPvrBackground() {
+ }
+ 
+ void PimaxSlamDriver::HandleEvent(const vr::VREvent_t& event) {
++	if (event.eventType == vr::VREvent_Input_HapticVibration) {
++		static uint64_t seen = 0;
++		if (seen++ % 200 == 0) {
++			DriverLog("Haptic event for container %llu (%llu so far)", (unsigned long long)event.data.hapticVibration.containerHandle,
++				(unsigned long long)seen);
++		}
++		for (int side = 0; side < 2; side++) {
++			if (s_controllerDriver[side]) {
++				s_controllerDriver[side]->Vibrate(event.data.hapticVibration);
++			}
++		}
++	}
+ }
+ 
+ void PimaxSlamDriver::StartPvrTracking() {
+diff --git a/CustomHeadsetOpenVR/src/Helpers/PimaxCommon.cpp b/CustomHeadsetOpenVR/src/Helpers/PimaxCommon.cpp
+index 71fa27d..818be4b 100644
+--- a/CustomHeadsetOpenVR/src/Helpers/PimaxCommon.cpp
++++ b/CustomHeadsetOpenVR/src/Helpers/PimaxCommon.cpp
+@@ -631,11 +631,16 @@ bool PimaxCommon::IsSlamHeadsetConnected(){
+ 	PimaxInfo info = PimaxCommon::GetInfo();
+ 	return info.headsetType && driverConfig.ConfigFromHeadsetType(info.headsetType)->enable && info.connected && info.isOpenPortEnabled && info.useSlamTracking;
+ #else
+-	// PiBridge: the original Crystal identified by USB, tracking itself (its poses in PiBridge's shared memory)
++	// PiBridge: the headset identified by USB, its inside-out poses in PiBridge's shared memory: the original Crystal
++	// tracking itself (pibridge-keepalived), the Crystal Super / Dream Air tracked on the PC (pibridge-headtrack)
+ 	TryDirectConnection();
+ 	PimaxInfo info = PimaxCommon::GetInfo();
+-	return info.headsetType == Config::HeadsetType::CrystalOG && driverConfig.ConfigFromHeadsetType(info.headsetType)->enable &&
+-		SharedMemoryPose::HeadsetTracksItself();
++	if (!info.headsetType || !driverConfig.ConfigFromHeadsetType(info.headsetType)->enable) {
++		return false;
++	}
++	const uint32_t source = SharedMemoryPose::InsideOutSource();
++	return info.headsetType == Config::HeadsetType::CrystalOG ? source == SharedMemoryPose::kSourceCrystal
++	                                                          : source == SharedMemoryPose::kSourceHeadtrack;
+ #endif
+ }
+ 
+diff --git a/CustomHeadsetOpenVR/src/Helpers/SharedMemoryPoseSource.cpp b/CustomHeadsetOpenVR/src/Helpers/SharedMemoryPoseSource.cpp
+index 23a8a8c..04ebc82 100644
+--- a/CustomHeadsetOpenVR/src/Helpers/SharedMemoryPoseSource.cpp
++++ b/CustomHeadsetOpenVR/src/Helpers/SharedMemoryPoseSource.cpp
+@@ -67,6 +67,7 @@ std::optional<Snapshot> Read() {
+ 		Snapshot s;
+ 		s.writtenNs = At<int64_t>(b, 16);
+ 		s.tracking = At<uint32_t>(b, 24);
++		s.source = At<uint32_t>(b, 28);
+ 		for (size_t i = 0; i < 3; i++) {
+ 			const size_t o = 32 + i * kDevice;
+ 			Device& d = s.devices[i];
+@@ -86,9 +87,9 @@ std::optional<Snapshot> Read() {
+ 	return std::nullopt;
+ }
+ 
+-bool HeadsetTracksItself() {
++uint32_t InsideOutSource() {
+ 	const auto s = Read();
+-	return s && NowNs() - s->writtenNs < kStaleNs && s->tracking != 0 && s->devices[0].timeNs != 0;
++	return s && NowNs() - s->writtenNs < kStaleNs && s->tracking != 0 && s->devices[0].timeNs != 0 ? s->source : 0;
+ }
+ 
+ } // namespace SharedMemoryPose
+@@ -98,7 +99,7 @@ bool HeadsetTracksItself() {
+ namespace SharedMemoryPose {
+ std::optional<Snapshot> Read() { return std::nullopt; }
+ int64_t NowNs() { return 0; }
+-bool HeadsetTracksItself() { return false; }
++uint32_t InsideOutSource() { return 0; }
+ } // namespace SharedMemoryPose
+ 
+ #endif
+diff --git a/CustomHeadsetOpenVR/src/Helpers/SharedMemoryPoseSource.h b/CustomHeadsetOpenVR/src/Helpers/SharedMemoryPoseSource.h
+index d18e822..aabab5a 100644
+--- a/CustomHeadsetOpenVR/src/Helpers/SharedMemoryPoseSource.h
++++ b/CustomHeadsetOpenVR/src/Helpers/SharedMemoryPoseSource.h
+@@ -10,8 +10,9 @@
+ // Default file: /dev/shm/pibridge-crystal-pose (environment CUSTOM_HEADSET_POSE_SHM overrides it). The format (328
+ // bytes, little endian, the headset's tracking space: y up, metres; CLOCK_MONOTONIC nanoseconds):
+ //   0 u64 seq_begin | 8 u32 magic "PBPS" | 12 u32 version 1 | 16 i64 publish time | 24 u32 the headset's own
+-//   inside-out, flags 1 orientation 2 position (0: Lighthouse mode) | 28 u32 reserved | 32 three devices (head, left,
+-//   right), 96 bytes each:
++//   inside-out, flags 1 orientation 2 position (0: Lighthouse mode) | 28 u32 source (1 pibridge-keepalived for the
++//   original Crystal, 2 pibridge-headtrack for the Crystal Super / Dream Air) | 32 three devices (head, left, right),
++//   96 bytes each:
+ //     +0 i64 sample time (0 never) | +8 u32 state (head 1 tracked; controller 4 no pose, 5 IMU only, 7 optical)
+ //     +12 i32 battery % | +16 f32[3] position | +28 f32[4] orientation x y z w | +44 f32[3] linear velocity
+ //     +56 f32[3] angular velocity (tracking space) | +68 u32 buttons | +72 f32[4] trigger grip stick-x stick-y
+@@ -37,6 +38,7 @@ struct Device {
+ struct Snapshot {
+ 	int64_t writtenNs = 0;
+ 	uint32_t tracking = 0;
++	uint32_t source = 0;
+ 	Device devices[3]; // head, left, right
+ };
+ 
+@@ -44,7 +46,10 @@ struct Snapshot {
+ std::optional<Snapshot> Read();
+ // CLOCK_MONOTONIC in nanoseconds (the file's clock).
+ int64_t NowNs();
+-// The headset is in its own inside-out tracking right now (fresh file, a tracking flag set, a head report seen).
+-bool HeadsetTracksItself();
++constexpr uint32_t kSourceCrystal = 1;
++constexpr uint32_t kSourceHeadtrack = 2;
++// Someone tracks the headset inside-out right now (fresh file, a tracking flag set, a head pose seen); its source
++// (kSource*), 0 when nobody does.
++uint32_t InsideOutSource();
+ 
+ } // namespace SharedMemoryPose

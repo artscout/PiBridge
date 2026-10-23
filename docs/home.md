@@ -1,8 +1,7 @@
 # pibridge-home: the VR home in the headset (`tools/home/`)
 
-While "Monado directly" runs (the Development page's debug / A-B session, [DEVELOPMENT.md](DEVELOPMENT.md)) monado-service is the OpenXR runtime and
-SteamVR does not run, so without an app the headset shows nothing. `pibridge-home` is a small OpenXR + Vulkan program
-that is the home there (after omarchyvr's docs/VR-HOME.md and docs/BACKGROUNDS.md):
+`pibridge-home` is a small OpenXR + Vulkan program that is PiBridge's VR home in the headset (after omarchyvr's
+docs/VR-HOME.md and docs/BACKGROUNDS.md):
 
 - **The PiBridge window** on a curved screen 1.3 m in front of you (a piece of a cylinder around where you stood, 1.5 m
   wide, its height from the window's aspect). It is the app's real main window, so the home's menu is the app: the VR
@@ -21,15 +20,12 @@ that is the home there (after omarchyvr's docs/VR-HOME.md and docs/BACKGROUNDS.m
 Every part is a leaf: no camera picture, no picture file, no GPU pass, no app: the home falls back (dusk sky, the dark
 grid, the text panel), says why in its status file (`background_note`, `window`) and keeps running.
 
-The user never starts it in the Monado-directly mode: that session does, once Monado runs, with `XR_RUNTIME_JSON`
-pointing at that Monado, when **Home scene in the headset** (`io_home_scene`, default on) is on, and stops it (SIGTERM
-to its PID) when the session stops. **Under SteamVR** (SteamVR + driver_monado) SteamVR has its own home and
-dashboard; SteamVR Home is off for this user, so the app's VR home page has **SHOW THE HOME IN STEAMVR**: it starts
-pibridge-home as a normal OpenXR app of SteamVR's (the same window, background and passthrough; a game started later
-takes the headset, as under Monado).
+SteamVR has its own home and dashboard; SteamVR Home is off for this user, so the app's VR home page has **SHOW THE
+HOME IN STEAMVR**: it starts pibridge-home as a normal OpenXR app of SteamVR's (the window, the background and the
+passthrough; a game started later takes the headset).
 
 ```
-pibridge-home [--rooms DIR] [--res-div N] [--camera SPEC]            run (the session starts it)
+pibridge-home [--rooms DIR] [--res-div N] [--camera SPEC]            run (the VR home page starts it)
 pibridge-home --selftest [--snapshot DIR [--panel-ppm FILE]]         checks without a runtime or GPU (and pictures)
 ```
 
@@ -77,20 +73,17 @@ a credit (CC BY / BY-SA) and are left out; the credit of the picture in use is s
 
 ## How it yields to games
 
-Monado shows one primary application: the client whose session began last; when that one ends, it falls back to
-another running session (omarchyvr `forks/monado` `ipc_server_process.c`, `update_server_state_locked`,
-`ipc_server_activate_session`). So:
+The rules were written for a runtime that shows the client whose session began last and falls back to another running
+session when that one ends (Monado's rule, omarchyvr `forks/monado` `ipc_server_process.c`); under SteamVR a game
+started later takes the headset the same way. So:
 
-- pibridge-home calls `xrBeginSession` once, at its first READY, right after the session starts it. The app's Apps page
-  waits until pibridge-home's status file says it has its session (or 8 s passed) before it starts a game, so the game
-  begins later and is what the headset shows.
+- pibridge-home calls `xrBeginSession` once, at its first READY, right after it starts.
 - While another app is shown the home is SYNCHRONIZED: it keeps the frame loop going (`xrWaitFrame` /
   `xrBeginFrame` / `xrEndFrame` for every frame the runtime asks) but draws nothing and submits no layer.
-- When the game ends Monado shows the home again (VISIBLE / FOCUSED); the session is the same one.
+- When the game ends the runtime may show the home again (VISIBLE / FOCUSED); the session is the same one.
 - It never begins a second time and never makes a new session: a STOPPING is answered with `xrEndSession` and the
   program leaves. EXITING, LOSS_PENDING and an instance loss: it leaves at once. SIGTERM / SIGINT:
   `xrRequestExitSession`, then the same; after 3 s without an answer it leaves anyway.
-- The session does not start it again in the same session if it crashes (it could take the headset from a game).
 
 The rules are `src/loop.h` (pure, tested); the OpenXR loop is `src/xrhome.cpp`.
 
@@ -105,8 +98,9 @@ asks for is answered (no lowered frame rate). Space: STAGE (floor at y = 0), LOC
 stays where it is.
 
 The saved room is drawn in stage numbers through its standing pose (the frame mode of the rooms folder, as the room
-setup does). Under Monado the stage is not anchored to the room yet (TRACKING.md, room anchor), so the boundary is
-centred on the play centre but can be turned or shifted against the real walls.
+setup does). With inside-out tracking the stage is anchored to the room only with a saved room map (TRACKING.md, "The
+room map at the start"); without one the boundary is centred on the play centre but can be turned or shifted against
+the real walls.
 
 
 ## Status file
@@ -115,8 +109,7 @@ centred on the play centre but can be turned or shifted against the real walls.
 ("starting" before the session began, "running" begun and another app shown, "visible", "focused", "ending"),
 `visible`, `focused`, `runtime`, `space` ("stage" | "local"), `room`, `error` (plain words), `pid`, `background`
 (passthrough | picture | dusk | grid: what is shown), `background_note` (why it fell back, plain words), `window`
-(linked | waiting for the app | off | no GPU pass). The Development page reads `state` and `pid`; the VR home page also
-the rest.
+(linked | waiting for the app | off | no GPU pass). The VR home page reads it.
 
 ## Code
 
@@ -154,6 +147,6 @@ Haven's answer, the conversion and the thumbnail, the fake library, the shared f
 
 Nothing of pibridge-home has run against a real runtime (agents never touch a running session). To check in the headset:
 the session, the Vulkan drawing (the sky, the window and the passthrough passes), the bindings of the Pimax
-controllers (trigger, stick, grip), that Monado shows a game started after it and the home again after the game, the
+controllers (trigger, stick, grip), that a game started after it takes the headset and the home comes back after it, the
 window's text at the 2048 px cap, the pointer's clicks and scrolling in the real app, the passthrough's four cameras
-(orientation, seams, gains), the background download from Poly Haven, and the home under SteamVR.
+(orientation, seams, gains), and the background download from Poly Haven.

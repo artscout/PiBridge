@@ -23,6 +23,8 @@ struct Settings {
     /// 72 or 90.
     int refresh_hz = 90;
     bool audio_to_headset = true;
+    /// mic_to_headset: the headset's microphone is the default input while it is on.
+    bool mic_to_headset = true;
     bool eye_tracking = true;
     /// Path of the eye start frame list; empty = the default path.
     std::string eye_start_list;

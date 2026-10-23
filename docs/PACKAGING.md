@@ -7,7 +7,7 @@ The `debian/` directory in the repo root drives it.
 
 | Content | Path |
 | --- | --- |
-| App + engine binaries (`pibridge`, `pibridge-slam`, `pibridge-eyed`, `pibridge-ctrltrack`, `pibridge-roommap`, `pibridge-record`, `pibridge-overlay`, `pibridge-home`, `pibridge-roomsetup`, ...) | `/usr/bin/` |
+| App + engine binaries (`pibridge`, `pibridge-headtrack`, `pibridge-cam`, `pibridge-slam`, `pibridge-eyed`, `pibridge-ctrltrack`, `pibridge-roommap`, `pibridge-record`, `pibridge-overlay`, `pibridge-home`, `pibridge-roomsetup`, ...) | `/usr/bin/` |
 | Device descriptions (HID allowlist, `*.toml`) | `/usr/share/pibridge/devices/` |
 | systemd **user** units (`pibridge-eyed.service`, `pibridge-keepalived.service`) | `/usr/lib/systemd/user/` |
 | Vulkan video-capture record layer | `/usr/lib/<triplet>/pibridge/libpibridge-record-layer.so` |
@@ -15,51 +15,39 @@ The `debian/` directory in the repo root drives it.
 | Desktop entry + icons | `/usr/share/applications/`, `/usr/share/icons/hicolor/` |
 | Docs | `/usr/share/doc/pibridge/` |
 | udev rule (canonical copy) | `/usr/share/pibridge/udev/70-pibridge.rules` (activated into `/lib/udev/rules.d/` by postinst) |
-| **Bundled** Monado SteamVR driver (prebuilt, stripped) | `/usr/lib/pibridge/steamvr-monado/` |
-| **Bundled** ONNX Runtime | `/usr/lib/pibridge/libonnxruntime.so*` |
 | winbridge **sources** + build helper | `/usr/share/pibridge/winbridge-src/` (incl. `build-winbridge.sh`; not on `$PATH`) |
 
-### Dependencies: system first, bundle only the unpackaged
+### Dependencies: system packages only
 
 Everything that a distribution packages is a **system dependency**, pulled via
 `${shlibs:Depends}` (Qt 6, the Vulkan loader, EGL/GL, zlib, and the OpenXR
 loader *only if actually linked*) plus a few explicit packages:
 
 - **OpenCV 4.10** — `libopencv-core410 | libopencv-core4.10` and the imgproc,
-  imgcodecs, video, calib3d, features2d, dnn and flann siblings. These are
-  listed explicitly because the one thing that links OpenCV is the *bundled*
-  Monado driver blob, which `dh_shlibdeps` does not scan.
+  imgcodecs, video, calib3d, features2d, dnn and flann siblings, listed
+  explicitly in `debian/control`.
 - **ffmpeg** — `pibridge-record` runs it (NVENC, x264 fallback).
 - **steam** (Recommends) — SteamVR is the runtime.
 - **wine**, **mingw-w64** (Suggests) — only for the optional winbridge build.
 
-Only **two** things are bundled, because they are not distribution packages:
-
-1. the **PiBridge Monado SteamVR driver** (our build), and
-2. **libonnxruntime** (ONNX Runtime, required by the Pimax driver for Mercury
-   hand tracking).
-
-`monado-service` is **not** shipped (the SteamVR-driver path does not need it).
+Nothing is bundled: inside-out tracking runs in `pibridge-headtrack` (our code)
+and SteamVR shows it through CustomHeadsetOpenVR, which the user installs
+(`docs/INSTALL.md` 5.3). No Monado and no ONNX Runtime are built or shipped.
 `app/third_party/openvr/openvr.h` is vendored **build-time** headers only;
 SteamVR's own `libopenvr_api.so` is dlopen'd at run time.
 
 ### Excluded on purpose
 
-Mercury hand models, Pimax Play DLLs / the windata kit, `winbridge.exe` build
+Pimax Play DLLs / the windata kit, `winbridge.exe` build
 output, and the external lens/calibration data in `~/gamedev/ext/`. The Pimax
 kit is a manual post-install step — see `docs/INSTALL.md` §7.
 
 ## Building the .deb (this machine)
 
-The binary package stages the **prebuilt** Monado driver from
-`~/gamedev/pibridge-monado-build/steamvr-monado` and ONNX Runtime from
-`~/gamedev/ovr-build/onnxruntime/lib`. Both paths are overridable in
-`debian/rules` (`PIBRIDGE_MONADO_PREBUILT`, `PIBRIDGE_ONNX_LIBDIR`).
-
 ```sh
 # install build-deps once:
 sudo apt install cmake ninja-build g++ qt6-base-dev libopenxr-dev \
-     libvulkan-dev libgl-dev libegl-dev zlib1g-dev libjpeg-dev patchelf debhelper
+     libvulkan-dev libgl-dev libegl-dev zlib1g-dev libjpeg-dev debhelper
 
 # binary .deb (run heavy build nicely):
 cd ~/gamedev/pibridge
@@ -81,16 +69,9 @@ dpkg-buildpackage -us -uc -S     # -> ../pibridge_1.0.1.dsc + .tar.xz
 (`debian/source/options` keeps the tarball lean — no `build*/`, `.git`, caches
 or Windows build outputs.)
 
-> **Honest caveat.** The native source package does **not** carry the prebuilt
-> Monado driver or ONNX Runtime (they live outside the repo). A from-source
-> build on another machine must build `third_party/monado/` itself and obtain
-> ONNX Runtime separately (see below); the current `debian/rules` only stages
-> the prebuilt blob and will fail with a clear message if it is absent. Wiring
-> the from-source Monado build into `debian/rules` is a documented TODO there.
-
 ## Build from source / other distros
 
-### 1. PiBridge itself (needs no bundled blob to compile)
+### PiBridge itself
 
 System packages to build the app and engine binaries:
 
@@ -110,32 +91,12 @@ nice -n 19 cmake --build build-deb -j8
 Note: `ffmpeg`, Vulkan and OpenCV are **system packages** everywhere. `openxr`
 is used for **headers** (the app links the loader only if present).
 
-### 2. The bundled Monado SteamVR driver
+### Basalt (optional)
 
-The Monado fork (with the Pimax Crystal Super driver) is vendored in
-`third_party/monado/` — no clone needed. Build it out-of-tree with
-`PIMAX_USE_PIBRIDGE=ON`; the exact CMake options and the cache-copy method are
-in **`docs/monado-abi.md`**.
-
-System build-deps Monado needs (names vary by distro): `libudev`/eudev,
-`vulkan-headers` + the Vulkan loader, `glslang`/`glslc` (shader compiler),
-`libusb-1.0`, `libxcb`/`wayland` dev, `eigen3`, and **OpenCV** (all system
-packages).
-
-Honest gaps — **NOT** distribution packages, obtain separately:
-
-- **ONNX Runtime** — *required* by the Pimax driver (Mercury hand tracking).
-  Download a release (`onnxruntime-linux-x64-*.tgz`) or build it, then point
-  Monado's CMake at it:
-  `-DONNXRuntime_ROOT_DIR=/path/to/onnxruntime`.
-  There is **no** Debian/Ubuntu `onnxruntime` package; this is why the .deb
-  bundles `libonnxruntime.so*` into `/usr/lib/pibridge/`.
-- **Basalt** (`libbasalt.so`) — *optional*, only for the open SLAM engine
-  (the default inside-out path uses the Pimax engine via winbridge, not Basalt).
-
-After building the driver, install/stage it as `steamvr-monado/` and copy the
-ONNX Runtime `.so` next to `driver_monado.so` (or set an rpath to it), exactly
-as `debian/rules` does for the prebuilt blob.
+**Basalt** (`libbasalt.so`) is not a distribution package and is not shipped. It is
+only needed for the open SLAM engine, the fallback (the default inside-out path
+uses the Pimax engine via winbridge); build it separately and point the app at it
+(`rec_basalt_lib`, `docs/INSTALL.md` 7.1).
 
 ## The optional inside-out (Pimax-engine) path: winbridge
 
@@ -155,7 +116,7 @@ g++ -O2 -std=c++20 -fPIC -shared vit_winbridge.cpp -o libpibridge_vit_winbridge.
 
 and installs the two outputs into `~/.local/share/pibridge/winbridge/`, where
 the app looks for them. Nothing starts it as a service: the app runs
-`wine winbridge.exe` inside each inside-out tracking session (START TRACKING)
+`wine winbridge.exe` inside each inside-out tracking session (START VR)
 and stops it with the session. See `docs/WINBRIDGE.md` for the full picture and
 `docs/INSTALL.md` section 7 for the Pimax kit and the user steps.
 
@@ -163,6 +124,5 @@ and stops it with the session. See `docs/WINBRIDGE.md` for the full picture and
 
 `postinst` only activates the udev rule (copies it to `/lib/udev/rules.d/` and
 reloads udev) and prints a note. The rest is **per-user** and is done by the
-app on first run: enabling the systemd *user* services and registering the
-PiBridge Monado SteamVR driver in `openvrpaths.vrpath`. No system
+app on first run: enabling the systemd *user* services. No system
 `daemon-reload` is needed (the units are user units). Just launch **PiBridge**.

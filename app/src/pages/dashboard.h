@@ -8,6 +8,7 @@
 
 #include "../core/actions.h"
 #include "../core/conf.h"
+#include "../core/controllers.h"
 #include "../core/io_session.h"
 #include "../core/monado_devices.h"
 #include "../core/state.h"
@@ -86,6 +87,8 @@ private:
     bool crystalOn() const;
     /// The tracking mode in effect: the Crystal's own while it is on, the saved setting otherwise.
     bool insideOutNow() const;
+    /// What the tracking selector shows: the original Crystal's chosen mode (crystal_tracking), else insideOutNow().
+    bool selectedInsideOut() const;
     /// START VR runs the Monado inside-out session (the saved inside-out mode, not the Crystal).
     bool monadoSession() const;
     // The Quick settings SteamVR-dashboard toggle: reflects the saved choice and shows the launcher's plain-words status.
@@ -136,7 +139,9 @@ private:
     QLabel* hsHint_ = nullptr;
     QLabel* hsError_ = nullptr;
     QLabel* hsState_ = nullptr;
-    QLabel* hsSerial_ = nullptr; // the headset serial (real serial from SteamVR/keepalived)
+    QLabel* hsSerial_ = nullptr; // the headset serial (its own, read by keepalived; else SteamVR's)
+    QLabel* hsOptics_ = nullptr; // the optical module's serial (Crystal Super)
+    QWidget* hsOpticsLabel_ = nullptr;
     pibridge::ui::HeadsetArt* art_ = nullptr;
     pibridge::ui::Segmented* refresh_ = nullptr;
     pibridge::ui::Segmented* refreshCrystal_ = nullptr; // the original Crystal: 72 / 90 / 120 Hz, through CHOVR
@@ -153,11 +158,24 @@ private:
         QLabel* serial = nullptr;
         QPushButton* copy = nullptr;
         QString serialText;
+        // Pair / Unpair / Test vibration (core/controllers.h), like Pimax Play's controller page
+        QPushButton* pair = nullptr;
+        QPushButton* unpair = nullptr;
+        QPushButton* buzz = nullptr;
+        QLabel* opText = nullptr;
     };
     ControllerWidgets ctrlRows_[2]; // left, right
+    ControllerOps ctrlOps_;
+    bool ctrlSeen_[2] = {false, false}; // the controller is shown by SteamVR now (left, right)
+    QTimer* ctrlOpsTimer_ = nullptr;
+    void controllerAction(int slot, int action);
+    // PAIR: a small guide window with the steps, START PAIRING, the 35 s progress and the result.
+    void showPairDialog(int slot);
+    void applyControllerOps();
     QLabel* ctrlExtra_ = nullptr;
     QLabel* trSummary_ = nullptr;
     QWidget* trStations_ = nullptr;
+    QWidget* trBaseHead_ = nullptr; // the base stations' summary row (Lighthouse only)
     QLabel* trText_ = nullptr;
     QString trKey_; // what the station rows show now (rebuilt only when it changes)
     pibridge::ui::Toggle* passthrough_ = nullptr;
@@ -165,6 +183,7 @@ private:
     QLabel* dashOverlayLine_ = nullptr;           // its plain-words status
     pibridge::ui::Toggle* eyeToggle_ = nullptr;
     QPushButton* calibrate_ = nullptr;
+    QPushButton* importEye_ = nullptr; // calibration.setpm from Pimax Play / EVO (Windows)
     QPushButton* recenter_ = nullptr;
     pibridge::ui::SliderRow* ipd_ = nullptr; // ipd_mm: the user's IPD in whole mm (lens motors + rendering)
     QTimer* ipdTimer_ = nullptr;             // sends the IPD 0.6 s after the slider stops
@@ -183,6 +202,9 @@ private:
     QLabel* toolResult_ = nullptr;
     pibridge::ui::GazeDot* gaze_ = nullptr;
     pibridge::ui::Toggle* audio_ = nullptr;
+    pibridge::ui::Toggle* mic_ = nullptr;     // mic_to_headset
+    QLabel* inputNow_ = nullptr;              // the default input now: headset or another
+    void updateInputNow();
     SoundTestPanel* soundPanel_ = nullptr; // the TEST SPEAKERS / TEST MIC card (gated on SteamVR running)
     RecordCard* record_ = nullptr;
 };

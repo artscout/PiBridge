@@ -238,6 +238,7 @@ TEST(system_check_from_proc) {
 
 TEST(readiness_words) {
     RecSetup s = fakeRecSetup(QStringLiteral("/tmp/x"));
+    s.io.slamEngine = SlamEngine::Basalt;
     RecSystem sys;
     CHECK(recReadiness(s, sys).ready());
     sys.vrserver = true;
@@ -264,6 +265,7 @@ TEST(readiness_words) {
     CHECK(r.warnings.join(QString()).contains(QStringLiteral("Fix permissions")));
     CHECK(r.warnings.join(QString()).contains(QStringLiteral("the recording still works")));
     s = fakeRecSetup(QStringLiteral("/tmp/x"));
+    s.io.slamEngine = SlamEngine::Basalt;
     s.monado.path.clear();
     s.monado.fromConf = true;
     s.monado.wanted = QStringLiteral("/opt/monado-service");
@@ -540,6 +542,7 @@ struct Rig {
 
     explicit Rig(const std::function<void(RecSetup&)>& tweak = {}) {
         setup = fakeRecSetup(dir.path() + QStringLiteral("/recordings"));
+        setup.io.slamEngine = SlamEngine::Basalt;
         if (tweak) {
             tweak(setup);
         }
@@ -589,7 +592,8 @@ TEST(lease_failure_from_a_log_sample) {
 }
 
 TEST(command_lines_and_environment) {
-    const RecSetup s = fakeRecSetup(QStringLiteral("/r"));
+    RecSetup s = fakeRecSetup(QStringLiteral("/r"));
+    s.io.slamEngine = SlamEngine::Basalt; // written for Basalt (Pimax is the default now)
     const RecProcSpec b = brokerSpec(s, QStringLiteral("/r/x/logs"));
     CHECK(b.program == s.cam.path);
     CHECK((b.args == QStringList{QStringLiteral("broker"), QStringLiteral("--source"), QStringLiteral("/dev/video0"),
@@ -620,6 +624,7 @@ TEST(command_lines_and_environment) {
 
 TEST(pimax_slam_engine_environment) {
     RecSetup s = fakeRecSetup(QStringLiteral("/r"));
+    s.io.slamEngine = SlamEngine::Basalt;
     s.io.slamEngine = SlamEngine::Pimax;
     s.io.slamCams = 2; // Basalt's camera setting does not matter for Pimax's engine
     CHECK(pimaxSlamReady(s) && winbridgeWanted(s));
@@ -680,7 +685,7 @@ TEST(pimax_slam_engine_environment) {
         CHECK(c.set(k, v));
     }
     CHECK(ioSettings(c).slamEngine == SlamEngine::Pimax);
-    CHECK(ioSettings(Conf(tmp.path() + QStringLiteral("/none.conf"))).slamEngine == SlamEngine::Basalt); // default
+    CHECK(ioSettings(Conf(tmp.path() + QStringLiteral("/none.conf"))).slamEngine == SlamEngine::Pimax); // default
 }
 
 TEST(session_pimax_engine_runs_winbridge_before_monado_and_stops_it_after) {

@@ -16,13 +16,13 @@ pibridge-cam broker-status [--socket P] [--window S] [--json]      exit 0 stream
 
 S: empty or `auto` (the live camera, found under `/sys/class/video4linux`), `/dev/videoN`, `broker[:SOCKET]`, or a
 `.pxcam` recording. `broker` serves one camera stream to any number of processes (default socket
-`$XDG_RUNTIME_DIR/omarchyvr-cam-broker.sock`, the one Monado's driver and `pimax-ctrltrack` use); a live camera is
+`$XDG_RUNTIME_DIR/omarchyvr-cam-broker.sock`, the one pibridge-headtrack and pibridge-ctrltrack use); a live camera is
 reopened after an unplug or a 5 s stall while the broker keeps its socket and its clients. A recording is paced in
 real time (`--loop` restarts it). SIGINT/SIGTERM stop `record` and `broker` cleanly. Not ported: `tiles`, `rectify`,
 `hypotheses`, `cpu`.
 
 Drop-in for the session: `pibridge-cam broker --source /dev/videoN --socket $XDG_RUNTIME_DIR/omarchyvr-cam-broker.sock`
-is the command line PiBridge's RECORD TRACKING and START TRACKING run (`rec_pimax_cam`, default `pibridge-cam`).
+is the command line PiBridge's START VR runs in the inside-out mode (`rec_pimax_cam`, default `pibridge-cam`).
 
 ## Tests
 

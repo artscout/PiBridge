@@ -113,6 +113,8 @@ std::string steamvr_stage_path();
 std::optional<SteamVrStage> parse_steamvr_stage(std::string_view text);
 /// The process is SteamVR's vrserver (/proc/<pid>/comm).
 bool is_vrserver(std::uint32_t pid);
+/// pibridge-headtrack (the head tracking without Monado; its comm is cut to 15 characters).
+bool is_headtrack(std::uint32_t pid);
 /// The stage of the session `pid` when it is a vrserver and the file names it; nullopt otherwise.
 std::optional<SteamVrStage> steamvr_stage(std::uint32_t pid);
 /// A controller lying still on the floor: (floor y, spread) or why not.

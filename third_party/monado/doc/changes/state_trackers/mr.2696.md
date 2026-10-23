@@ -1,1 +1,0 @@
-st/oxr: Fix parallel views quirk for headsets that do not have canted views.

@@ -29,6 +29,7 @@ namespace reckey {
 inline constexpr char kMonado[] = "rec_monado_service";
 inline constexpr char kCam[] = "rec_pimax_cam";
 inline constexpr char kCtrl[] = "rec_pimax_ctrltrack";
+inline constexpr char kHeadtrack[] = "rec_pibridge_headtrack";
 inline constexpr char kBasalt[] = "rec_basalt_lib";
 inline constexpr char kWinbridge[] = "rec_winbridge";        // winbridge.exe (the Pimax SLAM engine under Wine)
 inline constexpr char kVitBridge[] = "rec_vit_winbridge";    // libpibridge_vit_winbridge.so (Monado's VIT library for it)
@@ -89,6 +90,8 @@ struct RecSetup {
     // The Pimax SLAM engine (io_slam_engine=pimax, docs/WINBRIDGE.md): the server, Monado's VIT library for it, Wine,
     // and the kit copied from Pimax Play ($XDG_DATA_HOME/pibridge/windata: dlls/ + slam/ with a device_calibration_*.xml).
     RecPath winbridge, vitBridge;
+    // pibridge-headtrack (io_headtrack): the head tracking without Monado
+    RecPath headtrack;
     QString wine;                 // wine in PATH; "" when not found
     QString winKit;               // the kit folder; "" when it lacks the engine, its vocabulary or a calibration
     bool winCtrlModels = false;   // the kit has the controllers' LED models (slam/H1/*/controller_params.json)

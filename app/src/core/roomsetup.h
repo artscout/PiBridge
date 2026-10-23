@@ -25,7 +25,7 @@ namespace pibridge::app {
 pibridge::room::Env roomEnv(bool fake);
 
 /// Made-up SteamVR files and rooms for the fake mode and the screenshots (a 4.2 x 3.4 m room with a cut corner in
-/// universe 1111111111, a 3 x 2 m one in universe 2, two saved rooms).
+/// universe 1111111111, a 3 x 2 m one in universe 30, two saved rooms).
 void writeFakeRoomFiles(const pibridge::room::Env& env);
 
 struct Gate {
@@ -42,10 +42,10 @@ QString activeUniverse(const SteamVrStatus& s);
 
 // ---------------------------------------------------------------- inside-out (SteamVR + Monado)
 
-/// driver_monado's universe: every Monado-tracked headset under SteamVR shares it (ovrd_driver.cpp sets
+/// The inside-out universe (was driver_monado's "2" before pibridge-headtrack; ovrd_driver.cpp sets
 /// Prop_CurrentUniverseId_Uint64 = 2), whatever room it is in.
-inline constexpr char kMonadoUniverse[] = "2";
-/// The universe the page and the headset tool work on: the one SteamVR tracks in, else universe 2 in the inside-out
+inline constexpr char kInsideOutUniverse[] = "30"; // CustomHeadsetOpenVR's SLAM headset (pibridge-headtrack, the original Crystal)
+/// The universe the page and the headset tool work on: the one SteamVR tracks in, else universe 30 in the inside-out
 /// mode, else "" (the store's own pick).
 QString roomTargetUniverse(bool insideOut, const QString& active);
 /// The plain words the Room page shows in the inside-out mode (no persistent world anchor yet).
@@ -54,7 +54,7 @@ QString insideOutRoomNote();
 /// universe, so a Lighthouse room is never overwritten by an inside-out one (or the other way round).
 Gate saveRoomGate(const pibridge::room::RoomLib& lib, const QString& name, const QString& universe);
 /// Showing a saved room of `roomUniverse` in the inside-out mode: only on its own universe (the page then switches to
-/// it); a room whose universe is not in the chaperone file is not shown on universe 2.
+/// it); a room whose universe is not in the chaperone file is not shown on universe 30.
 Gate showRoomGate(bool insideOut, const QString& roomUniverse, bool roomUniverseInFile);
 /// RECENTER IN HEADSET (inside-out): pibridge-roomsetup --recenter needs SteamVR + Monado running with the room anchor
 /// on (PIMAX_ANCHOR=1, Monado's offset hook and head ring) and the tool.
@@ -64,18 +64,18 @@ QStringList recenterArgs(const QString& out, const QString& ring);
 /// The line PiBridge shows at every inside-out start (the anchor is not persistent yet).
 QString recenterReminder();
 
-/// Adds universe 2 with a 2 x 2 m boundary around the origin to `file` (SteamVR's chaperone file), for the first
+/// Adds universe 30 with a 2 x 2 m boundary around the origin to `file` (SteamVR's chaperone file), for the first
 /// inside-out session before SteamVR made one. The file is backed up first (<file>.bak-<stamp>) and written
 /// atomically; everything else in it stays. Refused when the universe is there already. Only while SteamVR is closed
 /// (the caller's applyGate).
-std::expected<void, QString> addMonadoUniverse(const QString& file, std::time_t now);
+std::expected<void, QString> addInsideOutUniverse(const QString& file, std::time_t now);
 
 struct UniverseRow {
     QString id;
     QString detail; // "5 corners · 13.9 m² · play area 3.4 x 2.6 m · Mon Oct 19 10:00:00 2026"
     bool active = false;
     bool pimax = false;
-    bool monado = false; // universe 2: driver_monado's (inside-out)
+    bool monado = false; // universe 30: the inside-out headset's
 };
 std::vector<UniverseRow> universeRows(const pibridge::room::Store& st, const QString& active);
 

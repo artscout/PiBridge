@@ -7,33 +7,23 @@ Comment:
  used under its MIT terms. See the NOTICE file for the full attribution of
  ported and third-party material.
  .
- Two components are BUNDLED because they are not distribution packages:
-   * usr/lib/pibridge/steamvr-monado/  - the PiBridge Monado SteamVR driver, our
-     build of the Monado fork vendored in third_party/monado/ (Boost Software
-     License 1.0, as Monado). Shipped prebuilt and stripped.
-   * usr/lib/pibridge/libonnxruntime.so* - Microsoft ONNX Runtime (MIT), required
-     by the Pimax driver for Mercury hand tracking. Not packaged in Debian/Ubuntu.
- .
  Excluded on purpose (licence / not our code): the Mercury hand models, the
  Pimax Play DLLs and the windata kit, winbridge.exe build output, and the
- external lens/calibration data. Only repo content plus the two bundled
- components above are shipped.
+ external lens/calibration data. Only repo content is shipped.
 
 Files: *
 Copyright: 2026 Albert Valiev <artscout@gmail.com>
 License: MIT
+
+Files: winbridge/vit/vit_interface.h libpibridge-ctrl/include/pibridge/ctrl/track/imutrack.h
+Copyright: Collabora, Ltd. and the Monado contributors
+License: BSL-1.0
 
 Files: app/third_party/openvr/*
 Copyright: Valve Corporation
 License: BSD-3-Clause
  (OpenVR SDK header, build-time only; SteamVR's libopenvr_api.so is loaded at
  run time and is not part of this package.)
-
-Files: third_party/monado/*
-Copyright: Collabora, Ltd. and the Monado contributors
-License: BSL-1.0
- (Vendored Monado fork with the Pimax driver. The prebuilt driver bundled in the
- binary package is built from this tree.)
 
 License: MIT
  Permission is hereby granted, free of charge, to any person obtaining a copy of
@@ -59,5 +49,6 @@ License: BSD-3-Clause
  See app/third_party/openvr/LICENSE for the full text.
 
 License: BSL-1.0
- Boost Software License - Version 1.0. The full text is distributed with the
- Monado sources in third_party/monado/ (LICENSES/BSL-1.0.txt).
+ Boost Software License - Version 1.0 (https://www.boost.org/LICENSE_1_0.txt).
+ Used by Monado's VIT interface header (winbridge/vit/vit_interface.h) and the
+ IMU tracker derived from Monado (libpibridge-ctrl track/imutrack.h).

@@ -67,7 +67,7 @@ QString ControllerOps::start(Op op, int slot, const KeepaliveStatus& k, qint64 n
         why = QStringLiteral("The headset service is not running: press Restart services on the Dashboard, then try "
                              "again.");
     } else if (paused && op != Op::Buzz) {
-        why = QStringLiteral("Inside-out tracking is running and Monado's Pimax driver owns the headset. Stop "
+        why = QStringLiteral("Inside-out tracking is running and pibridge-headtrack owns the headset. Stop "
                              "tracking first, then %1 the controller.")
                   .arg(verb);
     } else if (!paused && !k.headsetPresent) {

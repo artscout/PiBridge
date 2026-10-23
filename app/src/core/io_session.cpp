@@ -47,8 +47,8 @@ RecReadiness ioStartReadiness(const RecSetup& s, const RecSystem& sys, IoVariant
             r.blocking << QStringLiteral("The tracking mode is Lighthouse. Switch it to Inside-out first.");
         }
         if (sys.vrserver) {
-            r.blocking << QStringLiteral("SteamVR is running. Close it first: PiBridge starts SteamVR itself with the Monado "
-                                         "driver, and SteamVR's driver settings can only be changed while it is closed.");
+            r.blocking << QStringLiteral("SteamVR is running. Close it first: PiBridge starts SteamVR itself after the head "
+                                         "tracking.");
         }
         if (!sys.steamClient) {
             r.blocking << QStringLiteral("Steam is not running. Start Steam and log in first: a SteamVR started without "
@@ -58,7 +58,14 @@ RecReadiness ioStartReadiness(const RecSetup& s, const RecSystem& sys, IoVariant
             r.blocking << QStringLiteral("SteamVR was not found (no runtime in ~/.config/openvr/openvrpaths.vrpath). "
                                          "Install SteamVR and start it once from Steam.");
         }
-        if (!s.monado.path.isEmpty() && s.steamVrDriverDir.isEmpty()) {
+        if (s.io.headtrack) {
+            if (!s.io.slam) {
+                r.blocking << QStringLiteral("Inside-out needs 6DoF head tracking on (Tracking page).");
+            }
+            if (s.headtrack.path.isEmpty()) {
+                r.blocking << QStringLiteral("pibridge-headtrack was not found. Build and install PiBridge again.");
+            }
+        } else if (!s.monado.path.isEmpty() && s.steamVrDriverDir.isEmpty()) {
             r.blocking << QStringLiteral("The Monado build of %1 has no SteamVR driver (steamvr-monado/). Choose another "
                                          "build on the Development page.")
                               .arg(s.monado.path);
@@ -594,8 +601,10 @@ bool IoSessionControl::continueStart() {
 
 bool IoSessionControl::startSteamVr() {
     session_.reset();
+    // pibridge-headtrack: SteamVR as it is (CustomHeadsetOpenVR on, no Monado driver, no driver settings file)
+    const bool headtrack = headtrackWanted(setup_);
     // 1. the Pimax driver's settings for driver_monado.so (vrserver does not get PiBridge's environment)
-    if (setup_.driverEnvFile.isEmpty() || !writeText(setup_.driverEnvFile, steamvrDriverEnvText(setup_))) {
+    if (!headtrack && (setup_.driverEnvFile.isEmpty() || !writeText(setup_.driverEnvFile, steamvrDriverEnvText(setup_)))) {
         startError_ = QStringLiteral("The driver settings file %1 could not be written; nothing was started.")
                           .arg(setup_.driverEnvFile);
         return false;
@@ -607,7 +616,7 @@ bool IoSessionControl::startSteamVr() {
         }
     }
     // 3. the drivers: the Monado build's steamvr-monado in, CustomHeadsetOpenVR off (backups and a record first)
-    if (d_.applyDrivers) {
+    if (d_.applyDrivers && !headtrack) {
         DriverPlan p;
         p.driverDir = setup_.steamVrDriverDir;
         auto r = d_.applyDrivers(p);

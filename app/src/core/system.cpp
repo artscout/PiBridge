@@ -2,6 +2,8 @@
 #include "system.h"
 
 #include <QCoreApplication>
+#include <QThread>
+#include <csignal>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -23,6 +25,45 @@ bool processRunning(const QString& comm, const QString& procRoot) {
         }
     }
     return false;
+}
+
+QStringList stopLeftoverSession() {
+    if (processRunning(QStringLiteral("vrserver"))) {
+        return {};
+    }
+    static const QStringList comms = {QStringLiteral("pibridge-cam"), QStringLiteral("pibridge-ctrltr"),
+                                      QStringLiteral("pibridge-headtr"), QStringLiteral("winbridge.exe")};
+    const auto find = [] {
+        QList<std::pair<pid_t, QString>> out;
+        const QDir proc(QStringLiteral("/proc"));
+        for (const QString& pid : proc.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+            if (pid.isEmpty() || !pid.front().isDigit()) {
+                continue;
+            }
+            QFile f(QStringLiteral("/proc/") + pid + QStringLiteral("/comm"));
+            if (!f.open(QIODevice::ReadOnly)) {
+                continue;
+            }
+            const QString comm = QString::fromLocal8Bit(f.readAll()).trimmed();
+            if (comms.contains(comm)) {
+                out.append({static_cast<pid_t>(pid.toInt()), comm});
+            }
+        }
+        return out;
+    };
+    QStringList stopped;
+    for (const auto& [pid, comm] : find()) {
+        if (::kill(pid, SIGTERM) == 0) {
+            stopped << comm;
+        }
+    }
+    for (int i = 0; i < 20 && !find().isEmpty(); i++) {
+        QThread::msleep(100);
+    }
+    for (const auto& [pid, comm] : find()) {
+        ::kill(pid, SIGKILL);
+    }
+    return stopped;
 }
 
 QStringList toolDirs() {

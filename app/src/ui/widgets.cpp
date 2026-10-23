@@ -254,6 +254,13 @@ int Segmented::current() const {
     return -1;
 }
 
+void Segmented::setItemIcon(int index, const QIcon& icon) {
+    if (index >= 0 && index < static_cast<int>(buttons_.size())) {
+        buttons_[static_cast<size_t>(index)]->setIcon(icon);
+        buttons_[static_cast<size_t>(index)]->setIconSize(QSize(16, 16));
+    }
+}
+
 void Segmented::setItemEnabled(int index, bool on) {
     if (index >= 0 && index < static_cast<int>(buttons_.size())) {
         buttons_[static_cast<size_t>(index)]->setEnabled(on);

@@ -351,14 +351,14 @@ TEST(actions_run_the_documented_commands) {
 
     CHECK(a.setRefreshHz(72, {}));
     CHECK(conf.refreshHz() == 72);
-    CHECK(r.calls.back().line() == QStringLiteral("systemctl --user kill --signal=HUP pibridge-keepalived"));
+    CHECK(r.calls.back().line() == QStringLiteral("systemctl --user kill --kill-whom=main --signal=HUP pibridge-keepalived"));
     const size_t n = r.calls.size();
     CHECK(!a.setRefreshHz(60, {})); // not a rate of the headset
     CHECK(r.calls.size() == n);
 
     CHECK(a.setAudioToHeadset(false, {}));
     CHECK(!conf.audioToHeadset());
-    CHECK(r.calls.back().line() == QStringLiteral("systemctl --user kill --signal=HUP pibridge-keepalived"));
+    CHECK(r.calls.back().line() == QStringLiteral("systemctl --user kill --kill-whom=main --signal=HUP pibridge-keepalived"));
 
     CHECK(a.calibrate({}));
     CHECK(r.calls[r.calls.size() - 2].line() == QStringLiteral("/opt/t/pibridge-eyecal"));
@@ -369,7 +369,7 @@ TEST(actions_run_the_documented_commands) {
     const QString out = tmp.path() + QStringLiteral("/eye-profile-crystal-super.bin");
     CHECK(r.calls[r.calls.size() - 2].line() ==
           QStringLiteral("/opt/t/pibridge-eye profile /w/calibration.setpm -o ") + out);
-    CHECK(r.calls.back().line() == QStringLiteral("systemctl --user kill --signal=HUP pibridge-eyed"));
+    CHECK(r.calls.back().line() == QStringLiteral("systemctl --user kill --kill-whom=main --signal=HUP pibridge-eyed"));
     CHECK(conf.value("eye_profile", {}) == out);
 }
 
@@ -783,7 +783,7 @@ TEST(paused_daemons_in_plain_words) {
     auto k = parseKeepalive("{\"state\": \"paused\", \"paused\": \"paused: inside-out tracking\", \"pid\": 5}");
     CHECK(k.has_value() && k->state == QStringLiteral("paused"));
     CHECK(headsetChip(*k).text == QStringLiteral("PAUSED: INSIDE-OUT"));
-    CHECK(headsetHint(*k, true).startsWith(QStringLiteral("Paused: inside-out tracking runs")));
+    CHECK(headsetHint(*k, true).isEmpty()); // the STATE row says it
     auto e = parseEyed("{\"state\": \"paused\", \"pid\": 6}");
     CHECK(e.has_value() && eyeChip(*e).text == QStringLiteral("PAUSED: INSIDE-OUT"));
     CHECK(eyeLine(*e).startsWith(QStringLiteral("Paused")));

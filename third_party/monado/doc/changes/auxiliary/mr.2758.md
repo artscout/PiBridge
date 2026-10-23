@@ -1,1 +1,0 @@
-a/math: Improve the FOV calculation for OXR_PARALLEL_VIEWS.

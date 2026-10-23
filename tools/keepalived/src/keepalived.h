@@ -36,6 +36,7 @@
 
 #include "crystal.h"
 
+#include <array>
 #include <chrono>
 #include <expected>
 #include <filesystem>
@@ -85,8 +86,11 @@ struct Options {
     std::optional<std::uint8_t> video;
     /// Process to follow; empty = always on. Only used with a video rate.
     std::string follow;
-    /// Headset audio while busy. Only used with a video rate.
+    /// Headset audio while busy (output or input). Only used with a video rate.
     bool audio = false;
+    /// Which of the two: the output (audio_to_headset), the input (mic_to_headset).
+    bool audio_output = true;
+    bool audio_input = true;
     /// The settings file the defaults came from (`--settings`).
     std::filesystem::path settings_path;
     /// The original Crystal (P3B): the tracking to switch it to, and whether to start SteamVR when it connects.
@@ -241,6 +245,9 @@ private:
     /// Switch the audio when the delayed video frames go out (the order of the Rust daemon).
     bool audio_with_video_ = false;
     std::optional<audio::Before> audio_before_;
+    void read_controller_serials(Clock::time_point now);
+    std::array<bool, 2> serial_read_{false, false}; // this connection's serial was read (left, right)
+    bool headset_serials_read_ = false;            // the headset's and the optical module's, this connection
     bool crystal_audio_ = false; // the sound moved to the original Crystal by it being on
     Clock::time_point crystal_audio_retry_{}; // its output is looked for again then (it comes with the display)
     std::unique_ptr<Crystal> crystal_;

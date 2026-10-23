@@ -21,6 +21,7 @@ add_library(pibridge_hmd STATIC
     src/audio.cpp
     src/follow.cpp
     src/settings.cpp
+    src/ctrl_serials.cpp
 )
 target_include_directories(pibridge_hmd PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(pibridge_hmd PUBLIC cxx_std_23)

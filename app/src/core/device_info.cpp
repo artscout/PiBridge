@@ -192,7 +192,7 @@ DeviceView deviceView(const DeviceInputs& in) {
     const QString use = monadoUsed ? QString() : QStringLiteral(" Used only by inside-out tracking.");
     if (in.monado.path.isEmpty()) {
         v.rendering.push_back({QStringLiteral("Monado build"), QStringLiteral("Not found"),
-                               QStringLiteral("Development page") + QLatin1Char('.') + use});
+                               QStringLiteral("Only the old Monado session uses it.") + use});
     } else if (in.monado.checking) {
         v.rendering.push_back({QStringLiteral("Monado build"), QStringLiteral("Checking..."), use.trimmed()});
     } else if (!in.monado.checked) {

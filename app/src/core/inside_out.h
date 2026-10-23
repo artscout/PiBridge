@@ -52,6 +52,7 @@ inline constexpr char kCtrlTrack[] = "io_ctrl_track";     // on | off           
 inline constexpr char kCtrlAngle[] = "io_ctrl_angle";     // -20..70 (deg)        PIMAX_CTRL_ANGLE
 inline constexpr char kCtrlLost[] = "io_ctrl_lost_s";     // 1..10 (s)            PIMAX_CTRL_TRACK_LOST_S
 inline constexpr char kCtrlSteady[] = "io_ctrl_steady";   // on | off             PIMAX_CTRL_TRACK_HYST
+inline constexpr char kHeadtrack[] = "io_headtrack";      // on | off             pibridge-headtrack instead of Monado
 } // namespace iokey
 
 enum class TrackingMode { Lighthouse, InsideOut };
@@ -74,7 +75,7 @@ struct IoSettings {
     IoApps apps = IoApps::SteamVr;
     bool homeScene = true; // pibridge-home in the headset while the session runs with apps through Monado directly
     bool slam = true;
-    SlamEngine slamEngine = SlamEngine::Basalt; // the engine of today stays the default
+    SlamEngine slamEngine = SlamEngine::Pimax; // Pimax Play's engine; Basalt is the open-source fallback
     int grid = 30;
     // Head tracking cameras: 2 = the lower tracking pair (0, 1), 4 = also the upper side pair (2, 3). 2 until a live
     // take 4 vs 2 decides (docs/ROADMAP.md 1b, docs/TRACKING.md).
@@ -95,6 +96,8 @@ struct IoSettings {
     int ctrlAngle = 30;
     int ctrlLostS = 4;
     bool ctrlSteady = true;
+    // pibridge-headtrack + CustomHeadsetOpenVR (the default; off = the old driver_monado session, pibridge.conf only)
+    bool headtrack = true;
 
     // The recommended values (the sources above); equal to a default-constructed IoSettings except the mode, which
     // has no recommendation (Lighthouse needs the faceplate and base stations, inside-out is experimental).

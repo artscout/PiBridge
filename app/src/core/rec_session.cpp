@@ -203,6 +203,33 @@ RecProcSpec winbridgeSpec(const RecSetup& s, const QString& logDir) {
             logDir + QStringLiteral("/winbridge.log")};
 }
 
+// pibridge-headtrack (io_headtrack): the head tracking in its own process, its pose to CustomHeadsetOpenVR
+RecProcSpec headtrackSpec(const RecSetup& s, const QString& logDir) {
+    const bool pimax = s.io.slamEngine == SlamEngine::Pimax;
+    QStringList args{QStringLiteral("--engine"), pimax ? QStringLiteral("pimax") : QStringLiteral("basalt"),
+                     QStringLiteral("--camera"), QStringLiteral("broker:") + s.brokerSocket,
+                     QStringLiteral("--fps"), QString::number(s.refreshHz), QStringLiteral("--calib"), s.calib.path};
+    // the output layer's and the fusers' switches (PIMAX_*: HeadParams::from_env, fuse::Config::from_env), as Monado got
+    QStringList env = monadoEnv(s, QString());
+    if (pimax) {
+        // Pimax's engine: all four cameras, its pose at IMU rate (one per camera frame otherwise)
+        args << QStringLiteral("--vit") << s.vitBridge.path << QStringLiteral("--cams") << QStringLiteral("0,1,2,3");
+        env << QStringLiteral("PIBRIDGE_VIT_POSE_RATE=imu");
+    } else {
+        args << QStringLiteral("--vit") << s.basalt.path << QStringLiteral("--cams")
+             << (s.io.slamCams == 4 ? QStringLiteral("0,1,2,3") : QStringLiteral("0,1"));
+        const QString cfg = s.sessionSlamConfig.isEmpty() ? s.slamConfig.path : s.sessionSlamConfig;
+        if (!cfg.isEmpty()) {
+            args << QStringLiteral("--slam-config") << cfg;
+        }
+    }
+    return {QStringLiteral("headtrack"), s.headtrack.path, args, env, logDir + QStringLiteral("/headtrack.log")};
+}
+
+bool headtrackWanted(const RecSetup& s) {
+    return s.io.headtrack && s.io.slam;
+}
+
 bool winbridgeWanted(const RecSetup& s) {
     return s.io.slam && s.io.slamEngine == SlamEngine::Pimax && pimaxSlamReady(s);
 }
@@ -289,6 +316,9 @@ void prepareSessionSlam(RecSetup& s, QString* note) {
 }
 
 QStringList steamvrEnv(const RecSetup& s) {
+    if (headtrackWanted(s)) {
+        return s.steamVrExtraEnv; // a plain SteamVR: CustomHeadsetOpenVR reads pibridge-headtrack's pose file
+    }
     const IoSessionEnv e = buildIoEnv(s.io, s, s.refreshHz, s.sessionSlamConfig.isEmpty() ? s.slamConfig.path : s.sessionSlamConfig,
                                       QString(), s.driverEnvFile, s.steamVrPreload);
     return e.steamvr + s.steamVrExtraEnv;
@@ -577,6 +607,8 @@ void RecSession::handleExits(qint64 nowMs) {
                                               "tracking.%2")
                              : QStringLiteral("The camera broker stopped (%1); without it no camera data is recorded.%2"))
                             .arg(how, tail));
+        } else if (p.spec.name == QLatin1String("headtrack")) {
+            fail(nowMs, QStringLiteral("pibridge-headtrack stopped (%1); without it there is no head tracking.%2").arg(how, tail));
         } else if (p.spec.name == QLatin1String("winbridge")) {
             // Monado keeps running: its VIT library loses the engine and the head stays 3DoF (orientation only)
             log(QStringLiteral("winbridge (Pimax head tracking) ended (%1); the head is 3DoF from now on.%2")
@@ -611,6 +643,11 @@ bool RecSession::tick(qint64 nowMs) {
                     !startProc(ctrltrackSpec(setup_, logDir()), nowMs)) {
                     break;
                 }
+                // pibridge-headtrack: the head tracking without Monado, before SteamVR
+                if (mode_ == Mode::LiveSteamVr && headtrackWanted(setup_) &&
+                    !startProc(headtrackSpec(setup_, logDir()), nowMs)) {
+                    break;
+                }
                 if (mode_ == Mode::LiveSteamVr) {
                     if (!startProc(steamvrSpec(setup_, logDir()), nowMs)) {
                         break;
@@ -620,7 +657,9 @@ bool RecSession::tick(qint64 nowMs) {
                 }
                 phase_ = Phase::Monado;
                 phaseStartMs_ = nowMs;
-                message_ = mode_ == Mode::LiveSteamVr ? QStringLiteral("Starting SteamVR with the Monado driver...")
+                message_ = mode_ == Mode::LiveSteamVr ? (headtrackWanted(setup_)
+                                                             ? QStringLiteral("Starting SteamVR with pibridge-headtrack...")
+                                                             : QStringLiteral("Starting SteamVR with the Monado driver..."))
                            : mode_ == Mode::Live      ? QStringLiteral("Starting Monado...")
                                                       : QStringLiteral("Starting Monado. The headset shows no picture; that is fine.");
             } else if (nowMs - phaseStartMs_ >= kRecSocketWaitMs) {

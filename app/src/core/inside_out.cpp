@@ -187,7 +187,8 @@ IoSettings ioSettings(const Conf& c) {
     s.apps = word(c, iokey::kApps) == QLatin1String("monado") ? IoApps::Monado : IoApps::SteamVr;
     s.homeScene = flag(iokey::kHome, true);
     s.slam = flag(iokey::kSlam, true);
-    s.slamEngine = word(c, iokey::kSlamEngine) == QLatin1String("pimax") ? SlamEngine::Pimax : SlamEngine::Basalt;
+    s.slamEngine = word(c, iokey::kSlamEngine) == QLatin1String("basalt") ? SlamEngine::Basalt : SlamEngine::Pimax;
+    s.headtrack = flag(iokey::kHeadtrack, true);
     const int g = intOr(c, iokey::kGrid, 30, 10, 100);
     s.grid = g <= 35 ? 30 : (g <= 45 ? 40 : 50);
     s.slamCams = intOr(c, iokey::kSlamCams, 2, 1, 8) == 4 ? 4 : 2;
@@ -221,6 +222,7 @@ std::vector<std::pair<std::string, std::string>> ioConfLines(const IoSettings& s
     l.emplace_back(iokey::kHome, onOff(s.homeScene));
     l.emplace_back(iokey::kSlam, onOff(s.slam));
     l.emplace_back(iokey::kSlamEngine, s.slamEngine == SlamEngine::Pimax ? "pimax" : "basalt");
+    l.emplace_back(iokey::kHeadtrack, s.headtrack ? "on" : "off");
     l.emplace_back(iokey::kGrid, std::to_string(s.grid));
     l.emplace_back(iokey::kSlamCams, s.slamCams == 4 ? "4" : "2");
     l.emplace_back(iokey::kAccelBias, s.accelBias == AccelBias::Off ? "off" : "factory");

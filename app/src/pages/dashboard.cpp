@@ -6,6 +6,7 @@
 #include <QGuiApplication>
 
 #include <QClipboard>
+#include <QFile>
 #include <QDateTime>
 #include <QDialog>
 
@@ -14,7 +15,10 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QProgressBar>
+#include <memory>
 #include <QMessageBox>
+#include <QProcess>
 #include <QPushButton>
 #include <QHash>
 #include <QLayoutItem>
@@ -30,6 +34,7 @@
 #include "../core/monado_build.h"
 #include "../core/overlay_control.h"
 #include "../core/paths.h"
+#include "../core/system.h"
 #include "../core/rec_setup.h"
 #include "../core/steamvr.h"
 #include "../ui/icons.h"
@@ -62,9 +67,34 @@ QString tail(const QString& out) {
 
 } // namespace
 
+namespace {
+
+// $XDG_STATE_HOME/pibridge/controller-serials ("headset", "optics", "left", "right" lines; libpibridge-hmd
+// ctrl_serials.h), read from the devices by the headset service.
+QString keptSerial(const QString& side) {
+    QString dir = qEnvironmentVariable("XDG_STATE_HOME");
+    if (dir.isEmpty()) {
+        dir = QDir::homePath() + QStringLiteral("/.local/state");
+    }
+    QFile f(dir + QStringLiteral("/pibridge/controller-serials"));
+    if (!f.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    for (const QByteArray& line : f.readAll().split('\n')) {
+        const QList<QByteArray> kv = line.trimmed().split(' ');
+        if (kv.size() == 2 && QString::fromLatin1(kv[0]) == side) {
+            return QString::fromLatin1(kv[1]);
+        }
+    }
+    return {};
+}
+
+} // namespace
+
 DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, IoSessionControl& io,
                              IoSessionControl& direct, OverlayControl& overlay, QWidget* parent)
-    : QWidget(parent), source_(source), actions_(actions), conf_(conf), io_(io), direct_(direct), overlay_(overlay) {
+    : QWidget(parent), source_(source), actions_(actions), conf_(conf), io_(io), direct_(direct), overlay_(overlay),
+      ctrlOps_(statusDir(), qEnvironmentVariable("XDG_RUNTIME_DIR", QStringLiteral("/tmp"))) {
     setObjectName(QStringLiteral("page"));
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(18, 12, 18, 12);
@@ -193,25 +223,26 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     hsHint_ = new QLabel;
     hsHint_->setObjectName(QStringLiteral("dim"));
     hsHint_->setWordWrap(true);
-    hsHint_->setAlignment(Qt::AlignRight);
+    hsHint_->setAlignment(Qt::AlignLeft);
     hsError_ = new QLabel;
     hsError_->setObjectName(QStringLiteral("error"));
     hsError_->setWordWrap(true);
-    hsError_->setAlignment(Qt::AlignRight);
+    hsError_->setAlignment(Qt::AlignLeft);
     auto* hsRow = new QHBoxLayout;
     art_ = new pibridge::ui::HeadsetArt;
     art_->setMaximumHeight(104); // compact, closer to omarchyvr's density (user 2026-10-20)
     hsRow->addWidget(art_, 1, Qt::AlignTop); // raised to line up with the STATE row on the right
     auto* right = new QVBoxLayout;
     right->setSpacing(10);
-    right->addWidget(hsHint_);
-    right->addWidget(hsError_);
     auto* info = new QGridLayout;
     info->setHorizontalSpacing(24);
     info->setVerticalSpacing(14);
     hsState_ = infoRow(info, 0, QStringLiteral("State"));
-    hsSerial_ = infoRow(info, 1, QStringLiteral("Serial"));
+    hsSerial_ = infoRow(info, 1, QStringLiteral("Headset SN"));
     hsSerial_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    hsOptics_ = infoRow(info, 2, QStringLiteral("Optics SN"));
+    hsOptics_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    hsOpticsLabel_ = info->itemAtPosition(2, 0)->widget();
     auto* rl = pibridge::ui::capsLabel(QStringLiteral("Refresh rate"), 13);
     rl->setObjectName(QStringLiteral("dim"));
     const QString refreshTip = QStringLiteral("The panel rate the headset service sets (refresh_hz in pibridge.conf). "
@@ -224,19 +255,22 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     refreshCrystal_->setToolTip(QStringLiteral("The display mode SteamVR runs the Crystal at. A running SteamVR is "
                                                "restarted for it."));
     refreshCrystal_->setVisible(false);
+    // never squeezed below their own height (the digits were cut at the bottom)
+    refresh_->setMinimumHeight(refresh_->sizeHint().height());
+    refreshCrystal_->setMinimumHeight(refreshCrystal_->sizeHint().height());
     auto* rlRow = new QHBoxLayout;
     rlRow->setSpacing(6);
     rlRow->setContentsMargins(0, 0, 0, 0);
     rlRow->addWidget(rl);
     rlRow->addWidget(pibridge::ui::helpBadge(refreshTip));
     rlRow->addStretch(1);
-    info->addLayout(rlRow, 2, 0);
+    info->addLayout(rlRow, 3, 0);
     auto* refreshBox = new QHBoxLayout;
     refreshBox->setContentsMargins(0, 0, 0, 0);
     refreshBox->addWidget(refresh_);
     refreshBox->addWidget(refreshCrystal_);
     refreshBox->addStretch(1);
-    info->addLayout(refreshBox, 2, 1);
+    info->addLayout(refreshBox, 3, 1);
     // the original Crystal (standalone, on its own battery): its charge, from its head reports via pibridge-keepalived
     hsBatteryLabel_ = pibridge::ui::capsLabel(QStringLiteral("Battery"), 13);
     hsBatteryLabel_->setObjectName(QStringLiteral("dim"));
@@ -248,17 +282,25 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     batRow->addWidget(hsBattery_);
     batRow->addWidget(hsBatteryText_);
     batRow->addStretch(1);
-    info->addWidget(hsBatteryLabel_, 3, 0);
-    info->addLayout(batRow, 3, 1);
+    info->addWidget(hsBatteryLabel_, 4, 0);
+    info->addLayout(batRow, 4, 1);
     for (QWidget* w : {static_cast<QWidget*>(hsBatteryLabel_), static_cast<QWidget*>(hsBattery_),
                        static_cast<QWidget*>(hsBatteryText_)}) {
         w->setVisible(false);
     }
     info->setColumnStretch(1, 1);
+    // the rows keep their places whatever is shown (an empty Optics SN, a long state)
+    for (int r = 0; r < 4; r++) {
+        info->setRowMinimumHeight(r, 34);
+    }
+    info->setAlignment(Qt::AlignTop);
     right->addLayout(info);
     right->addStretch(1);
     hsRow->addLayout(right, 1);
-    hs->body()->addLayout(hsRow); // content height, so the buttons sit right under the info (no middle gap)
+    hs->body()->addLayout(hsRow);
+    // a hint or an error goes under the picture and the rows, never between them
+    hs->body()->addWidget(hsHint_);
+    hs->body()->addWidget(hsError_); // content height, so the buttons sit right under the info (no middle gap)
     // START VR / STOP in the headset box (like omarchyvr's Play/Stop). Inside-out: starts the tracking session.
     // Lighthouse: just launches SteamVR. One button, no separate one (user 2026-10-20).
     auto* ioRow = new QHBoxLayout;
@@ -293,6 +335,15 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     hs->body()->addLayout(ioRow);
     vrStatus_ = pibridge::ui::dimLabel(QString()); // "VR running 1h 5m   Resolution: 5376 x 4972"
     hs->body()->addWidget(vrStatus_);
+    // at start: an inside-out session an earlier PiBridge left running after SteamVR closed (PiBridge restarted while it
+    // ran) holds the cameras and winbridge, and its readiness check would keep START VR disabled
+    if (!source_.fake()) {
+        if (const QStringList left = stopLeftoverSession(); !left.isEmpty()) {
+            QTimer::singleShot(0, this, [this, left] {
+                say(QStringLiteral("Stopped what an earlier session left running: %1.").arg(left.join(QStringLiteral(", "))));
+            });
+        }
+    }
     connect(ioStart_, &QPushButton::clicked, this, [this] {
         conf_.reload();
         const bool inside = monadoSession();
@@ -328,7 +379,6 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
                                                   : QStringLiteral("Could not write the request to pibridge-keepalived."),
             false);
     });
-    grid->addWidget(hs, 0, 0, 1, 2);
     connect(refresh_, &pibridge::ui::Segmented::activated, this, [this](int i) {
         const int hz = i == 0 ? 72 : 90;
         if (!actions_.setRefreshHz(hz, {})) {
@@ -356,18 +406,56 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     auto* ctrl = new pibridge::ui::Card(QStringLiteral("Controllers"));
     ctrlChip_ = ctrl->chip();
     const QString sides[2] = {QStringLiteral("Left controller"), QStringLiteral("Right controller")};
+    // as omarchyvr's controller rows: the picture, the name, the status chips, the buttons, then the model and serial
+    const auto opButton = [](const QString& text, pibridge::ui::Icon icon) {
+        auto* b = pibridge::ui::toolButton(text);
+        b->setFont(pibridge::ui::labelFont(11));
+        b->setIcon(pibridge::ui::lineIcon(icon, pibridge::ui::color::dim));
+        b->setIconSize(QSize(14, 14));
+        b->setMinimumHeight(28);
+        return b;
+    };
     for (int i = 0; i < 2; i++) {
         ControllerWidgets& w = ctrlRows_[i];
         auto* row = new QHBoxLayout;
-        row->setSpacing(12);
+        row->setSpacing(14);
         w.icon = new QLabel;
+        w.icon->setFixedWidth(68);
         row->addWidget(w.icon, 0, Qt::AlignTop);
         auto* col = new QVBoxLayout;
-        col->setSpacing(3);
-        auto* n = new QLabel(sides[i]);
-        n->setFont(pibridge::ui::bodyFont(15));
-        col->addWidget(n);
+        col->setSpacing(6);
+        col->addWidget(pibridge::ui::capsLabel(sides[i], 13));
+        auto* status = new QHBoxLayout;
+        status->setSpacing(10);
+        w.chip = new pibridge::ui::Chip;
+        status->addWidget(w.chip);
+        w.battery = new pibridge::ui::Battery;
+        status->addWidget(w.battery);
+        w.batteryText = new QLabel;
+        w.batteryText->setFont(pibridge::ui::bodyFont(12));
+        w.batteryText->setObjectName(QStringLiteral("dim"));
+        status->addWidget(w.batteryText);
+        status->addStretch(1);
+        col->addLayout(status);
+        auto* ops = new QHBoxLayout;
+        ops->setSpacing(8);
+        w.pair = opButton(QStringLiteral("PAIR"), pibridge::ui::Icon::Link);
+        w.pair->setToolTip(QStringLiteral("Pair a controller with the headset (a short guide opens)"));
+        w.unpair = opButton(QStringLiteral("UNPAIR"), pibridge::ui::Icon::Unlink);
+        w.unpair->setToolTip(QStringLiteral("Forget this controller in the headset"));
+        w.buzz = opButton(QStringLiteral("VIBRATE"), pibridge::ui::Icon::Pulse);
+        w.buzz->setToolTip(QStringLiteral("A short buzz (60 %, 0.3 s)"));
+        const int slot = i == 0 ? kSlotLeft : kSlotRight;
+        connect(w.pair, &QPushButton::clicked, this, [this, slot] { showPairDialog(slot); });
+        connect(w.unpair, &QPushButton::clicked, this, [this, slot] { controllerAction(slot, 1); });
+        connect(w.buzz, &QPushButton::clicked, this, [this, slot] { controllerAction(slot, 2); });
+        ops->addWidget(w.pair);
+        ops->addWidget(w.unpair);
+        ops->addWidget(w.buzz);
+        ops->addStretch(1);
+        col->addLayout(ops);
         w.model = pibridge::ui::dimLabel(QString());
+        w.model->setFont(pibridge::ui::bodyFont(12));
         col->addWidget(w.model);
         w.detail = new QLabel;
         w.detail->setObjectName(QStringLiteral("dim"));
@@ -391,31 +479,38 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
         sn->addWidget(w.copy);
         sn->addStretch(1);
         col->addLayout(sn);
+        w.opText = pibridge::ui::dimLabel(QString());
+        w.opText->setFont(pibridge::ui::bodyFont(12));
+        w.opText->setWordWrap(true);
+        w.opText->hide();
+        col->addWidget(w.opText);
         row->addLayout(col, 1);
-        auto* rcol = new QVBoxLayout;
-        rcol->setSpacing(6);
-        w.chip = new pibridge::ui::Chip;
-        rcol->addWidget(w.chip, 0, Qt::AlignRight);
-        auto* bat = new QHBoxLayout;
-        bat->setSpacing(6);
-        bat->addStretch(1);
-        w.battery = new pibridge::ui::Battery;
-        bat->addWidget(w.battery);
-        w.batteryText = new QLabel;
-        w.batteryText->setFont(pibridge::ui::bodyFont(13));
-        bat->addWidget(w.batteryText);
-        rcol->addLayout(bat);
-        rcol->addStretch(1);
-        row->addLayout(rcol);
         ctrl->body()->addLayout(row);
-        ctrl->body()->addWidget(pibridge::ui::rule());
+        if (i == 0) {
+            ctrl->body()->addWidget(pibridge::ui::rule());
+        }
     }
     ctrlExtra_ = pibridge::ui::dimLabel(QString());
     ctrl->body()->addWidget(ctrlExtra_);
     ctrlText_ = pibridge::ui::dimLabel(QString());
     ctrl->body()->addWidget(ctrlText_);
     ctrl->body()->addStretch(1);
-    grid->addWidget(ctrl, 0, 2);
+    // the top row: the headset card narrower than before, the controllers wider (5 : 4)
+    auto* top = new QHBoxLayout;
+    top->setSpacing(grid->horizontalSpacing());
+    top->addWidget(hs, 5);
+    top->addWidget(ctrl, 4);
+    grid->addLayout(top, 0, 0, 1, 3);
+    ctrlOpsTimer_ = new QTimer(this);
+    ctrlOpsTimer_->setInterval(250);
+    connect(ctrlOpsTimer_, &QTimer::timeout, this, [this] {
+        ctrlOps_.poll(source_.state().keepalive, QDateTime::currentMSecsSinceEpoch());
+        applyControllerOps();
+        if (!ctrlOps_.busy()) {
+            ctrlOpsTimer_->stop();
+        }
+    });
+    connect(&source_, &StateSource::changed, this, &DashboardPage::applyControllerOps);
 
     // ---- quick settings
     auto* quick = new pibridge::ui::Card(QStringLiteral("Quick settings"));
@@ -435,8 +530,8 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     // Passthrough. Clicking from inside VR launches the setup (the overlay writes a request the app watches).
     dashOverlay_ = new pibridge::ui::Toggle;
     dashOverlay_->setChecked(overlay_.wanted());
-    const QString dashTip = QStringLiteral("Puts a small PiBridge tab in the SteamVR dashboard with ROOM SETUP and QUICK "
-                                           "ROOM SETUP buttons, clickable with the controller laser. Saved as "
+    const QString dashTip = QStringLiteral("Puts a small PiBridge tab in the SteamVR dashboard with a ROOM SETUP button, "
+                                           "clickable with the controller laser. Saved as "
                                            "steamvr_dashboard in pibridge.conf; a leaf, so if it fails VR keeps running.");
     dashOverlay_->setToolTip(dashTip);
     quick->body()->addWidget(
@@ -444,7 +539,7 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     dashOverlayLine_ = pibridge::ui::dimLabel(QString());
     dashOverlayLine_->setFont(pibridge::ui::bodyFont(12));
     dashOverlayLine_->setWordWrap(true);
-    quick->body()->addWidget(dashOverlayLine_);
+    dashOverlayLine_->hide(); // no status line here: the rows below keep their places (the tab's state is in its tooltip)
     connect(dashOverlay_, &QAbstractButton::toggled, this, [this](bool on) {
         if (!overlay_.setWanted(on)) {
             say(QStringLiteral("Could not write %1").arg(conf_.path()), true);
@@ -458,12 +553,20 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     eyeToggle_->setToolTip(eyeTip);
     calibrate_ = pibridge::ui::linkButton(QStringLiteral("Calibrate"));
     recenter_ = pibridge::ui::linkButton(QStringLiteral("Recenter"));
+    importEye_ = pibridge::ui::linkButton(QStringLiteral("Import"));
+    importEye_->setToolTip(actions_.eyeTool().isEmpty()
+                               ? QStringLiteral("pibridge-eye was not found (PATH or this build).")
+                               : QStringLiteral("Reads calibration.setpm from Pimax Play / EVO under Windows and saves it "
+                                                "as your eye profile (pibridge-eye profile)."));
+    importEye_->setEnabled(!actions_.eyeTool().isEmpty());
     auto* eyeLinks = new QWidget;
     auto* el = new QHBoxLayout(eyeLinks);
     el->setContentsMargins(0, 0, 0, 0);
     el->setSpacing(4);
     el->addWidget(calibrate_);
-    el->addWidget(recenter_);
+    // only CALIBRATE here (user 2026-10-23): Recenter and the Windows import are not offered
+    recenter_->hide();
+    importEye_->hide();
     quick->body()->addWidget(pibridge::ui::settingRow(QStringLiteral("Eye tracking"), eyeToggle_, eyeLinks, false, eyeTip));
     // IPD in mm (ipd_mm): the lens motors are moved to it (as Pimax Play / EVO's IPD ADJUSTMENT) and the renderers
     // use the same value for the eye separation - Monado (OXR_DEBUG_IPD_MM, and live from pibridge.conf) and
@@ -475,6 +578,11 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
                                                       "lens position the headset reports."));
     ipd_->setRealRange(58.0, 72.0, 0.5, 1); // the motor's range and step
     quick->body()->addWidget(ipd_);
+    auto* driverLink = pibridge::ui::linkButton(QStringLiteral("SBOYS3 driver settings"));
+    driverLink->setToolTip(QStringLiteral("CustomHeadsetOpenVR's own settings (sboys3's driver: lens, brightness, "
+                                          "resolution...)."));
+    connect(driverLink, &QPushButton::clicked, this, &DashboardPage::openDriverSettings);
+    quick->body()->addWidget(driverLink, 0, Qt::AlignLeft);
     ipdTimer_ = new QTimer(this);
     ipdTimer_->setSingleShot(true);
     ipdTimer_->setInterval(600);
@@ -503,12 +611,9 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
                 true);
         }
     });
-    toolResult_ = pibridge::ui::dimLabel(QString());
-    quick->body()->addWidget(toolResult_);
     quick->body()->addWidget(pibridge::ui::rule());
     auto* eyeRow = new QHBoxLayout;
-    gaze_ = new pibridge::ui::GazeDot;
-    eyeRow->addWidget(gaze_, 0, Qt::AlignTop);
+    // no gaze picture: it shows something only while the headset is on your head (user 2026-10-23)
     auto* eyeCol = new QVBoxLayout;
     eyeCol->setSpacing(6);
     auto* eyeHead = new QHBoxLayout;
@@ -522,6 +627,11 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     eyeCol->addStretch(1);
     eyeRow->addLayout(eyeCol, 1);
     quick->body()->addLayout(eyeRow);
+    // the calibration's result under the eye tracker (not between IPD and it: the rows above never move)
+    toolResult_ = pibridge::ui::dimLabel(QString());
+    toolResult_->setWordWrap(true);
+    toolResult_->hide();
+    quick->body()->addWidget(toolResult_);
     quick->body()->addStretch(1);
     grid->addWidget(quick, 1, 0);
 
@@ -547,6 +657,27 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
             setBusy({});
         }
     });
+    connect(importEye_, &QPushButton::clicked, this, [this] {
+        const QString file = QFileDialog::getOpenFileName(
+            this, QStringLiteral("Calibration from Pimax Play / EVO (Windows)"),
+            QStandardPaths::writableLocation(QStandardPaths::HomeLocation),
+            QStringLiteral("Pimax calibration (calibration.setpm *.setpm);;All files (*)"));
+        if (file.isEmpty()) {
+            return;
+        }
+        importEye_->setEnabled(false);
+        const bool started = actions_.importProfile(file, [this](int code, const QString& out) {
+            importEye_->setEnabled(true);
+            say(code == 0 ? QStringLiteral("Eye calibration saved to %1. Eye tracking uses it from now on.")
+                                .arg(actions_.eyeProfileOut())
+                          : QStringLiteral("Eye calibration import failed (%1): %2").arg(code).arg(out.trimmed()),
+                code != 0);
+        });
+        if (!started) {
+            importEye_->setEnabled(true);
+            say(QStringLiteral("Could not start pibridge-eye."), true);
+        }
+    });
     connect(recenter_, &QPushButton::clicked, this, [this] {
         setBusy(QStringLiteral("Recentering in the headset: A starts, B at the end saves, B on the grid exits..."));
         if (!actions_.recenter([this](int c, const QString& o) { toolDone(QStringLiteral("Recenter"), c, o); })) {
@@ -561,6 +692,8 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     // same control as the Tracking page: switching saves tracking_mode and refreshes. The selector shows the mode, so
     // the chip stays hidden.
     trModeSel_ = new pibridge::ui::Segmented({QStringLiteral("Lighthouse"), QStringLiteral("Inside-out")});
+    trModeSel_->setItemIcon(0, pibridge::ui::lineIcon(pibridge::ui::Icon::Tracking, pibridge::ui::color::dim, Qt::white));
+    trModeSel_->setItemIcon(1, pibridge::ui::lineIcon(pibridge::ui::Icon::Dashboard, pibridge::ui::color::dim, Qt::white));
     trModeSel_->setToolTip(QStringLiteral("Lighthouse: SteamVR base stations (works today). Inside-out: the headset's "
                                           "own cameras (SLAM, experimental)."));
     connect(trModeSel_, &pibridge::ui::Segmented::activated, this, [this](int i) {
@@ -571,6 +704,8 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
                               : QStringLiteral("Crystal: switching to its own inside-out tracking..."))
                     : QStringLiteral("Could not write %1").arg(conf_.path()),
                 false);
+            conf_.reload(); // the selector shows the chosen mode from now on
+            updateMode();
             return;
         }
         conf_.set(iokey::kMode, i == 1 ? "inside-out" : "lighthouse");
@@ -579,7 +714,9 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
         applyState();
     });
     tracking->header()->addWidget(trModeSel_, 0, Qt::AlignVCenter);
-    auto* trHead = new QHBoxLayout;
+    trBaseHead_ = new QWidget; // the base stations' summary: Lighthouse only
+    auto* trHead = new QHBoxLayout(trBaseHead_);
+    trHead->setContentsMargins(0, 0, 0, 0);
     trHead->setSpacing(12);
     auto* trIcon = new QLabel;
     trIcon->setPixmap(pibridge::ui::lineIcon(pibridge::ui::Icon::Tracking, pibridge::ui::color::accentText).pixmap(36, 36));
@@ -587,7 +724,7 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     trSummary_ = new QLabel;
     trSummary_->setFont(pibridge::ui::bodyFont(15));
     trHead->addWidget(trSummary_, 1);
-    tracking->body()->addLayout(trHead);
+    tracking->body()->addWidget(trBaseHead_);
     trStations_ = new QWidget;
     auto* stl = new QVBoxLayout(trStations_);
     stl->setContentsMargins(0, 0, 0, 0);
@@ -596,34 +733,42 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     trText_ = pibridge::ui::dimLabel(QString());
     tracking->body()->addWidget(trText_);
     tracking->body()->addStretch(1);
-    // the mode (Tracking page) and, in inside-out mode, START TRACKING (core/io_session.h)
-    tracking->body()->addWidget(pibridge::ui::rule());
-    auto* modeRow = new QHBoxLayout;
+    // no mode sentence and no settings link: the mode is the selector in the header (user 2026-10-23)
     trMode_ = pibridge::ui::dimLabel(QString());
-    modeRow->addWidget(trMode_, 1);
-    auto* modeLink = pibridge::ui::linkButton(QStringLiteral("Settings"));
-    modeLink->setToolTip(QStringLiteral("Inside-out: the SLAM / tracking settings (Tracking page). Lighthouse: the "
-                                        "headset driver's settings (CustomHeadsetOpenVR)."));
-    connect(modeLink, &QPushButton::clicked, this, &DashboardPage::openTrackingSettings);
-    modeRow->addWidget(modeLink, 0, Qt::AlignTop);
-    tracking->body()->addLayout(modeRow);
+    trMode_->hide();
     // START VR / STOP now live in the headset box above (moved there 2026-10-20, like omarchyvr).
     connect(&io_, &IoSessionControl::changed, this, &DashboardPage::updateMode);
     connect(&direct_, &IoSessionControl::changed, this, &DashboardPage::updateMode);
     grid->addWidget(tracking, 1, 1);
 
     // ---- sound
-    auto* sound = new pibridge::ui::Card(QStringLiteral("Sound settings"));
+    // as omarchyvr's Sound card: Headset sound / Headset mic, each with its test and its switch, then Input now
+    auto* sound = new pibridge::ui::Card(QStringLiteral("Sound"));
+    soundPanel_ = new SoundTestPanel(source_.fake()); // pages/sound_tests.h: the tests, the level meter, the result
+    const auto testAndSwitch = [](QWidget* test, QWidget* sw) {
+        auto* w = new QWidget;
+        auto* h = new QHBoxLayout(w);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->setSpacing(10);
+        h->addWidget(test);
+        h->addWidget(sw);
+        return w;
+    };
     audio_ = new pibridge::ui::Toggle;
-    const QString audioTip = QStringLiteral("Makes the headset the default audio output while it is on "
+    const QString audioTip = QStringLiteral("The headset is the default audio output while it is on "
                                             "(audio_to_headset in pibridge.conf).");
     audio_->setToolTip(audioTip);
-    sound->body()->addWidget(
-        pibridge::ui::settingRow(QStringLiteral("Default audio output"), audio_, nullptr, false, audioTip));
-    sound->body()->addWidget(
-        pibridge::ui::dimLabel(QStringLiteral("Make the headset the default audio output while it is on.")));
-    sound->body()->addWidget(pibridge::ui::rule());
-    soundPanel_ = new SoundTestPanel(source_.fake()); // pages/sound_tests.h
+    sound->body()->addWidget(pibridge::ui::settingRow(
+        QStringLiteral("Headset sound"), testAndSwitch(soundPanel_->speakersButton(), audio_), nullptr, false, audioTip));
+    mic_ = new pibridge::ui::Toggle;
+    const QString micTip = QStringLiteral("The headset's microphone is the default input while it is on "
+                                          "(mic_to_headset in pibridge.conf).");
+    mic_->setToolTip(micTip);
+    sound->body()->addWidget(pibridge::ui::settingRow(
+        QStringLiteral("Headset mic"), testAndSwitch(soundPanel_->micButton(), mic_), nullptr, false, micTip));
+    inputNow_ = new QLabel;
+    inputNow_->setFont(pibridge::ui::bodyFont(13));
+    sound->body()->addWidget(pibridge::ui::settingRow(QStringLiteral("Input now"), inputNow_));
     sound->body()->addWidget(soundPanel_);
     sound->body()->addStretch(1);
     grid->addWidget(sound, 1, 2);
@@ -636,6 +781,20 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
         say(on ? QStringLiteral("Sound goes to the headset while it is on.")
                : QStringLiteral("Sound stays on the current output."));
     });
+    connect(mic_, &QAbstractButton::toggled, this, [this](bool on) {
+        if (!actions_.setMicToHeadset(on)) {
+            say(QStringLiteral("Could not write %1").arg(conf_.path()), true);
+            applyConf();
+            return;
+        }
+        say(on ? QStringLiteral("The headset's microphone is the input while it is on.")
+               : QStringLiteral("The input stays as it is."));
+    });
+    auto* inputTimer = new QTimer(this);
+    inputTimer->setInterval(3000);
+    connect(inputTimer, &QTimer::timeout, this, &DashboardPage::updateInputNow);
+    inputTimer->start();
+    updateInputNow();
 
     // ---- record video (pibridge-record, pages/record_card.h): works while Monado's own compositor runs
     record_ = new RecordCard(source_, direct_);
@@ -756,6 +915,13 @@ bool DashboardPage::confirmReset(const ResetDialogModel& m) {
 void DashboardPage::startVr() {
     const bool inside = monadoSession();
     if (inside) {
+        // what a previous PiBridge left running (restarted while a session ran, SteamVR gone since) holds the cameras
+        // and winbridge and would block the start
+        if (!source_.fake() && !io_.active()) {
+            if (const QStringList left = stopLeftoverSession(); !left.isEmpty()) {
+                say(QStringLiteral("Stopped what an earlier session left running: %1.").arg(left.join(QStringLiteral(", "))));
+            }
+        }
         io_.refresh();
         if (!io_.start()) {
             say(QStringLiteral("VR could not start: %1")
@@ -763,7 +929,7 @@ void DashboardPage::startVr() {
                 true);
             return;
         }
-        say(QStringLiteral("Starting VR: SteamVR with the Monado driver..."));
+        say(QStringLiteral("Starting VR: head tracking and SteamVR..."));
         return;
     }
     const bool steamUp = source_.fake() || steamClientRunning();
@@ -863,7 +1029,9 @@ void DashboardPage::updateFixCaps() {
     }
     const RecSetup s = resolveRecSetup(conf_, RecEnv::defaults());
     fixCapsPath_ = s.monado.path;
-    const bool need = !fixCapsPath_.isEmpty() && QFileInfo::exists(fixCapsPath_) && !fileCaps(fixCapsPath_).ok();
+    // only a session that still runs monado-service needs it (pibridge-headtrack does not)
+    const bool need = !s.io.headtrack && !fixCapsPath_.isEmpty() && QFileInfo::exists(fixCapsPath_) &&
+                      !fileCaps(fixCapsPath_).ok();
     fixCaps_->setVisible(need);
 }
 
@@ -877,6 +1045,21 @@ bool DashboardPage::insideOutNow() const {
         return k.crystalLighthouse != QLatin1String("1");
     }
     return ioSettings(conf_).mode == TrackingMode::InsideOut;
+}
+
+bool DashboardPage::selectedInsideOut() const {
+    // the original Crystal: the mode chosen for it (crystal_tracking), not the one it runs this second, so the selector
+    // does not flip back and forth while it switches and SteamVR restarts; the headset card says what it runs
+    if (crystalOn()) {
+        const QString want = conf_.value("crystal_tracking", QString()).trimmed();
+        if (want == QLatin1String("slam")) {
+            return true;
+        }
+        if (want == QLatin1String("lighthouse")) {
+            return false;
+        }
+    }
+    return insideOutNow();
 }
 
 bool DashboardPage::monadoSession() const {
@@ -921,7 +1104,7 @@ void DashboardPage::updateMode() {
     updateVrStatus();
     const bool inside = insideOutNow();
     if (trModeSel_ != nullptr) {
-        trModeSel_->setCurrent(inside ? 1 : 0); // reflect the mode (programmatic: does not emit activated)
+        trModeSel_->setCurrent(selectedInsideOut() ? 1 : 0); // the chosen mode (programmatic: no activated)
     }
     const bool active = io_.active();
     if (crystalOn()) {
@@ -932,7 +1115,7 @@ void DashboardPage::updateMode() {
     } else if (!inside) {
         trMode_->setText(QStringLiteral("Mode: Lighthouse (SteamVR and the base stations)."));
     } else if (active || io_.state() != RecState::Idle) {
-        trMode_->setText(QStringLiteral("Mode: Inside-out (experimental), SteamVR + Monado. %1").arg(io_.message()));
+        trMode_->setText(QStringLiteral("Mode: Inside-out (experimental). %1").arg(io_.message()));
     } else {
         trMode_->setText(QStringLiteral("Mode: Inside-out (experimental)."));
     }
@@ -954,8 +1137,8 @@ void DashboardPage::updateMode() {
         ioStart_->setText(QStringLiteral("START VR"));
         ioStart_->setStyleSheet(QString()); // back to the accent (blue) style
         ioStart_->setEnabled(session ? r.ready() : true);
-        ioStart_->setToolTip(session ? (r.ready() ? QStringLiteral("Starts the camera broker, the controller tracker and "
-                                                                  "SteamVR with the Monado driver and the Tracking "
+        ioStart_->setToolTip(session ? (r.ready() ? QStringLiteral("Starts the camera broker, head tracking "
+                                                                  "(pibridge-headtrack) and SteamVR with the Tracking "
                                                                   "page's settings.")
                                                  : r.blocking.join(QLatin1Char('\n')))
                                     : QStringLiteral("Launches SteamVR (the base stations track the headset)."));
@@ -1005,6 +1188,7 @@ void DashboardPage::applyConf() {
     refresh_->setCurrent(conf_.refreshHz() == 72 ? 0 : 1);
     eyeToggle_->setCheckedQuiet(conf_.eyeTracking());
     audio_->setCheckedQuiet(conf_.audioToHeadset());
+    mic_->setCheckedQuiet(conf_.micToHeadset());
     {
         bool ok = false;
         const double ipd = conf_.value(reckey::kIpdMm, QString()).trimmed().toDouble(&ok);
@@ -1022,8 +1206,9 @@ void DashboardPage::updateOverlay() {
     }
     const OverlayStatus s = overlay_.status(source_.state().steamvrRunning);
     dashOverlay_->setCheckedQuiet(overlay_.wanted());
-    dashOverlayLine_->setText(s.words);
-    dashOverlayLine_->setVisible(!s.words.isEmpty());
+    dashOverlay_->setToolTip(s.words.isEmpty() ? dashOverlay_->toolTip().section(QStringLiteral("\n\n"), 0, 0)
+                                               : dashOverlay_->toolTip().section(QStringLiteral("\n\n"), 0, 0) +
+                                                     QStringLiteral("\n\n") + s.words);
     dashOverlayLine_->setStyleSheet(s.error ? QStringLiteral("color: #ef5a55;")
                                     : s.run == OverlayRun::WaitingForSteamVr ? QStringLiteral("color: #f2b02e;")
                                                                              : QString());
@@ -1071,7 +1256,7 @@ void DashboardPage::applyState() {
                                               "once (Lighthouse and inside-out). Starts at the lens position the "
                                               "headset reports."));
     if (crystal && !k.crystalLighthouse.isEmpty()) {
-        trModeSel_->setCurrent(insideOutNow() ? 1 : 0);
+        trModeSel_->setCurrent(selectedInsideOut() ? 1 : 0);
     }
     // The lens IPD the headset reports: at start and whenever it changes (the IPD buttons on the headset move the
     // lenses themselves), put the slider there and render with it; the motors are not touched. Not while the user is
@@ -1141,8 +1326,14 @@ void DashboardPage::applyState() {
         hsState_->setText(!mw.state.isEmpty() && (k.state == QLatin1String("idle") || k.state == QLatin1String("paused")) ? mw.state : words.value(k.state, k.state));
     }
     // Serial: from the SteamVR headset during a session; keepalived does not report one yet. "—" when unknown.
-    const QString hsSerial = (hmd != nullptr && !hmd->serial.isEmpty()) ? hmd->serial : QString();
+    // the headset's and its optical module's own serials (read by the headset service), else SteamVR's
+    const QString ownHs = crystalOn() ? QString() : keptSerial(QStringLiteral("headset"));
+    const QString hsSerial = !ownHs.isEmpty() ? ownHs : (hmd != nullptr && !hmd->serial.isEmpty()) ? hmd->serial : QString();
     hsSerial_->setText(hsSerial.isEmpty() ? QStringLiteral("—") : hsSerial);
+    const QString optics = crystalOn() ? QString() : keptSerial(QStringLiteral("optics"));
+    hsOptics_->setText(optics.isEmpty() ? QStringLiteral("—") : optics);
+    hsOpticsLabel_->setVisible(!crystalOn());
+    hsOptics_->setVisible(!crystalOn());
     // Room setup and the sound tests need a live SteamVR session; grey them out until it runs. Room setup builds the
     // inside-out room map: in Lighthouse mode SteamVR's own Room Setup does that job (user 2026-10-22).
     const bool roomInside = insideOutNow();
@@ -1164,21 +1355,26 @@ void DashboardPage::applyState() {
         const QColor ic = !connected || !r.present        ? pibridge::ui::color::faint
                           : r.chip.kind == ChipKind::Info ? pibridge::ui::color::accentText
                                                           : pibridge::ui::color::amber;
-        w.icon->setPixmap(pibridge::ui::lineIcon(pibridge::ui::Icon::Controller, ic).pixmap(40, 40));
-        w.model->setText(r.present ? r.name : QStringLiteral("Not connected"));
-        w.model->setVisible(connected);
+        w.icon->setPixmap(pibridge::ui::controllerPixmap(84, ic, i == 1));
+        // no model line: SteamVR's name is the profile's ("Oculus Touch Controller"), not the controller's
+        w.model->setVisible(false);
         w.detail->setText(connected ? r.detail : QString());
         w.detail->setVisible(!w.detail->text().isEmpty());
         w.chip->set(connected ? r.chip : ChipText{});
+        ctrlSeen_[i] = connected && r.present;
         w.battery->set(connected ? r.batteryPercent : -1, r.charging);
         w.battery->setVisible(connected && r.batteryPercent >= 0);
         w.batteryText->setText(connected ? r.batteryText : QString());
         w.batteryText->setVisible(!w.batteryText->text().isEmpty());
-        w.serialText = connected ? r.serial : QString();
+        // the controller's own serial, read from it by the headset service (ctrl_serials.h); SteamVR only knows
+        // CustomHeadsetOpenVR's names ("pimaxleft")
+        const QString own = keptSerial(i == 0 ? QStringLiteral("left") : QStringLiteral("right"));
+        w.serialText = !connected ? QString() : !own.isEmpty() ? own : r.serial;
         w.serial->setText(w.serialText.isEmpty() ? QString() : QStringLiteral("SN ") + w.serialText);
         w.serial->setVisible(!w.serialText.isEmpty());
         w.copy->setVisible(!w.serialText.isEmpty());
     }
+    applyControllerOps(); // the buttons follow what SteamVR shows
     ctrlExtra_->setText(cv.extra.isEmpty() ? QString() : QStringLiteral("Also: ") + cv.extra.join(QStringLiteral("\n")));
     ctrlExtra_->setVisible(!cv.extra.isEmpty());
     ctrlText_->setText(cv.message);
@@ -1231,14 +1427,15 @@ void DashboardPage::applyState() {
             lay->addWidget(row);
         }
     }
-    trStations_->setVisible(!tv.stations.empty());
+    // base stations only in Lighthouse mode
+    const bool lighthouse = !insideOutNow();
+    trBaseHead_->setVisible(lighthouse);
+    trText_->setVisible(lighthouse && !trText_->text().isEmpty()); // "Start SteamVR to see the base stations"
+    trStations_->setVisible(lighthouse && !tv.stations.empty());
     eyeChip_->set(eyeChip(s.eyed));
     eyeLine_->setText(eyeLine(s.eyed) +
-                      (s.eyed.running && s.eyed.profile == QLatin1String("user")
-                           ? QStringLiteral("\nCalibration: your profile")
-                           : s.eyed.running && s.eyed.profile == QLatin1String("none")
-                                 ? QStringLiteral("\nNo calibration profile yet: Calibrate, or import it from "
-                                                  "Windows on the Development page.")
+                      (s.eyed.running && s.eyed.profile == QLatin1String("none")
+                                 ? QStringLiteral("\nNo calibration profile yet: press Calibrate.")
                                  : QString()));
 }
 
@@ -1251,19 +1448,23 @@ void DashboardPage::updateGaze() {
             t = std::pair{x, y};
         }
     }
-    gaze_->setGaze(t);
+    if (gaze_ != nullptr) {
+        gaze_->setGaze(t);
+    }
 }
 
 void DashboardPage::setBusy(const QString& what) {
     busy_ = what;
     if (!what.isEmpty()) {
         toolResult_->setText(what);
+        toolResult_->setVisible(!what.isEmpty());
     }
     updateToolButtons();
 }
 
 void DashboardPage::toolDone(const QString& what, int code, const QString& out) {
     busy_.clear();
+    toolResult_->show();
     toolResult_->setText(code == 0 ? QStringLiteral("%1 done. %2").arg(what, tail(out))
                                    : QStringLiteral("%1 failed (%2): %3").arg(what).arg(code).arg(tail(out)));
     updateToolButtons();
@@ -1282,6 +1483,178 @@ void DashboardPage::updateToolButtons() {
     recenter_->setToolTip(eyecal ? QStringLiteral("A quick re-centre: 5 dots, removes a constant offset. Starts and ends on the "
                                                   "gaze grid.")
                                  : missingCal);
+}
+
+} // namespace pibridge::app
+
+namespace pibridge::app {
+
+void DashboardPage::controllerAction(int slot, int action) {
+    const KeepaliveStatus& k = source_.state().keepalive;
+    if (action == 1) {
+        const auto b = QMessageBox::question(
+            this, QStringLiteral("Unpair controller"),
+            QStringLiteral("Unpair the %1 controller? It stops working until you pair it again.").arg(sideName(slot)));
+        if (b != QMessageBox::Yes) {
+            return;
+        }
+    }
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (action == 0) {
+        (void)ctrlOps_.pair(slot, k, now);
+    } else if (action == 1) {
+        (void)ctrlOps_.unpair(slot, k, now);
+    } else {
+        (void)ctrlOps_.testVibration(slot, k, now);
+    }
+    if (ctrlOps_.busy()) {
+        ctrlOpsTimer_->start();
+    }
+    applyControllerOps();
+}
+
+void DashboardPage::applyControllerOps() {
+    const KeepaliveStatus& k = source_.state().keepalive;
+    const bool paused = k.running && k.state == QLatin1String("paused");
+    for (int i = 0; i < 2; i++) {
+        const int slot = i == 0 ? kSlotLeft : kSlotRight;
+        ControllerWidgets& w = ctrlRows_[i];
+        // active: the headset service hears it (not while inside-out holds the headset: its flags are stale then), or
+        // SteamVR shows it. Unpair and Test vibration only for an active controller: an absent one may not be paired.
+        const bool connected = ((i == 0 ? k.leftConnected : k.rightConnected) && !paused) || ctrlSeen_[i];
+        const ControllerOps::Side sd = ctrlOps_.side(slot);
+        w.opText->setText(sd.text);
+        w.opText->setVisible(!sd.text.isEmpty());
+        w.opText->setStyleSheet(sd.error ? QStringLiteral("color: %1;").arg(pibridge::ui::color::red.name()) : QString());
+        // a connected controller shows Unpair, an absent one Pair (keepalive keeps no list of bonds)
+        w.pair->setVisible(!connected);
+        w.unpair->setVisible(connected);
+        // Pair / Unpair need the headset free (service up, no inside-out session holding it); vibration works always
+        const bool idle = !ctrlOps_.busy();
+        const bool canAct = idle && k.running && !paused && k.headsetPresent;
+        const QString why = !k.running ? QStringLiteral("The headset service is off.")
+                            : paused   ? QStringLiteral("Inside-out tracking holds the headset: stop VR first.")
+                            : !k.headsetPresent ? QStringLiteral("No headset.")
+                                                : QString();
+        w.pair->setEnabled(canAct);
+        w.unpair->setEnabled(canAct);
+        w.pair->setToolTip(why.isEmpty() ? QStringLiteral("Put the controller in pairing mode, then press Pair and wait "
+                                                          "up to 30 s")
+                                         : why);
+        w.unpair->setToolTip(why.isEmpty() ? QStringLiteral("Forget this controller in the headset") : why);
+        w.buzz->setVisible(connected);
+        w.buzz->setEnabled(idle);
+    }
+}
+
+} // namespace pibridge::app
+
+namespace pibridge::app {
+
+// The default input now (pactl get-default-source, asynchronously): "headset" for the Pimax microphone.
+void DashboardPage::updateInputNow() {
+    if (source_.fake()) {
+        inputNow_->setText(QStringLiteral("headset"));
+        return;
+    }
+    auto* p = new QProcess(this);
+    connect(p, &QProcess::finished, this, [this, p](int code, QProcess::ExitStatus) {
+        const QString name = QString::fromUtf8(p->readAllStandardOutput()).trimmed();
+        p->deleteLater();
+        const bool headset = name.startsWith(QLatin1String("alsa_input.usb-Pimax_Corporation_")) ||
+                             name.startsWith(QLatin1String("alsa_input.usb-PIMAX_"));
+        inputNow_->setText(code != 0 || name.isEmpty() ? QStringLiteral("unknown")
+                           : headset                   ? QStringLiteral("headset")
+                                                       : QStringLiteral("another device"));
+        inputNow_->setToolTip(name);
+    });
+    p->start(QStringLiteral("pactl"), {QStringLiteral("get-default-source")});
+}
+
+} // namespace pibridge::app
+
+namespace pibridge::app {
+
+void DashboardPage::showPairDialog(int slot) {
+    auto* dlg = new QDialog(this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->setWindowTitle(QStringLiteral("Pair the %1 controller").arg(sideName(slot)));
+    dlg->setStyleSheet(QStringLiteral("QDialog { background: %1; }").arg(pibridge::ui::color::bg.name()));
+    dlg->resize(520, 330);
+    auto* v = new QVBoxLayout(dlg);
+    v->setContentsMargins(22, 18, 22, 18);
+    v->setSpacing(12);
+    auto* title = new QLabel(QStringLiteral("Pair the %1 controller").arg(sideName(slot)).toUpper());
+    title->setFont(pibridge::ui::titleFont(20));
+    v->addWidget(title);
+    auto* steps = new QLabel(QStringLiteral(
+        "<ol style='margin-left:-20px'>"
+        "<li>Put the controller in pairing mode: press and hold its pairing buttons until its light blinks "
+        "(see the Pimax manual).</li>"
+        "<li>Press <b>START PAIRING</b> and keep the controller near the headset.</li>"
+        "<li>The headset listens for up to %1 s; the other controller may drop out for a moment meanwhile.</li>"
+        "</ol>")
+                                  .arg(kPairTimeoutS));
+    steps->setWordWrap(true);
+    steps->setTextFormat(Qt::RichText);
+    steps->setFont(pibridge::ui::bodyFont(13));
+    v->addWidget(steps);
+    auto* bar = new QProgressBar;
+    bar->setRange(0, static_cast<int>(kPairTimeoutS));
+    bar->setTextVisible(false);
+    bar->setFixedHeight(6);
+    bar->setStyleSheet(QStringLiteral("QProgressBar { background: %1; border: none; border-radius: 3px; } "
+                                      "QProgressBar::chunk { background: %2; border-radius: 3px; }")
+                           .arg(pibridge::ui::color::border.name(), pibridge::ui::color::accent.name()));
+    v->addWidget(bar);
+    auto* state = pibridge::ui::dimLabel(QStringLiteral("Not started."));
+    state->setWordWrap(true);
+    v->addWidget(state);
+    v->addStretch(1);
+    auto* buttons = new QHBoxLayout;
+    buttons->addStretch(1);
+    auto* close = pibridge::ui::toolButton(QStringLiteral("CLOSE"));
+    auto* start = pibridge::ui::accentButton(QStringLiteral("START PAIRING"));
+    start->setIcon(pibridge::ui::lineIcon(pibridge::ui::Icon::Link, Qt::white));
+    buttons->addWidget(close);
+    buttons->addWidget(start);
+    v->addLayout(buttons);
+
+    auto* timer = new QTimer(dlg);
+    timer->setInterval(250);
+    auto startedAt = std::make_shared<qint64>(0);
+    const auto refresh = [this, slot, bar, state, start, timer, startedAt] {
+        const ControllerOps::Side sd = ctrlOps_.side(slot);
+        if (!sd.text.isEmpty()) {
+            state->setText(sd.text);
+            state->setStyleSheet(sd.error ? QStringLiteral("color: %1;").arg(pibridge::ui::color::red.name())
+                                          : QString());
+        }
+        if (sd.busy) {
+            bar->setValue(static_cast<int>(
+                std::min<qint64>(kPairTimeoutS, (QDateTime::currentMSecsSinceEpoch() - *startedAt) / 1000)));
+        } else if (*startedAt != 0) {
+            timer->stop();
+            bar->setValue(sd.error ? 0 : static_cast<int>(kPairTimeoutS));
+            start->setText(QStringLiteral("TRY AGAIN"));
+            start->setEnabled(true);
+        }
+    };
+    connect(timer, &QTimer::timeout, dlg, refresh);
+    connect(close, &QPushButton::clicked, dlg, &QDialog::close);
+    connect(start, &QPushButton::clicked, dlg, [this, slot, start, bar, timer, startedAt, refresh] {
+        *startedAt = QDateTime::currentMSecsSinceEpoch();
+        bar->setValue(0);
+        controllerAction(slot, 0);
+        if (ctrlOps_.side(slot).busy) {
+            start->setEnabled(false);
+            timer->start();
+        } else {
+            *startedAt = 0; // refused: the reason is shown
+        }
+        refresh();
+    });
+    dlg->show();
 }
 
 } // namespace pibridge::app

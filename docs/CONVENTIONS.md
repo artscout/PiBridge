@@ -13,7 +13,7 @@ tests faithfully; do not redesign what the Rust code already gets right (timings
 | `devices/` | device descriptions with the HID allowlist (`crystal-super.toml`, `dream-air.toml`), verbatim copies | `pimax-device/devices/*/device.toml` |
 | `libpibridge-hmd/` | HID: discovery, hidraw I/O, protocol frames, allowlist gate, descriptor parser, session (wake, keepalive, panel, rate), audio switch, process follower | `pimax-proto`, `pimax`, `pimax-device` (hid, toml_lite, descriptor), `omarchyvr-tools/src/{audio,follow}.rs` |
 | `tools/keepalived/` | `pibridge-keepalived` daemon | `omarchyvr-tools/src/keepalived.rs` |
-| `tools/record/` | `pibridge-record` (video recording from Monado's recorder tap or SteamVR's mirror, `pibridge-record-mirror`) and `pibridge_record` (the app's Record card links it); doc `docs/record.md` | `omarchyvr-record` (cli, encode, run, settings, shm, status) |
+| `tools/record/` | `pibridge-record` (video recording from SteamVR through the Vulkan capture layer or its mirror, `pibridge-record-mirror`) and `pibridge_record` (the app's Record card links it); doc `docs/record.md` | `omarchyvr-record` (cli, encode, run, settings, shm, status) |
 | `libpibridge-eye/` | eye chip protocol: usbfs transport, TTP, TLV, TTP session (subscriptions, gaze notifications), frame lists + guard + profile, power, shm, fake chip, pcap reader and replay plan | `pimax-eye` (usbfs, transport, ttp, tlv, session, frames, power, shm, fake, pcap, replay) |
 | `libpibridge-eyemath/` | gaze math (no I/O): gaze samples, device-to-head frame conversion, per-eye calibration map (`eye-calibration.toml`), correction, One-Euro filter, drift, device clock | `pimax-eye` (gaze, track, calib, correction, filter, drift, clock) |
 | `libpibridge-eye/src/live*` | the live tracker (phase 2, after both libraries above) | `pimax-eye/src/live.rs` |
@@ -22,7 +22,7 @@ tests faithfully; do not redesign what the Rust code already gets right (timings
 | `libpibridge-room/` | the room setup without graphics or runtime: geometry, SteamVR's chaperone file and `steamvr.vrsettings` zone keys, saved rooms, the in-headset editor's logic and scene lists, pose sources; `pibridge::room::`, target `pibridge_room`, doc `docs/ROOM-SETUP.md` | ZoneTweak (Go, MIT, see NOTICE), not omarchyvr |
 | `tools/roomsetup/` | `pibridge-roomsetup`: the OpenXR + Vulkan in-headset room setup, its OpenVR helper processes, `--selftest` | ZoneTweak `xr.go`, `main.go` |
 | `tools/xrkit/` | `pibridge_xrkit`: the OpenXR + Vulkan plumbing shared by the in-headset tools (session, swapchains, the scene pipelines and shaders); `pibridge::xrkit::`, doc `docs/home.md` | moved out of `tools/roomsetup` |
-| `tools/home/` | `pibridge-home`: the home scene in the headset while "Monado directly" (Development page) runs, `--selftest`; `pibridge::home::`, doc `docs/home.md` | new |
+| `tools/home/` | `pibridge-home`: the VR home scene in the headset (VR home page), `--selftest`; `pibridge::home::`, doc `docs/home.md` | new |
 | `app/` | Qt 6 app, Pimax EVO layout | new; quad views page from `~/gamedev/artscout-qv-vulkan-linux/gui` + `layer/src/settings.*`, `fovmath.*` |
 | `patches/`, `udev/` | setup files for the Crystal Super (CustomHeadsetOpenVR and NVIDIA patches, EDID and driver install scripts, WirePlumber rule) and our udev rule; see `patches/README.md` | copies from omarchyvr `linux/crystal-super/`, `patches/nvidia/` (as patch sets per GPU generation and driver version) |
 
@@ -72,20 +72,18 @@ Each part has `CMakeLists.txt` (the root adds it when present), `include/` or `s
   - `home.json` (pibridge-home): `state` ("starting" | "running" | "visible" | "focused" | "ending"), `visible`,
     `focused`, `runtime`, `space` ("stage" | "local"), `room`, `error`, `pid`.
 - The inside-out pause marker `$XDG_RUNTIME_DIR/pibridge/inside-out.active` (`common/pibridge_pause.h`): `pibridge-inside-out 1`,
-  `owner <app pid>`, `variant steamvr|monado`. While it names a running owner, pibridge-keepalived and pibridge-eyed close
+  `owner <app pid>`, `variant steamvr` (`monado` from the old session). While it names a running owner, pibridge-keepalived and pibridge-eyed close
   the headset (HID, eye chip; no gaze written) and report "paused"; a stale one (owner gone) does not count.
 - Shared settings (the app writes them, the daemons read them at start and on SIGHUP):
   `~/.config/pibridge/pibridge.conf`, `key=value` lines, `#` comments, unknown keys ignored, numbers with a
   point in every locale. Keys (defaults): `follow=vrserver` (the process whose life the daemons follow; empty = always
   on), `refresh_hz=90` (72 | 90), `audio_to_headset=on`, `eye_tracking=on`, `eye_start_list=` (path; empty = default
   path), `eye_profile=` (path; empty = default path), `eye_flip_x=1`; the app's own keys: `tracking_mode=lighthouse`
-  (lighthouse | inside-out; inside-out = SteamVR + Monado), `io_apps=steamvr` (steamvr | monado; still read, chooses
-  nothing any more: "Monado directly" is the Development page's own start), `io_home_scene=on` (pibridge-home in the
-  headset while "Monado directly" runs), `home_background=passthrough` (the VR home's background: passthrough |
+  (lighthouse | inside-out; inside-out = pibridge-headtrack + SteamVR), `home_background=passthrough` (the VR home's background: passthrough |
   none (the dark grid) | dusk (built in) | a picture id of tools/home/src/backgrounds.cpp, downloaded to
   `~/.local/share/pibridge/backgrounds/<id>.ppm`; docs/home.md), `home_background_last=` (the app's: the picture the
-  passthrough switch goes back to), `home_panel=on` (the PiBridge window in the VR home), the other `io_*` inside-out driver settings and the
-  `rec_*` programs and files (docs/TRACKING.md, docs/DEVELOPMENT.md). Parser: `libpibridge-hmd` `pibridge::hmd::Settings`
+  passthrough switch goes back to), `home_panel=on` (the PiBridge window in the VR home), the other `io_*` inside-out settings and the
+  `rec_*` programs and files (docs/TRACKING.md). Parser: `libpibridge-hmd` `pibridge::hmd::Settings`
   (`include/pibridge/hmd/settings.h`); the app has its own writer that keeps unknown lines.
 - Environment overrides are named `PIBRIDGE_*` (`PIBRIDGE_EYE_FLIP_X`, `PIBRIDGE_DEVICES_DIR`, ...); the older `PIMAX_*` name
   of each is still read when the `PIBRIDGE_*` one is not set (omarchyvr and `pimax-eyecal` use them): `common/pibridge_env.h`.

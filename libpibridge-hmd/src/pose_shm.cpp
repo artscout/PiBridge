@@ -139,6 +139,7 @@ std::array<std::uint8_t, SIZE - 16> body(const State& s) {
     put(b, 12, VERSION);
     put(b, 16, s.written_ns);
     put(b, 24, s.tracking);
+    put(b, 28, s.source);
     for (std::size_t i = 0; i < 3; i++) {
         const Device& d = s.devices[i];
         const std::size_t o = 32 + i * DEVICE_SIZE;
@@ -174,6 +175,7 @@ std::optional<State> decode(std::span<const std::uint8_t> f) {
     State s;
     s.written_ns = at<std::int64_t>(f, 16);
     s.tracking = at<std::uint32_t>(f, 24);
+    s.source = at<std::uint32_t>(f, 28);
     for (std::size_t i = 0; i < 3; i++) {
         Device& d = s.devices[i];
         const std::size_t o = 32 + i * DEVICE_SIZE;
@@ -236,7 +238,13 @@ Publisher::~Publisher() {
     }
 }
 
+void Publisher::publish(const State& s, std::int64_t now_ns) {
+    state_ = s;
+    write(now_ns);
+}
+
 void Publisher::head(const p3b::Head& h, std::int64_t received_ns) {
+    state_.source = SOURCE_CRYSTAL;
     Device& d = state_.devices[0];
     d = from_head(h, clock_.to_host(h.pose.t_ns, received_ns), d.sample + 1);
     state_.tracking = static_cast<std::uint32_t>(h.tracking);

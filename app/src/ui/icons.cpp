@@ -4,6 +4,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QTransform>
 
 namespace pibridge::ui {
 
@@ -122,6 +123,35 @@ QPainterPath path(Icon kind) {
         p.lineTo(11, 9);
         p.lineTo(13, 11);
         break;
+    case Icon::Link: // two chain links on a diagonal
+    case Icon::Unlink: { // the same links pulled apart
+        const double g = kind == Icon::Unlink ? 1.6 : 0.0;
+        p.addRoundedRect(QRectF(3 - g, 10 + g, 10, 6), 3, 3);
+        p.addRoundedRect(QRectF(11 + g, 8 - g, 10, 6), 3, 3);
+        QTransform t;
+        t.translate(12, 12);
+        t.rotate(-45);
+        t.translate(-12, -12);
+        p = t.map(p);
+        break;
+    }
+    case Icon::Mic: // a microphone on its stand
+        p.addRoundedRect(QRectF(9, 3, 6, 11), 3, 3);
+        p.moveTo(6, 11);
+        p.cubicTo(6, 18, 18, 18, 18, 11);
+        p.moveTo(12, 17);
+        p.lineTo(12, 21);
+        p.moveTo(9, 21);
+        p.lineTo(15, 21);
+        break;
+    case Icon::Pulse: // a heartbeat line
+        p.moveTo(3, 12);
+        p.lineTo(7, 12);
+        p.lineTo(9.5, 6);
+        p.lineTo(13.5, 18);
+        p.lineTo(16, 12);
+        p.lineTo(21, 12);
+        break;
     }
     return p;
 }
@@ -193,6 +223,59 @@ void drawGem(QPainter& p, double box, const QColor& c, double width) {
 }
 
 } // namespace
+
+QPixmap controllerPixmap(int h, const QColor& c, bool right) {
+    const qreal dpr = 2.0;
+    const int w = static_cast<int>(h * 0.8);
+    QPixmap pm(static_cast<int>(w * dpr), static_cast<int>(h * dpr));
+    pm.setDevicePixelRatio(dpr);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    // a 40 x 50 box
+    p.scale(w / 40.0, h / 50.0);
+    if (right) {
+        p.translate(40, 0);
+        p.scale(-1, 1);
+    }
+    QPen pen(c, 1.3);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+    // the tracking ring: its outer rim and the inner edge seen from above
+    p.drawEllipse(QRectF(6, 3, 28, 17));
+    QPainterPath inner;
+    inner.moveTo(7.5, 13);
+    inner.cubicTo(11, 8.5, 29, 8.5, 32.5, 13);
+    p.drawPath(inner);
+    // the face under the ring and the grip down to its rounded end
+    QPainterPath body;
+    body.moveTo(9, 15.5);
+    body.cubicTo(10, 21, 13, 23, 14, 26);
+    body.cubicTo(15.5, 32, 16, 40, 17.5, 45.5);
+    body.cubicTo(18.5, 48, 22.5, 48, 23, 45);
+    body.cubicTo(23.5, 38, 23, 30, 25, 24);
+    body.cubicTo(27, 21, 30, 19.5, 31.5, 16.5);
+    p.drawPath(body);
+    // the face's front edge
+    QPainterPath face;
+    face.moveTo(10, 17.5);
+    face.cubicTo(15, 21.5, 25, 21.5, 30.5, 17.5);
+    p.drawPath(face);
+    // the stick and two buttons
+    p.drawEllipse(QPointF(16, 15.5), 2.2, 1.5);
+    p.drawEllipse(QPointF(22, 16), 1.1, 0.8);
+    p.drawEllipse(QPointF(25.5, 15), 1.1, 0.8);
+    // the grip's seam and the trigger on its front
+    QPainterPath seam;
+    seam.moveTo(17.5, 24);
+    seam.cubicTo(18, 32, 19, 40, 20.5, 47);
+    p.drawPath(seam);
+    p.setBrush(c);
+    p.drawRoundedRect(QRectF(25.2, 27, 2.2, 5.5), 1, 1);
+    return pm;
+}
 
 QPixmap gemPixmap(int px, const QColor& c) {
     const qreal dpr = 2.0;

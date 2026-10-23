@@ -19,9 +19,8 @@
 #include "pages/about.h"
 #include "pages/apps.h"
 #include "pages/dashboard.h"
-#include "pages/development.h"
+#include "pages/help_window.h"
 #include "pages/record_card.h"
-#include "pages/device.h"
 #include "pages/display.h"
 #include "pages/logs.h"
 #include "pages/performance.h"
@@ -65,9 +64,7 @@ QString MainWindow::pageSlug(int page) {
     case Performance: return QStringLiteral("performance-quadviews");
     case Tracking: return QStringLiteral("tracking");
     case Room: return QStringLiteral("room");
-    case Development: return QStringLiteral("development");
     case Logs: return QStringLiteral("logs");
-    case Device: return QStringLiteral("device");
     case Display: return QStringLiteral("display");
     case Recording: return QStringLiteral("recording");
     default: return QStringLiteral("about");
@@ -129,14 +126,12 @@ MainWindow::MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder 
     navButton(QStringLiteral("Dashboard"), pibridge::ui::Icon::Dashboard, Dashboard);
     navButton(QStringLiteral("Display"), pibridge::ui::Icon::Dashboard, Display);
     navButtonIcon(QStringLiteral("Apps"), appsNavIcon(pibridge::ui::color::dim, Qt::white), Apps);
-    navButton(QStringLiteral("Device"), pibridge::ui::Icon::About, Device);
     nv->addWidget(navSep());
     navButton(QStringLiteral("Performance"), pibridge::ui::Icon::Performance, Performance);
     navButton(QStringLiteral("Tracking"), pibridge::ui::Icon::Tracking, Tracking);
     navButton(QStringLiteral("Room"), pibridge::ui::Icon::Room, Room);
     navButton(QStringLiteral("Recording"), pibridge::ui::Icon::Logs, Recording);
     nv->addWidget(navSep());
-    navButton(QStringLiteral("Development"), pibridge::ui::Icon::Controller, Development);
     navButton(QStringLiteral("Logs"), pibridge::ui::Icon::Logs, Logs);
     navButton(QStringLiteral("About"), pibridge::ui::Icon::About, About);
     nv->addStretch(1);
@@ -162,8 +157,7 @@ MainWindow::MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder 
                                                : QString());
     });
     connect(direct_.get(), &IoSessionControl::changed, io_.get(), [this] {
-        io_->setOtherSession(direct_->active() ? QStringLiteral("\"Monado directly\" runs (Development page). Stop it "
-                                                                "first.")
+        io_->setOtherSession(direct_->active() ? QStringLiteral("\"Monado directly\" runs. Stop it first.")
                                                : QString());
     });
     // The SteamVR dashboard launcher (a leaf): its switch is in the Dashboard's Quick settings; its clicks launch room setup.
@@ -179,17 +173,6 @@ MainWindow::MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder 
     stack_->addWidget(apps);
     stack_->addWidget(new PerformancePage);
     stack_->addWidget(new TrackingPage(source_, conf_, *io_));
-    auto* dev = new DevelopmentPage(source_, conf_, *direct_, actions_);
-    connect(dev, &DevelopmentPage::recordingActiveChanged, io_.get(), &IoSessionControl::setRecorderActive);
-    connect(dev, &DevelopmentPage::recordingActiveChanged, direct_.get(), &IoSessionControl::setRecorderActive);
-    const auto block = [this, dev] {
-        dev->setExternalBlock(io_->active()       ? QStringLiteral("Tracking with SteamVR + Monado runs (START TRACKING on "
-                                                                   "the Tracking page). Stop it first.")
-                              : direct_->active() ? QStringLiteral("\"Monado directly\" runs (below). Stop it first.")
-                                                  : QString());
-    };
-    connect(io_.get(), &IoSessionControl::changed, dev, block);
-    connect(direct_.get(), &IoSessionControl::changed, dev, block);
     auto* roomPage = new RoomPage(source_, runner, findTool, &conf_);
     // The Dashboard's ROOM SETUP button launches the in-headset setup directly, without opening the Room page.
     connect(dash, &DashboardPage::startRoomSetup, roomPage, &RoomPage::launchSetup);
@@ -210,10 +193,8 @@ MainWindow::MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder 
         connect(overlay_.get(), &OverlayControl::recordSettingChanged, rc, &RecordCard::setFromVr);
     }
     stack_->addWidget(roomPage);
-    stack_->addWidget(dev);
     stack_->addWidget(new LogsPage(source_.fake()));
     stack_->addWidget(new AboutPage);
-    stack_->addWidget(new DevicePage(source_, conf_, *io_, *direct_)); // index = Device
     stack_->addWidget(new DisplayPage(source_, conf_, actions_));      // index = Display
     stack_->addWidget(new RecordingPage(source_, *direct_, conf_));    // index = Recording
     if (!source_.fake()) {
@@ -240,16 +221,8 @@ MainWindow::MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder 
     help->setFont(pibridge::ui::labelFont(12));
     help->setIcon(pibridge::ui::lineIcon(pibridge::ui::Icon::Help, pibridge::ui::color::accentText));
     help->setCursor(Qt::PointingHandCursor);
-    help->setToolTip(QStringLiteral("Opens the documentation of the app (docs/app.md)."));
-    connect(help, &QPushButton::clicked, this, [] {
-        // installed docs first, then the source tree this binary was built from
-        for (const QString& p : {QStringLiteral(PIBRIDGE_INSTALLED_DOCS "/app.md"), QStringLiteral(PIBRIDGE_SOURCE_DOCS "/app.md")}) {
-            if (QFileInfo::exists(p)) {
-                QDesktopServices::openUrl(QUrl::fromLocalFile(p));
-                return;
-            }
-        }
-    });
+    help->setToolTip(QStringLiteral("Opens PiBridge's user guide (docs/USER-GUIDE.md) in its own window."));
+    connect(help, &QPushButton::clicked, this, [this] { showHelp(this, QStringLiteral("USER-GUIDE.md")); });
     sh->addWidget(help);
     rv->addWidget(sb);
 

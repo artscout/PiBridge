@@ -561,23 +561,38 @@ std::optional<SteamVrStage> parse_steamvr_stage(std::string_view text) {
     return st;
 }
 
-bool is_vrserver(std::uint32_t pid) {
+namespace {
+
+std::string comm_of(std::uint32_t pid) {
     if (pid == 0) {
-        return false;
+        return {};
     }
     auto c = cam::read_file("/proc/" + std::to_string(pid) + "/comm");
     if (!c) {
-        return false;
+        return {};
     }
     std::string s = *c;
     while (!s.empty() && (s.back() == '\n' || s.back() == ' ')) {
         s.pop_back();
     }
-    return s == "vrserver";
+    return s;
+}
+
+} // namespace
+
+bool is_vrserver(std::uint32_t pid) {
+    return comm_of(pid) == "vrserver";
+}
+
+bool is_headtrack(std::uint32_t pid) {
+    return comm_of(pid) == "pibridge-headtr"; // pibridge-headtrack, cut to 15 characters
 }
 
 std::optional<SteamVrStage> steamvr_stage(std::uint32_t pid) {
-    if (!is_vrserver(pid)) {
+    // the ring's writer: SteamVR's vrserver (driver_monado), or pibridge-headtrack feeding SteamVR through
+    // CustomHeadsetOpenVR (then the stage file names the running vrserver)
+    const bool headtrack = is_headtrack(pid);
+    if (!is_vrserver(pid) && !headtrack) {
         return std::nullopt;
     }
     auto b = cam::read_file(steamvr_stage_path());
@@ -585,14 +600,14 @@ std::optional<SteamVrStage> steamvr_stage(std::uint32_t pid) {
         return std::nullopt;
     }
     auto st = parse_steamvr_stage(*b);
-    if (!st || st->pid != pid) {
+    if (!st || (headtrack ? !is_vrserver(st->pid) : st->pid != pid)) {
         return std::nullopt;
     }
     return st;
 }
 
 double origin_height(std::uint32_t monado_pid) {
-    if (is_vrserver(monado_pid)) {
+    if (is_vrserver(monado_pid) || is_headtrack(monado_pid)) {
         // driver_monado: tracking origin offset 0; the STAGE floor is SteamVR's standing frame
         if (const auto st = steamvr_stage(monado_pid)) {
             return -st->t[1];

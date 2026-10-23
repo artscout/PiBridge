@@ -50,7 +50,7 @@ void writeFakeRoomFiles(const room::Env& env) {
     room::Json doc = room::Json::object();
     doc["jsonid"] = room::Json::string("chaperone_info");
     doc["universes"] = room::Json::array({uni(a, "1111111111", 3.4, 2.6, 0.3, -0.2, 0.25, "Mon Oct 19 10:00:00 2026"),
-                                          uni(b, "2", 2.5, 1.5, 0, 0, 0, "Sun Oct 18 09:00:00 2026")});
+                                          uni(b, kInsideOutUniverse, 2.5, 1.5, 0, 0, 0, "Sun Oct 18 09:00:00 2026")});
     doc["version"] = room::Json::number(5);
     (void)room::writeFileAtomic(cfg + "/chaperone_info.vrchap", doc.dump() + "\n");
 
@@ -119,7 +119,7 @@ std::vector<UniverseRow> universeRows(const room::Store& st, const QString& acti
         r.id = QString::fromStdString(id);
         r.active = r.id == active;
         r.pimax = u.pimax;
-        r.monado = r.id == QLatin1String(kMonadoUniverse);
+        r.monado = r.id == QLatin1String(kInsideOutUniverse);
         QStringList parts;
         parts << QStringLiteral("%1 corners").arg(u.points);
         if (auto doc = room::readJsonFile(u.source)) {
@@ -162,12 +162,12 @@ QString roomTargetUniverse(bool insideOut, const QString& active) {
     if (!active.isEmpty()) {
         return active;
     }
-    return insideOut ? QString::fromLatin1(kMonadoUniverse) : QString();
+    return insideOut ? QString::fromLatin1(kInsideOutUniverse) : QString();
 }
 
 QString insideOutRoomNote() {
-    return QStringLiteral("Inside-out (SteamVR + Monado): SteamVR keeps this boundary in universe 2, which every "
-                          "Monado-tracked headset shares. Each start begins a new tracking world; the room map (below) "
+    return QStringLiteral("Inside-out: SteamVR keeps this boundary in universe 30, the one of CustomHeadsetOpenVR's "
+                          "inside-out headset. Each start begins a new tracking world; the room map (below) "
                           "puts it back on your room: map the room once, then the floor, the centre and forward are "
                           "recognised at every start. The Lighthouse rooms are not changed.");
 }
@@ -179,12 +179,12 @@ Gate saveRoomGate(const room::RoomLib& lib, const QString& name, const QString& 
             continue;
         }
         if (!universe.isEmpty() && QString::fromStdString(r.universe) != universe) {
-            const bool monado = r.universe == kMonadoUniverse;
+            const bool monado = r.universe == kInsideOutUniverse;
             return {false, QStringLiteral("\"%1\" is the saved room of universe %2 (%3). Choose another name, for "
                                           "example \"%4\".")
                                .arg(QString::fromStdString(r.name), QString::fromStdString(r.universe),
                                     monado ? QStringLiteral("inside-out") : QStringLiteral("Lighthouse"),
-                                    name.trimmed() + (universe == QLatin1String(kMonadoUniverse)
+                                    name.trimmed() + (universe == QLatin1String(kInsideOutUniverse)
                                                           ? QStringLiteral(" inside-out")
                                                           : QStringLiteral(" lighthouse")))};
         }
@@ -193,9 +193,9 @@ Gate saveRoomGate(const room::RoomLib& lib, const QString& name, const QString& 
 }
 
 Gate showRoomGate(bool insideOut, const QString& roomUniverse, bool roomUniverseInFile) {
-    if (insideOut && roomUniverse != QLatin1String(kMonadoUniverse) && !roomUniverseInFile) {
+    if (insideOut && roomUniverse != QLatin1String(kInsideOutUniverse) && !roomUniverseInFile) {
         return {false, QStringLiteral("This room was saved for universe %1, which is not in SteamVR's chaperone file; "
-                                      "it is not put on the inside-out universe 2.")
+                                      "it is not put on the inside-out universe 30.")
                            .arg(roomUniverse)};
     }
     return {true, {}};
@@ -210,7 +210,7 @@ Gate recenterGate(bool insideOut, bool steamvrRunning, bool anchorOn, const QStr
     }
     if (!anchorOn) {
         return {false, QStringLiteral("Turn Room anchor on (Tracking page, Head tracking), then start tracking again: "
-                                      "the recenter moves Monado's world through it.")};
+                                      "the recenter moves the tracker's world through it.")};
     }
     if (!steamvrRunning) {
         return {false, QStringLiteral("Start tracking first (Tracking page): the recenter runs in the headset.")};
@@ -228,7 +228,7 @@ QString recenterReminder() {
                           "button for 1.5 s, after the room is recognised.");
 }
 
-std::expected<void, QString> addMonadoUniverse(const QString& file, std::time_t now) {
+std::expected<void, QString> addInsideOutUniverse(const QString& file, std::time_t now) {
     auto text = room::readFile(file.toStdString());
     if (!text) {
         return std::unexpected(QStringLiteral("%1 cannot be read.").arg(file));
@@ -237,8 +237,8 @@ std::expected<void, QString> addMonadoUniverse(const QString& file, std::time_t 
     if (!doc || !doc->isObject()) {
         return std::unexpected(QStringLiteral("%1 is not a chaperone file.").arg(file));
     }
-    if (room::findUniverse(*doc, kMonadoUniverse) != nullptr) {
-        return std::unexpected(QStringLiteral("Universe 2 is in %1 already.").arg(file));
+    if (room::findUniverse(*doc, kInsideOutUniverse) != nullptr) {
+        return std::unexpected(QStringLiteral("Universe 30 is in %1 already.").arg(file));
     }
     room::Json u = room::Json::object();
     u["collision_bounds"] = room::makeBounds(room::rectangle(2, 2), room::kDefaultHeight);
@@ -254,7 +254,7 @@ std::expected<void, QString> addMonadoUniverse(const QString& file, std::time_t 
     char buf[64];
     std::strftime(buf, sizeof buf, "%a %b %e %H:%M:%S %Y", std::localtime(&now));
     u["time"] = room::Json::string(buf);
-    u["universeID"] = room::Json::string(kMonadoUniverse);
+    u["universeID"] = room::Json::string(kInsideOutUniverse);
     room::Json& list = (*doc)["universes"];
     if (!list.isArray()) {
         list = room::Json::array();

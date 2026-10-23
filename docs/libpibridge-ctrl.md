@@ -4,16 +4,15 @@ The Pimax controllers without hardware access. Two halves, each in its own CMake
 
 - **hands** (`hands.cmake`, milestone M6 of `docs/research/rust-port-plan.md`): controller-driven hands, the optical
   + IMU pose fuser and the in-hand detector. Ported from omarchyvr `rust/pimax-hands` (MIT OR Apache-2.0) at the
-  pinned commit `381eea2` (`monado-abi/spec.txt`); the Rust code is the specification and its tests have C++ twins
-  here. The C ABI the Monado Pimax driver calls (`pimax_hands.h`, `pimax_ctrlfuse.h`, `pimax_inhand.h`) is in
-  `monado-abi/src/{hands,ctrlfuse,inhand}_capi.cpp` and goes into `libpibridge_pimax.a` (`docs/monado-abi.md`).
+  pinned commit `381eea2`; the Rust code is the specification and its tests have C++ twins here. (The C ABI the
+  Monado Pimax driver called went with Monado; pibridge-headtrack uses the C++ API.)
 - **tracker** (`track.cmake`, M7): see below.
 
 Either half can be left out of a build with `PIBRIDGE_SKIP_PARTS=libpibridge-ctrl/hands` (or `libpibridge-ctrl/track`).
 
 ## Hands (M6)
 
-CMake targets `pibridge_ctrl_obj` (objects, in `libpibridge_pimax.a`) and `pibridge_ctrl` (static, for tests and tools),
+CMake targets `pibridge_ctrl_obj` (objects) and `pibridge_ctrl` (static, for tests and tools),
 namespace `pibridge::ctrl` (`pibridge::ctrl::fuse`, `pibridge::ctrl::inhand`, `pibridge::ctrl::touch`), headers in
 `libpibridge-ctrl/include/pibridge/ctrl/`. No hardware, no threads of its own, no Qt. Depends on libpibridge-cam's `rustfmt.h`
 (Rust number formatting and parsing) and `io.h` (Rust-like file and environment helpers). Built with libpibridge-cam's
@@ -63,15 +62,14 @@ the fit) the C++ aborts the process, as a Rust panic inside an `extern "C"` func
 | `pibridge_ctrl_inhand_fixtures` | tests/inhand_fixtures.rs (7): the real IMU log of the session 2026-10-16-1818 |
 | `pibridge_ctrl_properties` | tests/properties.rs (6 proptest properties, as fixed-seed loops over the same value ranges) |
 | `pibridge_ctrl_replay` | tests/replay.rs (4): the real button-by-button capture, decoded with libpibridge-hmd's `decode_controller` |
-| `monado_abi_hands_capi` | src/ffi.rs (6), src/inhand_ffi.rs (3) and tests/c_abi.rs (3), through `libpibridge_pimax.a` |
 
 The fixtures (`ctrl_buttons_hub2.rec.gz`, `p82.rec.gz`, `p83.rec.gz`, `ctrl_marks.json`, `inhand_*.csv.gz`) are read
 from the omarchyvr checkout (`PIBRIDGE_OMARCHYVR_DIR/rust/fixtures`, read only); the tests that need them exit 77
 (skipped) without it. Every test runs with `HOME` and `XDG_RUNTIME_DIR` in the build tree. (The byte-for-byte
 difftests against the Rust library were removed with the oracle once the port was finished, 2026-10-22.)
 
-Not ported: `tests/driver_glue.rs` (`#[ignore]` in Rust: it links the object `pimax_ctrl.c.o` of a built Monado tree
-with the hands patch); its job, the real driver glue over this archive, is the Monado switch (M9).
+Not ported: `tests/driver_glue.rs` (`#[ignore]` in Rust: it links the object `pimax_ctrl.c.o` of a built Monado
+tree), and the C ABI tests (`src/ffi.rs`, `src/inhand_ffi.rs`, `tests/c_abi.rs`), whose twins went with the C ABI.
 
 ### Differences from the Rust library (intended)
 
@@ -105,8 +103,8 @@ New verdicts: `tilt` (gravity check); `jump` now also comes from the inertial ga
 A/B switches: `PIBRIDGE_CTRL_INS_MS`, `PIBRIDGE_CTRL_INS_TAU_MS`, `PIBRIDGE_CTRL_INS_FREE_MS`, `PIBRIDGE_CTRL_INS_JUMP_MM`,
 `PIBRIDGE_CTRL_TILT`, `PIBRIDGE_CTRL_KEEP_S`, `PIBRIDGE_CTRL_GRAV_DEG`.
 
-The C ABI is unchanged. `Config{}` keeps the Rust defaults, so the Rust twins are unchanged. `pibridge_ctrl_fuse_pibridge`
-tests the new paths. `monado_abi_hands_capi` runs with `PIBRIDGE_CTRL_PARITY=1`.
+`Config{}` keeps the Rust defaults, so the Rust twins are unchanged. `pibridge_ctrl_fuse_pibridge` tests the new
+paths.
 
 ## Tracker (M7)
 

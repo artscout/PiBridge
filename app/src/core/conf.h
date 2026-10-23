@@ -36,6 +36,7 @@ public:
     int refreshHz() const;
     bool eyeTracking() const { return flag("eye_tracking", true); }
     bool audioToHeadset() const { return flag("audio_to_headset", true); }
+    bool micToHeadset() const { return flag("mic_to_headset", true); }
     // Set one key and write the file atomically (temp file + rename); false when it could not be written.
     bool set(std::string_view key, std::string_view value);
 

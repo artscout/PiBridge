@@ -1,3 +1,23 @@
+pibridge (2.0.1) unstable; urgency=medium
+
+  * Inside-out tracking of the Crystal Super / Dream Air without Monado:
+    pibridge-headtrack runs Pimax's own engine (winbridge) or Basalt and hands
+    the head and controller poses to CustomHeadsetOpenVR, like the original
+    Crystal's own tracking. Controllers by Pimax's LED engine with Pimax's
+    25 ms prediction and the controller angle; game vibration through an
+    abstract Unix socket; camera auto exposure; room anchor and recenter.
+  * The original Pimax Crystal (P3B) fully supported: Lighthouse and its own
+    inside-out, 72/90/120 Hz, eye tracking, sound over DisplayPort.
+  * Monado is no longer built, shipped or used (no bundled SteamVR driver, no
+    ONNX Runtime); the Development and Device pages are gone.
+  * Dashboard: controllers with PAIR (a guided window) / UNPAIR / VIBRATE and
+    their own serials, the headset's and the optical module's serials, a Sound
+    card with headset sound / microphone switches, the eye calibration import.
+  * Help opens the user guide inside the app.
+  * EDID override for every Pimax headset (scripts, manual and EDID data).
+
+ -- Albert Valiev <artscout@gmail.com>  Fri, 23 Oct 2026 02:48:31 +0200
+
 pibridge (1.0.3) unstable; urgency=medium
 
   * Crystal Super lens profiles fixed: each eye's axis is now set by a true

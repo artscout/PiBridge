@@ -268,7 +268,7 @@ refresh rate). For the Crystal Super the branch with the first two is enough:
 ```
 git clone --recurse-submodules --branch linux-crystal-super https://github.com/artscout/CustomHeadsetOpenVR.git
 ```
-or apply them to upstream commit `4f25826` (in this order; the original Crystal needs all four):
+or apply them to upstream commit `4f25826` (in this order; inside-out of the Crystal Super / Dream Air needs all five):
 ```
 git clone --recurse-submodules https://github.com/sboys3/CustomHeadsetOpenVR.git
 cd CustomHeadsetOpenVR && git checkout 4f25826 && git submodule update --init --recursive
@@ -276,6 +276,7 @@ git apply /path/to/pibridge/patches/chovr/chovr-linux-direct-usb.patch
 git apply /path/to/pibridge/patches/chovr/chovr-linux-eye-gaze.patch
 git apply /path/to/pibridge/patches/chovr/chovr-linux-pimax-dump-profile.patch
 git apply /path/to/pibridge/patches/chovr/chovr-linux-crystal.patch
+git apply /path/to/pibridge/patches/chovr/chovr-linux-headtrack.patch
 cd ..
 ```
 (The changes are offered upstream.) Build it and register it with SteamVR:
@@ -392,23 +393,23 @@ layer on and off. It needs the Vulkan and OpenXR headers, `glslangValidator`, an
 settings app, which PiBridge replaces) Qt 6 Widgets.
 
 Once the layer is installed, you do **not** use its own settings app: the PiBridge **Performance** page drives it.
-The on/off switch there is disabled until the layer is installed, and the **Device** page's Rendering card shows
-whether it is on, off or not installed.
+The on/off switch there is disabled until the layer is installed.
 
 > **Planned: one install for the whole stack.** The layer is built from its own repository today; PiBridge only
 > configures it. Bundling the layer into PiBridge's own build and install (so a single `cmake --install` lays down the
 > app, the services, the dashboard panel *and* the foveated-rendering layer together) is **not wired up yet** — this
 > is a TODO. For now, follow the two installs above.
 
-### 7.1 Inside-out tracking (SteamVR + Monado, optional)
+### 7.1 Inside-out tracking (Crystal Super / Dream Air, optional)
 
-Inside-out tracks the head in 6DoF from the headset's own cameras — no base stations, no faceplate. It runs as a
-SteamVR driver (the bundled Monado, section 7.2 below), so games still start through SteamVR as usual. It is
-**experimental**; Lighthouse (section 5) is the tested path. Turn it on from the Tracking page
-(**Head tracking by: Inside-out**).
+Inside-out tracks the head in 6DoF from the headset's own cameras — no base stations, no faceplate. `pibridge-headtrack`
+tracks the head and the controllers and CustomHeadsetOpenVR shows the poses in SteamVR, so games still start through
+SteamVR as usual ([pibridge-headtrack.md](pibridge-headtrack.md)). It is **experimental**; Lighthouse (section 5) is
+the tested path. Choose **Inside-out** on the Dashboard (or the Tracking page) and press **START VR**.
 
-Common to both engines: the bundled Monado built and installed (**section 7.2**); `pimax-cam` and `pimax-ctrltrack`
-(installed with the app, section 2); and the headset's factory **camera calibration**
+Common to both engines: CustomHeadsetOpenVR with all five patches, including `chovr-linux-headtrack.patch` (section
+5.3); `pibridge-cam`, `pibridge-ctrltrack` and `pibridge-headtrack` (installed with the app, section 2); and the
+headset's factory **camera calibration**
 (`device_calibration_<serial>.xml`, copied below, or set as `rec_cam_calib`). Then pick one head-tracking engine on the
 Tracking page (**Head tracking engine**):
 
@@ -440,30 +441,22 @@ Tracking page (**Head tracking engine**):
 4. On the Tracking page choose **Head tracking engine: Pimax**; it tells you in plain words what is still missing
    (Wine, the kit, or the two files from step 3).
 5. **There is nothing to start by hand, and no service for it.** winbridge is not a daemon and pibridge-keepalived
-   does not start it. The app runs it inside the tracking session: at every **START TRACKING** (and for Record
-   tracking / Monado directly on the Development page) it starts `wine winbridge.exe` once the camera broker is up,
-   before SteamVR / Monado, and stops it with the session. If it is still running from an earlier session it holds
+   does not start it. The app runs it inside the tracking session: at every **START VR** it starts
+   `wine winbridge.exe` once the camera broker is up, before `pibridge-headtrack` and SteamVR, and stops it with the
+   session. If it is still running from an earlier session it holds
    its port and the next start is refused; end it with `pkill -f winbridge.exe`.
    To check it ran, see `~/.local/state/pibridge/inside-out/<session>/logs/winbridge.log`. If the engine stops by
    itself the session goes on and the head falls back to 3DoF until the next start.
 6. After a **Pimax Play update** on Windows, copy the kit again (step 2). winbridge itself needs rebuilding only after
    a PiBridge update that changes it (run step 3 again).
 
-**B) Basalt — open source.** Monado's Basalt tracker on the two lower cameras plus the IMU. Build `libbasalt.so`
-separately (Monado's Basalt fork) and put it where the app finds it — `~/.local/lib/pibridge/`, `/usr/local/lib/`,
+**B) Basalt — open source, the fallback.** The Basalt visual-inertial tracker on the two lower cameras plus the IMU,
+loaded by `pibridge-headtrack` directly as a VIT library; the controllers come from `pibridge-ctrltrack`. Build
+`libbasalt.so` separately (the Basalt fork with the VIT interface, from the Monado project) and put it where the app
+finds it — `~/.local/lib/pibridge/`, `/usr/local/lib/`,
 `/usr/lib/`, or set `rec_basalt_lib`. PiBridge generates the base Basalt config from the headset calibration at start;
 the tunables (detection grid, camera count, accel/gyro bias, drift hold) are on the Tracking page, documented in
 [TRACKING.md](TRACKING.md). Choose **Head tracking engine: Basalt**.
-
-### 7.2 The PiBridge-linked Monado (bundled with PiBridge)
-
-Inside-out mode runs through our own Monado: `monado-service` and the SteamVR driver `driver_monado.so` carry the Pimax
-Crystal Super driver, linked against PiBridge's `libpibridge_pimax.a`. **The full Monado source is bundled in this
-repository** at [`third_party/monado/`](../third_party/monado) — a snapshot of our Monado fork (Monado plus the Pimax
-driver, with the `PIMAX_USE_PIBRIDGE` switch already applied), so there is nothing extra to clone and no patch to apply.
-Build and install it following [docs/monado-abi.md](monado-abi.md) ("The PiBridge-linked Monado"); the app's preflight
-checks the feature markers in the result, and its Fix/Play button restores `cap_sys_nice` after each relink. Lighthouse
-mode (section 5) does not need any of this — CustomHeadsetOpenVR draws the picture there.
 
 ## 8. Check that it works
 
@@ -511,7 +504,7 @@ They read their own files (`~/.config/pimax-linux/`, `~/.config/omarchyvr/`), wh
 | zlib | optional, system package | your distribution; without it the headset calibration blob is not inflated |
 | IBM Plex fonts | optional, system package | your distribution; fallbacks: Noto Sans, DejaVu |
 | `openvr.h` | vendored header | `app/third_party/openvr/` (OpenVR SDK 2.15.6, Valve, BSD-3-Clause) |
-| Monado (inside-out driver) | bundled source | `third_party/monado/` — a snapshot of our Monado fork (Monado + PiBridge's Pimax Crystal Super driver, BSL-1.0); the `PIMAX_USE_PIBRIDGE` switch is already applied; built per docs/monado-abi.md |
+| Basalt (`libbasalt.so`) | optional, built separately | the open inside-out engine (VIT interface); not shipped |
 | `libopenvr_api.so` | loaded at run time with `dlopen` | your SteamVR install (the app finds it through `~/.config/openvr/openvrpaths.vrpath`); not linked, not shipped |
 | Headset and eye chip protocols, gaze math, the two daemons, device descriptions | our code, ported | from omarchyvr (laughtt and contributors, MIT OR Apache-2.0, used as MIT; see NOTICE), Rust to C++ |
 | Quad views settings code | our code, copied | from artscout-qv-vulkan-linux (MIT) |

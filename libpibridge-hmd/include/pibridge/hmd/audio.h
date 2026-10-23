@@ -65,7 +65,8 @@ struct Before {
 
 /// Make the headset the default output and input (the original Crystal's output: its DisplayPort port's profile
 /// first); a log line and what to restore later.
-std::pair<std::string, Before> to_headset(const Runner& pactl = run_pactl);
+/// `output` / `input`: which of the two to make the headset's.
+std::pair<std::string, Before> to_headset(const Runner& pactl = run_pactl, bool output = true, bool input = true);
 /// The headset's output node (`pactl list short sinks`; the original Crystal: its DisplayPort sink, when its profile is
 /// active), nullopt when there is none.
 std::optional<std::string> headset_sink(const Runner& pactl = run_pactl);

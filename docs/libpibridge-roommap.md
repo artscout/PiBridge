@@ -1,6 +1,6 @@
 # libpibridge-roommap
 
-The persistent room map: Basalt (the VIO in Monado) starts a new world at every start and keeps no map; this library
+The persistent room map: the head tracker (Basalt or Pimax's engine) starts a new world at every start and keeps no map; this library
 keeps a map of the room between sessions and recognises it again, so the world origin (and with it the floor, the
 play area and every window) comes back to the same real place. Milestones R2 (room half) and R3 (roommap half) of
 `docs/research/rust-port-plan.md` section 5. Ported from omarchyvr `rust/omarchyvr-room` and `rust/omarchyvr-roommap`
@@ -31,7 +31,7 @@ Not to be confused with `libpibridge-room/` (the ZoneTweak chaperone port, untou
 | `store.h` | map directory, `RelocResult` (`last-reloc.toml`), corrections, offset writer | store.rs |
 | `light.h` | brightness/corners/stereo-points quality and advice | light.rs |
 | `exportmap.h` | JSON export and the offline HTML viewer (`data/viewer.html`, embedded) | export.rs |
-| `live.h` | broker frames + Monado's head ring | live.rs |
+| `live.h` | broker frames + the tracker's head ring | live.rs |
 
 Map directory: `PIBRIDGE_ROOMMAP_DIR`, `PIMAX_ROOMMAP_DIR`, else `~/.local/share/pibridge/roommap/<name>`, falling back to
 `~/.local/share/omarchyvr/roommap` when only that exists (the Rust tool knows only its own path and

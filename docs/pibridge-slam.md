@@ -11,17 +11,16 @@ pibridge-slam export [--out DIR] [--calib XML] [--cams 0,1] [--imu F] [--base CO
 ```
 
 It writes the same three files as `omarchyvr-slam export`, byte for byte, into `DIR` (default
-`~/.config/omarchyvr/slam`, the path the Monado setup and the studies use):
+`~/.config/omarchyvr/slam`, the path omarchyvr's setup and the studies use):
 
 - `pimax-basalt-calib.json` (+ `pimax-slam-info.json`): the Basalt calibration (kb4) of the chosen cameras from the
-  factory XML (`libpibridge-cam` `slam::write_basalt_files`, the same code the Monado driver calls through
-  `pimax_cam_slam_write_basalt`), with `calib_gyro_bias` and `calib_accel_bias`.
+  factory XML (`libpibridge-cam` `slam::write_basalt_files`), with `calib_gyro_bias` and `calib_accel_bias`.
 - `pimax-basalt-config.json`: a Basalt VIO base config with our override (`config.optical_flow_detection_grid_size`
   40). The base is `--base`, else the first of `<src_dir>/basalt/data/euroc/euroc_config.json` (`$PIMAX_SRC_DIR`, else
   `src_dir` in `~/.config/omarchyvr/paths.toml`, else `~/src`), `~/.local/share/basalt/euroc_config.json`,
   `<lib_dir>/basalt/share/basalt/euroc_config.json`, `~/.local/share/basalt/msdmo_config.json`, else the built-in copy
   of Basalt's EuRoC config (`tools/slam/data/basalt-euroc_config.json`, BSD-3-Clause, NOTICE).
-- `pimax-basalt.toml`: the Monado `SLAM_CONFIG` with absolute paths.
+- `pimax-basalt.toml`: the Basalt config file (`SLAM_CONFIG`, pibridge-headtrack's `--slam-config`) with absolute paths.
 
 **More than two cameras** (`--cams 0,1,2,3`, the Crystal Super's lower tracking pair plus the upper side pair): the
 calibration lists the cameras in that order (the first two exactly as a `--cams 0,1` export has them, test
@@ -45,7 +44,7 @@ calibration into the repo); errors are `pibridge-slam export: <the Rust message>
 pibridge-slam ae REC.pxcam [--frames N] [--model crystal-super]
 ```
 
-The auto-exposure controller (`libpibridge-cam` `ae.h`, the code Monado runs through `pimax_cam_ae_update`) open loop
+The auto-exposure controller (`libpibridge-cam` `ae.h`, the code pibridge-headtrack runs) open loop
 over a recording: for every tracking frame the first step it would request from that frame's own metadata (a
 recording cannot respond), one line per device second (`t`, the frame's exposure/gain, mean and clipped fraction of
 both pairs, the requested lower and upper setting) and the medians at the end. `--model` takes `dream-air` (default)
@@ -56,15 +55,14 @@ pibridge-slam headreplay DATASET TRACKING.csv [--steps steps.json] [--calib basa
                       [--predict-ms 20] [--hz 90] [--central-vel] [--head X,Y,Z] [--csv OUT]
 ```
 
-PiBridge's own (no Rust twin): the head pose output layer (`libpibridge-cam` headpose, what Monado calls through
-`pimax_cam_track_*`) replayed on a recording (`DATASET`: a EuRoC root or a recording folder) and a tracker run
+PiBridge's own (no Rust twin): the head pose output layer (`libpibridge-cam` headpose, what pibridge-headtrack
+uses with Basalt) replayed on a recording (`DATASET`: a EuRoC root or a recording folder) and a tracker run
 (Basalt's `tracking.csv`, e.g. from `monado-cli slambatch`), with the numbers that say whether a change makes head
 tracking better: prediction error against the tracker at display time (by head turn rate, and with the slow offset
-removed), jitter at rest and moving, mark error between the protocol's mark steps (`--steps`: the recorder's
-`steps.json`), creep at rest, tilt error against gravity (`--calib`: the accel bias for that reference and the 3DoF
-gyro bias; else the driver's cache), losses / resets / re-zeros, drift held, CPU per query. The replay is the one of
-monado-abi's former SLAM difftest; every `PIMAX_SLAM_*` / `PIBRIDGE_HEAD_PARITY` switch is read from the
-environment as in Monado. Method and results: `docs/research/head-tracking-improvements.md`.
+removed), jitter at rest and moving, mark error between the protocol's mark steps (`--steps`: a `steps.json`
+of the old tracking recorder), creep at rest, tilt error against gravity (`--calib`: the accel bias for that reference and the 3DoF
+gyro bias; else the driver's cache), losses / resets / re-zeros, drift held, CPU per query. Every `PIMAX_SLAM_*` /
+`PIBRIDGE_HEAD_PARITY` switch is read from the environment as in the live tracker. Method and results: `docs/research/head-tracking-improvements.md`.
 
 ## Tests
 

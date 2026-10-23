@@ -87,6 +87,14 @@ bool Actions::setAudioToHeadset(bool on, Done done) {
     return true;
 }
 
+bool Actions::setMicToHeadset(bool on) {
+    if (!conf_.set("mic_to_headset", on ? "on" : "off")) {
+        return false;
+    }
+    reload(kKeepalive);
+    return true;
+}
+
 bool Actions::setCrystalTracking(bool lighthouse) {
     if (!conf_.set("crystal_tracking", lighthouse ? "lighthouse" : "slam")) {
         return false;

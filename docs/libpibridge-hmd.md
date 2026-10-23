@@ -53,7 +53,7 @@ frames) goes through a `Gate` built from the connected model's description. `Con
 words) and nothing is written; without a loadable description nothing at all is sent (the session still drains the
 interfaces). `Stats::refused` counts refusals. The gate history (`min_interval_ms`) starts over at every connect,
 which matches "once per enumeration". `Config::allowlist_for` (a function of the model) replaces the folder search
-when set: monado-abi's libpimax uses it to fall back to the descriptions compiled into its archive.
+when set (it was used by the C ABI for Monado, now removed, to fall back to descriptions compiled into its archive).
 
 **Vibration.** `Session::haptic(slot, {amp %, ms})` queues a pulse for the session thread, which writes
 `58 09 07 SS AMP DUR` (through the gate, like every write) at most once per 8 ms per hand; a newer pulse replaces a

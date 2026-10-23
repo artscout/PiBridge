@@ -24,6 +24,10 @@ public:
 
     // The tests play/record on the headset, so they only work once SteamVR runs; the Dashboard gates them.
     void setVrRunning(bool on);
+    // TEST SOUND / TEST MICROPHONE: placed by the Dashboard in its Headset sound / Headset mic rows; the panel itself
+    // shows the level meter and the result line.
+    QPushButton* speakersButton() const { return speakers_; }
+    QPushButton* micButton() const { return mic_; }
 
 private:
     void update();

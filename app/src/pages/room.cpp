@@ -24,6 +24,7 @@
 #include <ctime>
 #include <numbers>
 
+#include "help_window.h"
 #include "../core/anchor_offset.h"
 #include "../core/inside_out.h"
 #include "../core/roommap_link.h"
@@ -329,29 +330,22 @@ RoomPage::RoomPage(StateSource& source, Runner& runner, Actions::ToolFinder find
     headRow->addStretch(1);
     auto* help = pibridge::ui::linkButton(QStringLiteral("How room setup works"));
     help->setIcon(pibridge::ui::lineIcon(pibridge::ui::Icon::Help, pibridge::ui::color::accentText));
-    help->setToolTip(QStringLiteral("Opens docs/ROOM-SETUP.md: the controls in the headset, the files, what is not done yet."));
-    connect(help, &QPushButton::clicked, this, [this] {
-        const QString p = docPath(QStringLiteral("ROOM-SETUP.md"));
-        if (fake_) {
-            say(QStringLiteral("Fake mode: nothing is opened (%1).").arg(p));
-        } else if (!p.isEmpty()) {
-            QDesktopServices::openUrl(QUrl::fromLocalFile(p));
-        }
-    });
+    help->setToolTip(QStringLiteral("Shows docs/ROOM-SETUP.md: the controls in the headset, the files, what is not done yet."));
+    connect(help, &QPushButton::clicked, this, [this] { showHelp(this, QStringLiteral("ROOM-SETUP.md")); });
     headRow->addWidget(help);
     rootL->addLayout(headRow);
-    // the inside-out mode: universe 2 and the room map (an explanation, not a warning)
+    // the inside-out mode: universe 30 and the room map (an explanation, not a warning)
     auto* ioRow = new QHBoxLayout;
     ioNote_ = new QLabel;
     ioNote_->setWordWrap(true);
     ioNote_->setStyleSheet(QStringLiteral("color: #9aa3ad;"));
     ioRow->addWidget(ioNote_, 1);
     createIo_ = pibridge::ui::toolButton(QStringLiteral("CREATE INSIDE-OUT BOUNDARY"));
-    createIo_->setToolTip(QStringLiteral("Adds universe 2 (driver_monado's) with a 2 x 2 m boundary to SteamVR's chaperone "
+    createIo_->setToolTip(QStringLiteral("Adds universe 30 (the inside-out headset's) with a 2 x 2 m boundary to SteamVR's chaperone "
                                          "file (a backup first); the Lighthouse universes stay as they are."));
     ioRow->addWidget(createIo_, 0, Qt::AlignTop);
     rootL->addLayout(ioRow);
-    connect(createIo_, &QPushButton::clicked, this, &RoomPage::createMonadoUniverse);
+    connect(createIo_, &QPushButton::clicked, this, &RoomPage::createInsideOutUniverse);
 
     auto* cols = new QHBoxLayout;
     cols->setSpacing(10);
@@ -565,7 +559,7 @@ RoomPage::~RoomPage() = default;
 void RoomPage::showEvent(QShowEvent* e) {
     QWidget::showEvent(e);
     if (!ed_ || !ed_->dirty) {
-        // the same universe again, unless the tracking mode changed meanwhile (inside-out works on universe 2)
+        // the same universe again, unless the tracking mode changed meanwhile (inside-out works on universe 30)
         reload(ed_ && insideOut() == loadedInsideOut_ ? ed_->st.universe() : std::string());
     }
 }
@@ -636,19 +630,19 @@ void RoomPage::saveHeights() {
     updateView();
 }
 
-void RoomPage::createMonadoUniverse() {
+void RoomPage::createInsideOutUniverse() {
     const Gate g = applyGate(steamvrRunning(), store_ != nullptr);
     if (!g.ok || !store_ || store_->files().empty()) {
         say(g.ok ? QStringLiteral("There is no chaperone file to add the inside-out boundary to.") : g.why, true);
         return;
     }
     const QString file = QString::fromStdString(store_->files().front());
-    if (auto r = addMonadoUniverse(file, std::time(nullptr)); !r) {
+    if (auto r = addInsideOutUniverse(file, std::time(nullptr)); !r) {
         say(r.error(), true);
         return;
     }
-    reload(kMonadoUniverse);
-    say(QStringLiteral("Universe 2 added to %1 with a 2 x 2 m boundary (backup kept). Drag the corners to your walls "
+    reload(kInsideOutUniverse);
+    say(QStringLiteral("Universe 30 added to %1 with a 2 x 2 m boundary (backup kept). Drag the corners to your walls "
                        "and apply, or edit it in the headset.").arg(file));
 }
 
@@ -664,12 +658,12 @@ void RoomPage::reload(const std::string& universe) {
         universe.empty() ? roomTargetUniverse(io, activeUniverse(source_.state().steamvr)).toStdString() : universe;
     auto st = room::Store::load(dirs, want);
     monadoMissing_ = false;
-    if (st && io && want == kMonadoUniverse && !st->universes().contains(want)) {
+    if (st && io && want == kInsideOutUniverse && !st->universes().contains(want)) {
         // never fall back to a Lighthouse universe here: an edit would go there
         monadoMissing_ = true;
         store_ = std::make_unique<room::Store>(std::move(*st));
-        loadError_ = QStringLiteral("SteamVR has no inside-out boundary yet (universe 2). It asks for one at the first "
-                                    "start with SteamVR + Monado; or create one here (CREATE INSIDE-OUT BOUNDARY) and "
+        loadError_ = QStringLiteral("SteamVR has no inside-out boundary yet (universe 30). It asks for one at the first "
+                                    "inside-out start; or create one here (CREATE INSIDE-OUT BOUNDARY) and "
                                     "fit it to your walls.");
     } else if (!st) {
         loadError_ = QString::fromStdString(st.error());
@@ -865,7 +859,7 @@ void RoomPage::updateView() {
     createIo_->setVisible(io && monadoMissing_);
     createIo_->setEnabled(!running);
     createIo_->setToolTip(running ? applyGate(true, true).why
-                                  : QStringLiteral("Adds universe 2 (driver_monado's) with a 2 x 2 m boundary to SteamVR's "
+                                  : QStringLiteral("Adds universe 30 (the inside-out headset's) with a 2 x 2 m boundary to SteamVR's "
                                                    "chaperone file (a backup first); the Lighthouse universes stay as they are."));
     const Gate ag = applyGate(running, store_ != nullptr);
     apply_->setEnabled(ag.ok && ed_ != nullptr);

@@ -128,6 +128,9 @@ RecProcSpec ctrltrackSpec(const RecSetup& s, const QString& logDir);
 // before Monado / SteamVR, when winbridgeWanted(); stopped by PID with the rest (wine execs into it: same PID).
 RecProcSpec winbridgeSpec(const RecSetup& s, const QString& logDir);
 bool winbridgeWanted(const RecSetup& s);
+// pibridge-headtrack (io_headtrack with the Pimax engine) and its command line
+bool headtrackWanted(const RecSetup& s);
+RecProcSpec headtrackSpec(const RecSetup& s, const QString& logDir);
 RecProcSpec monadoSpec(const RecSetup& s, const QString& recordDir, const QString& logPath);
 QStringList monadoEnv(const RecSetup& s, const QString& recordDir);
 // SteamVR + Monado: <SteamVR>/bin/vrstartup.sh with SteamVR's launch environment (buildIoEnv's steamvr list: the

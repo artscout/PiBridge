@@ -120,6 +120,7 @@ public:
     void setCurrent(int index);
     int current() const;
     void setItemEnabled(int index, bool on);
+    void setItemIcon(int index, const QIcon& icon);
 
 signals:
     void activated(int index); // a click by the user only

@@ -14,7 +14,7 @@
 //    16  i64         time it was published
 //    24  u32         the headset's own inside-out tracking, flags: 1 orientation, 2 position (0: Lighthouse mode);
 //                    head report byte 113
-//    28  u32         reserved (0)
+//    28  u32         source: SOURCE_* (who writes it: 0 unknown)
 //    32  device x3   head, left controller, right controller, DEVICE_SIZE bytes each:
 //          +0  i64       sample time (0 = never seen)
 //          +8  u32       state: head 1 tracked / 0 no pose; controller 4 no pose, 5 IMU only, 7 optical; 0 never
@@ -50,6 +50,10 @@ inline constexpr std::uint32_t MAGIC = 0x53504250u;
 inline constexpr std::uint32_t VERSION = 1;
 inline constexpr std::size_t DEVICE_SIZE = 96;
 inline constexpr std::size_t SIZE = 328;
+/// Writer: pibridge-keepalived for the original Crystal (its own inside-out).
+inline constexpr std::uint32_t SOURCE_CRYSTAL = 1;
+/// Writer: pibridge-headtrack (the Crystal Super's / Dream Air's inside-out, tracked on the PC).
+inline constexpr std::uint32_t SOURCE_HEADTRACK = 2;
 
 /// The default file (in use by the deployed daemon and the SteamVR driver: tests must never use it).
 std::filesystem::path default_path();
@@ -71,6 +75,7 @@ struct Device {
 struct State {
     std::int64_t written_ns = 0;
     std::uint32_t tracking = 0;
+    std::uint32_t source = 0;
     std::array<Device, 3> devices{}; // head, left, right
     bool operator==(const State&) const = default;
 };
@@ -114,6 +119,8 @@ public:
     void controller(const p3b::Controller& c, std::int64_t received_ns);
     /// The headset is gone: every device without a pose.
     void gone(std::int64_t now_ns);
+    /// A whole state from another tracker (pibridge-headtrack); written_ns is set to `now_ns`.
+    void publish(const State& s, std::int64_t now_ns);
     const State& state() const { return state_; }
 
 private:

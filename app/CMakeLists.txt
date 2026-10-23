@@ -42,8 +42,8 @@ add_executable(pibridge-app
     src/pages/dashboard.cpp src/pages/dashboard.h src/pages/performance.cpp src/pages/performance.h
     src/pages/logs.cpp src/pages/logs.h src/pages/about.cpp src/pages/about.h
     src/pages/apps.cpp src/pages/apps.h src/pages/tracking.cpp src/pages/tracking.h
-    src/pages/room.cpp src/pages/room.h src/pages/development.cpp src/pages/development.h
-    src/pages/device.cpp src/pages/device.h src/pages/sound_tests.cpp src/pages/sound_tests.h
+    src/pages/room.cpp src/pages/room.h src/pages/help_window.cpp src/pages/help_window.h
+    src/pages/sound_tests.cpp src/pages/sound_tests.h
     src/pages/display.cpp src/pages/display.h src/pages/recording.cpp src/pages/recording.h
     src/pages/record_card.cpp src/pages/record_card.h
     src/qv/preview.cpp src/qv/preview.h src/qv/layerinstall.cpp)

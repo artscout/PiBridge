@@ -12,21 +12,22 @@ pibridge-record start [--eyes left|both] [--fps 30|60|72] [--quality low|medium|
 pibridge-record stop          # finishes the file (always playable) and prints where it is
 pibridge-record status
 pibridge-record start --brief / stop --brief   # one short line ("Recording", "Saved: name.mp4")
-pibridge-record start --source auto|tap|layer|mirror  # auto (default): the Vulkan capture layer under SteamVR, else Monado's tap
+pibridge-record start --source auto|tap|layer|mirror  # auto (default): the Vulkan capture layer under SteamVR
 ```
 
 Defaults: one eye, 30 fps, high quality, sound on, microphone off, at most 1080 lines per eye, h264, NVENC when
 ffmpeg has it (x264 on the CPU otherwise; an NVENC that dies within 5 s falls back to the CPU, same file name).
 
-## Three sources, one recorder
+## The sources, one recorder
 
 The recorder (`pibridge-record run`) encodes frames and does not care where they came from; the session picks the
 source (`--source auto`, the Dashboard card does the same):
 
-- **SteamVR** (Lighthouse, SteamVR + Monado, SteamVR's OpenXR runtime): the **Vulkan capture layer** (`--source
-  layer`, the default under SteamVR), described below. The old GL mirror (`--source mirror`) is kept but is no longer
-  the default (it crashes vrserver on NVIDIA/Vulkan).
-- **"Monado directly"** (Development page), Monado's own compositor: the tap below (`--source tap`).
+- **SteamVR** (Lighthouse, inside-out, SteamVR's OpenXR runtime): the **Vulkan capture layer** (`--source layer`, the
+  default under SteamVR), described below. The old GL mirror (`--source mirror`) is kept but is no longer the default
+  (it crashes vrserver on NVIDIA/Vulkan).
+- **A Monado compositor** (`--source tap`): the tap below. PiBridge no longer runs Monado, so the app never uses it;
+  it stays in the tool from the port.
 
 ### The Vulkan capture layer (`--source layer`, the SteamVR default)
 
@@ -89,12 +90,10 @@ timeline semaphore. If colours look swapped, switch the capture format to `B8G8R
 
 The tap lives in our Monado fork's compositor (`src/xrt/compositor/main/comp_recorder.c`): it
 copies the squashed eye images (before the lens distortion) into shared memory without ever waiting, and drops
-frames instead. PiBridge's "Monado directly" session passes `PIMAX_RECORD=1` and `PIMAX_RECORD_SHM=<ring>` to
-monado-service (`app/src/core/inside_out.cpp`, `buildIoEnv`), the path pibridge-record uses too (`$PIMAX_RECORD_SHM`,
-else `$XDG_RUNTIME_DIR/pimax-record.shm`; the tap's own default is the same, `PIMAX_RECORD=0` removes the tap).
-
-Under **SteamVR + driver_monado** SteamVR's compositor (vrcompositor) draws the headset image and Monado's tap sees
-nothing, so the SteamVR mirror is used there (`--source tap` under SteamVR is refused in plain words).
+frames instead. monado-service gets `PIMAX_RECORD=1` and `PIMAX_RECORD_SHM=<ring>`, the path pibridge-record uses too
+(`$PIMAX_RECORD_SHM`, else `$XDG_RUNTIME_DIR/pimax-record.shm`; the tap's own default is the same, `PIMAX_RECORD=0`
+removes the tap). Under SteamVR, SteamVR's compositor draws the headset image and a tap sees nothing
+(`--source tap` under SteamVR is refused in plain words).
 
 **Not known yet**: whether SteamVR's Vulkan compositor on Linux shares its mirror texture with OpenGL at all. If it
 does not, `GetMirrorTextureGL` returns an error (most likely `VRCompositorError_SharedTexturesNotSupported`, 106,
@@ -139,10 +138,8 @@ both are test-read for 0.3 s first, and a missing one only drops the sound, neve
 ## Not ported / not done yet
 
 - omarchyvr's GPU safety gate (omarchyvrd): PiBridge has none, NVENC is always allowed.
-- `omarchyvr record tracking` (PiBridge's Record tracking is on the Development page) and the voice commands.
-- No live recording has been made yet: to check live in a "Monado directly" session: `recorder: tap ready` in the
-  Monado log, Record -> REC within about 1 s, no new missed compositor frames for a minute, Stop -> the file plays;
-  both eyes at 60 fps; the CPU encoder; killing pibridge-record leaves the session running and the tap detaches.
+- `omarchyvr record tracking` and the voice commands (data for other headsets is collected under Windows,
+  [HEADSET-DATA.md](HEADSET-DATA.md)).
 - The SteamVR mirror has never run against a real SteamVR: to check live (SteamVR running, nothing else on the
   GPU): does `GetMirrorTextureGL` work with the Linux Vulkan compositor (else the error above, and the VR View +
   portal follow-up); Background vs Overlay client; the EGL display (desktop vs device); the image's orientation and

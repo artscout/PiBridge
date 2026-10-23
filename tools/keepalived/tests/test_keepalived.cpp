@@ -414,9 +414,14 @@ TEST(options_default_from_the_settings_file_and_flags_override) {
     // plain keepalive (omarchyvr keepalived without --video)
     o = parse_args({"--no-video"}, st);
     CHECK(o && !o->video && o->follow.empty() && !o->audio);
+    // the output off, the microphone still the headset's
     st = Settings::parse("follow=\nrefresh_hz=72\naudio_to_headset=off\n");
     o = parse_args({}, st);
-    CHECK(o && o->video == std::optional<std::uint8_t>(72) && o->follow.empty() && !o->audio);
+    CHECK(o && o->video == std::optional<std::uint8_t>(72) && o->follow.empty() && o->audio && !o->audio_output &&
+          o->audio_input);
+    st = Settings::parse("audio_to_headset=off\nmic_to_headset=off\n");
+    o = parse_args({}, st);
+    CHECK(o && !o->audio);
 }
 
 TEST(options_refuse_what_the_rust_daemon_refuses) {

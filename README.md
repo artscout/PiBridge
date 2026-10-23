@@ -58,7 +58,7 @@ pixel font, for SteamVR's chaperone file on Linux. ZoneTweak's set dressing (the
 | Headset | Tracking | Display | Eye tracking | Status |
 |---|---|---|---|---|
 | Pimax Crystal Super (micro-OLED), Lighthouse faceplate | SteamVR Lighthouse: Index controllers, base stations | CustomHeadsetOpenVR + our patches; wake, keepalive, panel 72/90 Hz; headset audio | yes, with your own Tobii profile | **works** (one headset tested) |
-| Pimax Crystal Super, inside-out (no faceplate) | SLAM on the headset cameras (Pimax Play's engine under Wine, or Basalt), controllers by their LEDs | SteamVR via our bundled Monado driver | through the Pimax driver in Monado | **experimental**: head tracking usable on a worn headset, controllers not checked live yet. On a USB 2.0 port or hub the tracking cameras come up as Motion-JPEG instead of YUYV (480 Mbps cannot carry the uncompressed stream), which loses the metadata block, so that path runs without device timestamps, auto-exposure and the controller cameras; a SuperSpeed port gives YUYV back. See `docs/TRACKING.md` |
+| Pimax Crystal Super, inside-out (no faceplate) | SLAM on the headset cameras (Pimax Play's engine under Wine, or Basalt), controllers by their LEDs | SteamVR via CustomHeadsetOpenVR + our patches (`pibridge-headtrack` feeds the poses), no Monado | yes | **experimental**: head tracking usable on a worn headset, controllers not checked live yet. On a USB 2.0 port or hub the tracking cameras come up as Motion-JPEG instead of YUYV (480 Mbps cannot carry the uncompressed stream), which loses the metadata block, so that path runs without device timestamps, auto-exposure and the controller cameras; a SuperSpeed port gives YUYV back. See `docs/TRACKING.md` |
 | Pimax Crystal (original, "P3B"), Lighthouse (switched on by software, no faceplate swap) | SteamVR Lighthouse: Index controllers, base stations | CustomHeadsetOpenVR + our patches; 72/90/120 Hz; sound over DisplayPort, its microphone | yes (its Tobii chip, started by PiBridge) | **works** (one headset tested) |
 | Pimax Crystal (original), its own inside-out | the headset tracks itself (head and Crystal controllers); PiBridge passes the poses to CustomHeadsetOpenVR, no Monado | CustomHeadsetOpenVR + our patches | yes | **works** (one headset tested): head, controllers with all buttons and the stick, battery. Not yet: controller vibration; the controllers are drawn as Quest 2 controllers. See [docs/INSTALL.md](docs/INSTALL.md) 5.5 |
 | Pimax Dream Air | | | | protocol and device description present (from omarchyvr); not tested with PiBridge |
@@ -81,7 +81,7 @@ bytes we derive from it, never the recording.
 | Eye calibration | works (new) | `pibridge-eyecal`: the eye tracker's own calibration, as Pimax Play does it; one Windows session is still needed for the start list |
 | Quad views page | works | the layer itself: [linux-vulkan-quadviews-openxr-layer](https://github.com/artscout/linux-vulkan-quadviews-openxr-layer) |
 | SteamVR device status | works | controllers, battery, base stations |
-| Apps page | works | Steam games and your own programs; own apps wait until SteamVR (or Monado) is ready |
+| Apps page | works | Steam games and your own programs; own apps wait until SteamVR is ready |
 | SteamVR dashboard panel | works (tested in a headset) | `pibridge-overlay`: an in-VR panel with Room setup, quick room setup and one record button (START/STOP recording), toggled from Dashboard → Quick settings; [docs/OVERLAY.md](docs/OVERLAY.md) |
 | Room setup | works (tested in a headset) | `pibridge-roomsetup` (in the headset, port of ZoneTweak) and the Room page; SteamVR's chaperone file |
 | Video recording | works | `pibridge-record` + a Vulkan capture layer (`tools/record-layer`) that grabs the game's eye image in SteamVR's compositor → NVENC/CPU mp4; Dashboard Record card or the overlay; [docs/record.md](docs/record.md) |
@@ -89,17 +89,17 @@ bytes we derive from it, never the recording.
 
 ## SLAM status
 
-**How we do it.** Inside-out runs the Pimax driver inside Monado, which SteamVR loads as its headset driver
-(`driver_monado.so` in vrserver), so games start through SteamVR as usual — no separate runtime. Our Monado (the Pimax
-Crystal Super driver linked against PiBridge's C++ `libpibridge_pimax.a`, no Rust) is **bundled in this repo** at
-`third_party/monado/` (see [docs/INSTALL.md](docs/INSTALL.md) section 7). The headset's cameras and IMU feed one of two
-interchangeable head-tracking engines, chosen on the Tracking page:
+**How we do it.** One process, `pibridge-headtrack`, owns the headset, tracks the head and the controllers and writes
+the poses to a shared memory file; CustomHeadsetOpenVR (with `patches/chovr/chovr-linux-headtrack.patch`) shows them in
+SteamVR, so games start through SteamVR as usual, the same way as the original Crystal's own inside-out. No Monado, no
+separate runtime ([docs/pibridge-headtrack.md](docs/pibridge-headtrack.md)). The headset's cameras and IMU feed one of
+two interchangeable head-tracking engines, chosen on the Tracking page:
 
 - **Pimax Play's own engine** — the default, for parity with Windows: `pimax_slam.pi.dll` run under Wine in a small
   host (`winbridge`) and reached through a VIT library, with the headset's factory calibration — the same tracking
   Pimax Play uses on Windows ([docs/WINBRIDGE.md](docs/WINBRIDGE.md)).
-- **Basalt** — open source: Monado's Basalt visual-inertial tracker on the two lower cameras plus the IMU, with a
-  config PiBridge generates from the headset calibration.
+- **Basalt** — open source, the fallback: the Basalt visual-inertial tracker (loaded directly as a VIT library) on the
+  two lower cameras plus the IMU, with a config PiBridge generates from the headset calibration.
 
 Controllers are found by their LEDs in the cameras (Pimax's LED engine in the same winbridge, or our
 `pibridge-ctrltrack` + IMU fusion). The lens distortion/FOV is a selectable profile on the Display page (Crystal Super
@@ -108,23 +108,18 @@ each eye's axis set by a true rotation.
 
 Status on the Crystal Super (no faceplate), as of 2026-10-19:
 
-- **Head tracking works on a worn headset** (recorded with the Development page's guided Record tracking, then checked
-  offline): no tracking losses, 5-7 cm drift over a take, 3-5 mm/s creep standing still, about 1 degree tilt error.
+- **Head tracking works on a worn headset** (Basalt, recorded and checked offline): no tracking losses, 5-7 cm drift over a take, 3-5 mm/s creep standing still, about 1 degree tilt error.
   What made it usable: camera auto exposure with the Windows exposure and gain ranges (the images were too dark
   before), the factory accelerometer bias plus a measured gyro bias in Basalt's calibration, and a finer feature
   grid. The output layer's drift hold is off for the Crystal (it made the error worse: 273 mm instead of 74 mm).
   Notes: [docs/research/slam-imu-intrinsics.md](docs/research/slam-imu-intrinsics.md).
 - **Controllers** are found by their LEDs in the cameras (`pibridge-ctrltrack`, 86-100 % of the frames in recordings) and
   fused with their IMU; not checked live in the headset yet.
-- **From the app:** the Tracking page's START TRACKING runs SteamVR with Monado's driver (`driver_monado`) instead of
-  CustomHeadsetOpenVR, so games start as usual (in progress). "Monado directly" (no SteamVR; own OpenXR apps,
-  `pibridge-home` as a home scene) is on the Development page for debugging. Neither is tested in a headset yet.
-- **No Rust:** the Pimax libraries Monado links (headset, cameras, auto exposure, lenses, controllers, hands) are
-  ported to C++ (`libpibridge_pimax.a`), byte for byte against the Rust originals (every ported test has a C++ twin).
-  The bundled Monado (`third_party/monado/`) links this C++ archive — **nothing Rust is built or shipped**, and it is
-  what runs live. (The driver carries the `PIBRIDGE_PIMAX_ABI` marker, so a PiBridge-linked build is
-  recognisable.) Plan and results:
-  [docs/research/rust-port-plan.md](docs/research/rust-port-plan.md).
+- **From the app:** START VR on the Dashboard (with Inside-out chosen) starts the camera broker, `pibridge-headtrack`
+  and SteamVR; the Tracking page holds the settings.
+- **No Rust:** omarchyvr's Pimax libraries (headset, cameras, auto exposure, lenses, controllers, hands) are ported to
+  C++, byte for byte against the Rust originals (every ported test has a C++ twin); nothing Rust is built or shipped.
+  Plan and results: [docs/research/rust-port-plan.md](docs/research/rust-port-plan.md).
 - **Open:** no persistent world anchor yet (the room boundary can turn or shift between sessions), the gyro bias
   takes about 40 s to settle after a start, and longer walking takes are still to be recorded.
 

@@ -4,16 +4,16 @@ The Pimax tracking cameras (UVC `34a4:0014`, four OV7251 fisheye cameras in one 
 and metadata, V4L2 capture, `.pxcam` recording and replay, the camera broker (PXCB v1), the self-healing live source,
 the factory calibration (KB4 intrinsics, rig and body extrinsics), the device-to-monotonic clock, the capture
 statistics, the stream profiles (the grey four-tile stream and the Motion-JPEG two-tile stream of a Crystal Super
-firmware), and the 6DoF support Monado links: the Basalt calibration export, the tracker supervisor, the head pose
+firmware), and the 6DoF support the head tracker uses: the Basalt calibration export, the tracker supervisor, the head pose
 output layer (IMU-rate prediction, blended corrections, still hold and re-zero, gravity tilt, exact freeze, drift
 governor), the head IMU log and the camera auto-exposure (Dream Air and Crystal Super models). Ported from omarchyvr
-`rust/pimax-cam` (MIT OR Apache-2.0) at commit `5ffbcc5` (`monado-abi/spec.txt`; M1, M2 and M4 were ported at
+`rust/pimax-cam` (MIT OR Apache-2.0) at commit `5ffbcc5` (M1, M2 and M4 were ported at
 `381eea2`, which `5ffbcc5` changes only in the AE files); the Rust code is the specification, and its tests have C++
 twins here. Milestones M1, M2, M3 and M4 of `docs/research/rust-port-plan.md`.
 
 CMake targets `pibridge_cam_obj` (objects) and `pibridge_cam` (static, for PiBridge's tools and tests), namespace
-`pibridge::cam::`, headers in `libpibridge-cam/include/pibridge/cam/`. No Qt: Monado links these objects through
-`monado-abi` (`libpibridge_pimax.a`, `docs/monado-abi.md`). Dependencies: zlib (required: compressed `.pxcam` records),
+`pibridge::cam::`, headers in `libpibridge-cam/include/pibridge/cam/`. No Qt; `pibridge-cam`, `pibridge-ctrltrack`,
+`pibridge-headtrack` and `pibridge-slam` link it. Dependencies: zlib (required: compressed `.pxcam` records),
 libjpeg (required: the Motion-JPEG stream profile, `src/jpeg.cpp`), pthreads, `<linux/videodev2.h>`.
 
 Built with `-ffp-contract=off -fno-fast-math -fwrapv` (no fused multiply-add, so every f64 result is the Rust one bit for
@@ -102,7 +102,7 @@ Evaluated and off by default: the still re-zero back-off (`PIMAX_SLAM_STILL_BACK
   bytes (and sizes) differ while they decompress to the same frames.
 - Broker: `$XDG_RUNTIME_DIR/omarchyvr-cam-broker.sock` (else `/tmp/omarchyvr-cam-broker-<uid>.sock`), memfd
   `omarchyvr-cam-broker`, protocol and ring layout in the header comment of `broker.h`. A PiBridge broker serves Rust
-  clients (Monado's `PIMAX_CAM_SOURCE=broker`, `pimax-ctrltrack live --source broker`) and a Rust broker serves PiBridge
+  clients (omarchyvr's Monado with `PIMAX_CAM_SOURCE=broker`, `pimax-ctrltrack live --source broker`) and a Rust broker serves PiBridge
   clients; the tests prove both directions.
 - Calibration search: `$PIMAX_CAM_CALIB`, `$PIMAX_CALIB` (a `PIBRIDGE_CAM_CALIB` / `PIBRIDGE_CALIB` set wins), then
   `~/.config/pibridge/headset-calibration.xml` and `~/.config/pimax-linux/headset-calibration.xml` **only when the file
@@ -118,10 +118,10 @@ Evaluated and off by default: the still re-zero back-off (`PIMAX_SLAM_STILL_BACK
   `PIMAX_SLAM_BIG_CORR_MM`, `PIMAX_SLAM_DRIFT_HOLD`, `PIMAX_SLAM_FREEZE`, `PIMAX_SLAM_STILL_REZERO`, `PIMAX_SLAM_STILL`,
   `PIMAX_HEAD_IMU_LOG`, `PIMAX_HEAD_IMU_LOG_MIN`, `$XDG_RUNTIME_DIR/omarchyvr-imu-log.on`, the kept logs in
   `$XDG_STATE_HOME/omarchyvr/head-imu` (else `~/.local/state/omarchyvr/head-imu`). Only the `PIMAX_*` names (no
-  `PIBRIDGE_*` aliases): they are the build markers the Monado checks look for. The stderr lines are the Rust ones: the
+  `PIBRIDGE_*` aliases): the names omarchyvr's and Monado's tools use. The stderr lines are the Rust ones: the
   `6DoF output: PIMAX_HEAD_TILT ... PIMAX_FUSE_AUTO ... PIMAX_SLAM_DRIFT_HOLD ...` line at `track_create` and
   `6DoF drift: head tracking slid N cm without movement in N s; held (session total N cm)` (the app parses it).
-- Auto-exposure (only through the driver; this library never sends): `PIMAX_CAM_AE_MODEL` (`dream-air` |
+- Auto-exposure (the tracker sends it; this library never sends): `PIMAX_CAM_AE_MODEL` (`dream-air` |
   `crystal-super` and a few spellings; else the HID chip on USB: `34a4:0040` alone = Crystal Super, else Dream Air),
   `PIMAX_CAM_AE_LAW` (`old`/`v1`/`off`/`0` = the previous law), `PIMAX_CAM_AE_TARGET`, `_EXP_MIN`, `_EXP_MAX`,
   `_GAIN_MIN`, `_GAIN_MAX` (for the Crystal clamped into its Windows range), `_PERIOD_MS`, `_K`, `_DEADBAND`, `_UPPER`,
@@ -152,7 +152,7 @@ sources are recordings, synthetic frames and sockets in the build directory.
 
 ## Not ported yet
 
-- Not needed for Monado and not planned: `rectify.rs`, `check.rs`, `png.rs` (the `tiles`, `rectify`, `hypotheses`
+- Not needed and not planned: `rectify.rs`, `check.rs`, `png.rs` (the `tiles`, `rectify`, `hypotheses`
   subcommands).
 - Text differences that remain on purpose: the detail of a corrupt zlib record (`zlib: <miniz_oxide's Debug of its
   error>` in Rust, `zlib: <zlib message>` here).

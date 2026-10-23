@@ -189,8 +189,9 @@ int headset(const Options& o) {
         host.afterSave = [run, steamvr](const room::SaveResult&) { return reloadAfterSave(run, steamvr); };
         host.zone = zone.get();
         ed = std::make_unique<room::Editor>(*st, lib, host);
-        // inside-out (driver_monado's universe 2): no persistent world anchor yet, so a recenter comes first
-        ed->say(st->universe() == "2" ? std::string("Inside-out: recenter first (Room page, Recenter in headset). B opens the menu")
+        // inside-out (CustomHeadsetOpenVR's SLAM headset, universe 30): no persistent world anchor yet, so a recenter
+        // comes first
+        ed->say(st->universe() == "30" ? std::string("Inside-out: recenter first (Room page, Recenter in headset). B opens the menu")
                                       : "Universe " + st->universe() + ". B opens the menu");
         return ed.get();
     };
@@ -327,7 +328,7 @@ int floorHeight(const Options& o) {
     const auto ring = readRing(ringPath);
     auto res = roommap::store::RelocResult::load(dir + "/last-reloc.toml");
     if (!ring || ring->pid == 0) {
-        return fail("no head poses from Monado: start tracking first (Tracking page) with the room anchor on");
+        return fail("no head poses from the tracker: start VR in inside-out first with the room anchor on");
     }
     if (!res || res->pid != ring->pid) {
         return fail("the room \"" + o.room + "\" is not recognised in this session: wait for \"Room recognised\" or map the room");

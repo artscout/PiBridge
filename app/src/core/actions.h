@@ -29,6 +29,8 @@ public:
     bool setRefreshHz(int hz, Done done);
     // audio_to_headset=on|off, then SIGHUP to the keepalive daemon.
     bool setAudioToHeadset(bool on, Done done);
+    // mic_to_headset=on|off, then SIGHUP to the keepalive daemon.
+    bool setMicToHeadset(bool on);
     // The original Crystal (P3B): the tracking pibridge-keepalived switches it to (crystal_tracking: its Lighthouse
     // faceplate or its own inside-out tracking), done at once while it is connected.
     bool setCrystalTracking(bool lighthouse);

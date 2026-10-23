@@ -1,11 +1,12 @@
 # libpibridge-anchor
 
-The world anchor files shared with Monado's room-anchor hook, without hardware and without the room map: milestone
+The world anchor files shared by the tracker (`pibridge-headtrack`, formerly Monado's room-anchor hook) and the room
+tools, without hardware and without the room map: milestone
 R1 of `docs/research/rust-port-plan.md` (section 5). Ported from omarchyvr `rust/omarchyvr-anchor` (MIT OR
-Apache-2.0) at the pinned commit `5ffbcc5`: `world.rs` and `config.rs`, and `detect.rs`'s `pose_error`. The Monado
-side is `third_party/monado/src/xrt/drivers/pimax/pimax_anchor.h` (`PIMAX_ANCHOR=1`, marker
-`PIMAX_ANCHOR_GLIDE`); every file below is byte-compatible with it and with the Rust tools, so PiBridge and omarchyvr
-tools can run side by side on one session.
+Apache-2.0) at the pinned commit `5ffbcc5`: `world.rs` and `config.rs`, and `detect.rs`'s `pose_error`. The
+tracker side is `tools/headtrack/src/world.*` (`PIMAX_ANCHOR=1`, `PIMAX_ANCHOR_GLIDE`), written to the formats of Monado's
+`pimax_anchor.h`; every file below is byte-compatible with it and with the Rust tools, so PiBridge and omarchyvr tools
+can run side by side on one session.
 
 Namespace `pibridge::anchor`, targets `pibridge_anchor_obj` / `pibridge_anchor`, headers `libpibridge-anchor/include/pibridge/anchor/`.
 Needs libpibridge-cam (geom, io, rustfmt, slam) and libpibridge-ctrl's tracker half (`quat_to_mat`). Built with the parity
@@ -15,15 +16,15 @@ flags (`-ffp-contract=off -fno-fast-math -fwrapv`, hidden visibility).
 
 | File | Who writes | Format |
 |---|---|---|
-| `$XDG_RUNTIME_DIR/pimax-anchor.head` (`PIMAX_ANCHOR_HEAD_FILE`) | Monado (raw SLAM head poses, before the offset, at most one per 3 ms) | 16-byte header: u32 magic `0x434E4150`, u32 version 1, u32 seq (odd while writing), u32 writer pid; 128 slots of 40 bytes: u64 ts_ns (CLOCK_MONOTONIC), f32 pos[3], f32 quat[4] (x y z w), u32 flags (bit 0: position valid); round robin, empty slots ts 0; little endian |
-| `$XDG_RUNTIME_DIR/pimax-anchor.offset` (`PIMAX_ANCHOR_FILE`) | the tools; Monado deletes it at its start and reads it every 250 ms (by mtime) | `pimax-anchor-offset 1` / `pid N` / `pose px py pz qx qy qz qw` (`{:.6}` position, `{:.7}` quaternion); Monado applies `app_from_slam = offset * slam` only when N is its own pid; the first offset of a session is placed at once, later changes glide |
-| `omarchyvr-anchor.offset.owner` next to the offset | the tools (the writer lease) | `roommap <monado pid>` or `anchor <monado pid>` (what the apps read), `lease 2`, `writer <pid>`, `role setup|auto|follow|reloc|apply|tag` |
+| `$XDG_RUNTIME_DIR/pimax-anchor.head` (`PIMAX_ANCHOR_HEAD_FILE`) | the tracker (raw SLAM head poses, before the offset, at most one per 3 ms) | 16-byte header: u32 magic `0x434E4150`, u32 version 1, u32 seq (odd while writing), u32 writer pid; 128 slots of 40 bytes: u64 ts_ns (CLOCK_MONOTONIC), f32 pos[3], f32 quat[4] (x y z w), u32 flags (bit 0: position valid); round robin, empty slots ts 0; little endian |
+| `$XDG_RUNTIME_DIR/pimax-anchor.offset` (`PIMAX_ANCHOR_FILE`) | the tools; the tracker deletes it at its start and reads it every 250 ms (by mtime) | `pimax-anchor-offset 1` / `pid N` / `pose px py pz qx qy qz qw` (`{:.6}` position, `{:.7}` quaternion); the tracker applies `app_from_slam = offset * slam` only when N is its own pid; the first offset of a session is placed at once, later changes glide |
+| `omarchyvr-anchor.offset.owner` next to the offset | the tools (the writer lease) | `roommap <tracker pid>` or `anchor <tracker pid>` (what the apps read), `lease 2`, `writer <pid>`, `role setup|auto|follow|reloc|apply|tag` |
 | `omarchyvr-anchor.offset.lock` next to the offset | the tools | empty; `flock` around every lease decision and offset write |
 | `anchor.toml` | the AprilTag calibration (not ported) | `[tag] id size_m`, `[reference] pos quat saved`, `[[window]] name pos quat` |
 
 Every write is atomic (`<file>.tmp` or `.offset.tmp` / `.owner.tmp`, then rename). The environment names are the Rust
-and Monado ones (`PIMAX_ANCHOR_FILE`, `PIMAX_ANCHOR_HEAD_FILE`): Monado reads only these, so a `PIBRIDGE_` name could
-point a tool at another file than the one Monado reads. `anchor.toml` follows CONVENTIONS.md: `PIBRIDGE_ANCHOR_CONFIG`,
+and Monado ones (`PIMAX_ANCHOR_FILE`, `PIMAX_ANCHOR_HEAD_FILE`): the tracker reads only these, so a `PIBRIDGE_` name
+could point a tool at another file than the one the tracker reads. `anchor.toml` follows CONVENTIONS.md: `PIBRIDGE_ANCHOR_CONFIG`,
 `PIMAX_ANCHOR_CONFIG`, else the first existing of `~/.config/{pibridge,pimax-linux,omarchyvr}/anchor.toml`, else
 `~/.config/pibridge/anchor.toml` (the Rust tool knows only `PIMAX_ANCHOR_CONFIG` and the omarchyvr path).
 
@@ -36,7 +37,7 @@ point a tool at another file than the one Monado reads. `anchor.toml` follows CO
 - Feed: `feed_now()` / `check_feed(ring, monado_pids, now_ns, alive)`: `Missing`, `NoMonado`, `Foreign` (another
   program replaced the ring: SteamVR's Monado driver), `Stale` (newest sample older than 5 s, or none), `Live`;
   `Feed::plain()` is one sentence for the user, `live_pid()`; `tracker_pids()` = running `monado-service`, else
-  `vrserver`; `pids_named`, `pid_alive`.
+  `pibridge-headtrack`, else `vrserver`; `pids_named`, `pid_alive`.
 - Offset: `offset_text`, `parse_offset`, `read_offset(path)` -> (pid, pose); `write_offset(path, pid, pose)` (refused
   with PermissionDenied unless this process holds the lease of that session); `compute_offset(reference, now,
   yaw_only)`; `recenter_offset(slam_from_head)` (not in the Rust code: for PiBridge's Recenter, a yaw-only offset that
@@ -54,7 +55,7 @@ point a tool at another file than the one Monado reads. `anchor.toml` follows CO
 
 A Recenter in PiBridge: read the ring (`HeadRing::read(ring_path())`, check `feed_now().live_pid()`), take the newest
 valid sample, `take_lease(offset_path(), pid, Role::Apply)`, `write_offset(offset_path(), pid,
-recenter_offset(head))`. Monado glides to it (it is not the session's first offset) unless `PIMAX_ANCHOR_GLIDE=0`.
+recenter_offset(head))`. The tracker glides to it (it is not the session's first offset) unless `PIMAX_ANCHOR_GLIDE=0`.
 
 ## Differences from the Rust code (intended)
 
@@ -70,7 +71,7 @@ recenter_offset(head))`. Monado glides to it (it is not the session's first offs
 | `pibridge_anchor_world` | twins of the 8 world.rs tests (`lease_tests`, `feed_tests`) + the file names and bytes, the ring layout, recenter |
 | `pibridge_anchor_config` | anchor.toml round trip, error texts, the path rule |
 | `pibridge_anchor_probe` | `tests/anchor_probe.cpp` against `tests/golden/anchor_probe.txt.gz` (4909 lines, byte for byte): 300 offset texts and their parse, 20 crafted offset files, 14 lease files, 40 rings (corrupt magic/version/size, NaN/inf quaternions, ts 0, duplicates) with 480 `at` queries, 10 ring writes (FNV of the bytes), 60 `compute_offset` x2 / `interp` / `pose_error`, 30 `robust_mean`, 480 `decide_lease` cases, 192 `check_feed` cases with `plain()`, 13 anchor.toml texts; every number as its f64 bits. The golden file is the output of a scratch program that linked omarchyvr-anchor at `5ffbcc5` and ran the same cases (not in the tree: PiBridge has no Rust) |
-| `pibridge_anchor_monado` | Monado's own `pimax_anchor.h` (from `third_party/monado`, with stub headers for its math/clock/log helpers): it writes the head ring that `HeadRing::read` parses (128 newest samples, floats exact, pid), deletes the old offset at its start, and parses the offset `write_offset` writes (first offset placed at once, `offset * slam` applied, another pid's file ignored) |
+| `pibridge_anchor_monado` | built only when a Monado tree is at `third_party/monado` (no longer in the repository): Monado's own `pimax_anchor.h` (with stub headers for its math/clock/log helpers): it writes the head ring that `HeadRing::read` parses (128 newest samples, floats exact, pid), deletes the old offset at its start, and parses the offset `write_offset` writes (first offset placed at once, `offset * slam` applied, another pid's file ignored) |
 
 Not ported: the AprilTag detector and pose (`detect.rs`, `tag.rs` printable SVG/PDF, `rig.rs`) and the
 `omarchyvr-anchor tag/detect/calibrate/apply` commands: they need the AprilTag C library (apriltag-sys builds it from

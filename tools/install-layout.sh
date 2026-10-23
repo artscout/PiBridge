@@ -131,10 +131,9 @@ cat <<DONE
 
 Install layout populated under $PREFIX.
 
-The script does NOT edit SteamVR's ~/.config/openvr/openvrpaths.vrpath. Add the Monado SteamVR driver to its
-"external_drivers" list by hand (between sessions):
-
-    $LIBDIR/steamvr-monado
+The script does NOT edit SteamVR's ~/.config/openvr/openvrpaths.vrpath. Do not register $LIBDIR/steamvr-monado
+there: SteamVR would load driver_monado in every session next to CustomHeadsetOpenVR (inside-out runs through
+pibridge-headtrack + CustomHeadsetOpenVR).
 
 Non-redistributable files (hand models, winbridge.exe, device_calibration XML, the Pimax windata kit) are copied from
 your existing locations only; they are never committed or redistributed.

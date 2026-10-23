@@ -2,6 +2,8 @@
 // Ported from omarchyvr omarchyvr-tools/src/keepalived.rs (MIT OR Apache-2.0).
 #include "keepalived.h"
 
+#include "pibridge/hmd/ctrl_serials.h"
+
 #include "pibridge_pause.h"
 
 #include "pibridge/hmd/discovery.h"
@@ -58,7 +60,9 @@ std::expected<Options, std::string> parse_args(const std::vector<std::string>& a
     o.rate_file = default_rate_file();
     o.video = static_cast<std::uint8_t>(settings.refresh_hz);
     o.follow = settings.follow;
-    o.audio = settings.audio_to_headset;
+    o.audio_output = settings.audio_to_headset;
+    o.audio_input = settings.mic_to_headset;
+    o.audio = o.audio_output || o.audio_input;
     o.crystal_tracking = settings.crystal_tracking;
     o.crystal_autostart_steamvr = settings.crystal_autostart_steamvr;
     o.settings_path = settings_path_of(args);
@@ -113,10 +117,10 @@ std::expected<Options, std::string> parse_args(const std::vector<std::string>& a
             o.follow.clear();
             follow_flag = true;
         } else if (a == "--audio") {
-            o.audio = true;
+            o.audio = o.audio_output = o.audio_input = true;
             audio_flag = true;
         } else if (a == "--no-audio") {
-            o.audio = false;
+            o.audio = o.audio_output = o.audio_input = false;
         } else if (a == "--settings") {
             if (auto v = value(); !v) {
                 return std::unexpected(v.error());
@@ -376,7 +380,7 @@ void Daemon::audio_on() {
     if (audio_before_) {
         return;
     }
-    auto [m, b] = audio::to_headset(deps_.pactl);
+    auto [m, b] = audio::to_headset(deps_.pactl, opts_.audio_output, opts_.audio_input);
     say(m);
     audio_before_ = b;
 }
@@ -515,6 +519,37 @@ std::chrono::milliseconds Daemon::poll_timeout() const {
     return paused_ ? std::chrono::milliseconds(50) : std::chrono::milliseconds(500);
 }
 
+// The controllers' own serials, once per connection (ctrl_serials.h): for the app, which SteamVR cannot tell them.
+void Daemon::read_controller_serials(Clock::time_point now) {
+    if (!session_ || !session_->is_connected()) {
+        serial_read_ = {false, false};
+        headset_serials_read_ = false;
+        return;
+    }
+    if (!headset_serials_read_) {
+        headset_serials_read_ = true; // the headset's and its optical module's, once per connection
+        for (const std::uint8_t slot : {std::uint8_t{0}, std::uint8_t{5}}) {
+            if (auto sn = session_->read_serial(slot, std::chrono::milliseconds(800)); sn && !sn->empty()) {
+                hmd::ctrl_serials::store(slot, *sn);
+            }
+        }
+    }
+    for (int i = 0; i < 2; i++) {
+        const std::uint8_t slot = i == 0 ? SLOT_LEFT : SLOT_RIGHT;
+        if (!seen(slot, now)) {
+            serial_read_[i] = false;
+            continue;
+        }
+        if (serial_read_[i]) {
+            continue;
+        }
+        serial_read_[i] = true; // one try per connection
+        if (auto sn = session_->read_serial(slot, std::chrono::milliseconds(800)); sn && !sn->empty()) {
+            hmd::ctrl_serials::store(slot, *sn);
+        }
+    }
+}
+
 void Daemon::tick(Clock::time_point now) {
     crystal_->tick(now); // the original Crystal: its own life, apart from the Crystal Super / Dream Air session
     // its sound (DisplayPort) and microphone are the defaults while it is on, as the Crystal Super's during VR
@@ -526,7 +561,8 @@ void Daemon::tick(Clock::time_point now) {
     } else if (!crystal_on && crystal_audio_) {
         audio_off();
         crystal_audio_ = false;
-    } else if (crystal_on && audio_before_ && !audio_before_->our_sink && now >= crystal_audio_retry_) {
+    } else if (crystal_on && opts_.audio_output && audio_before_ && !audio_before_->our_sink &&
+               now >= crystal_audio_retry_) {
         // its sound output exists only once the GPU drives its display (SteamVR's compositor, with the non-desktop
         // EDID the desktop does not): try again until it is there
         crystal_audio_retry_ = now + std::chrono::seconds(3);
@@ -593,6 +629,7 @@ void Daemon::tick(Clock::time_point now) {
         }
     }
     controllers(now);
+    read_controller_serials(now);
     if (video_at_ && now >= *video_at_) {
         video_at_.reset();
         if (busy() && opts_.video) {
@@ -627,7 +664,14 @@ void Daemon::reload(Options o, Clock::time_point now) {
         o.wake = opts_.wake;
     }
     if (paused_) {
+        const bool audio_changed = o.audio_output != opts_.audio_output || o.audio_input != opts_.audio_input;
         opts_ = std::move(o); // applied when the session opens again
+        if (audio_changed && audio_before_) {
+            audio_off(); // the sound stays on the headset while paused: switched again with the new choice
+            if (opts_.video && opts_.audio) {
+                audio_on();
+            }
+        }
         say("settings reloaded (paused)");
         write_status(now, true);
         return;
@@ -635,6 +679,7 @@ void Daemon::reload(Options o, Clock::time_point now) {
     const bool was_busy = busy();
     const auto old_video = opts_.video;
     const std::string old_follow = opts_.follow;
+    const bool audio_changed = o.audio_output != opts_.audio_output || o.audio_input != opts_.audio_input;
     opts_ = std::move(o);
     say("settings reloaded");
     if (opts_.video && !opts_.follow.empty()) {
@@ -666,6 +711,9 @@ void Daemon::reload(Options o, Clock::time_point now) {
         video_at_.reset();
     }
     if (opts_.video && opts_.audio && now_busy) {
+        if (audio_changed) {
+            audio_off(); // the other choice of output / input: back first, then switched again
+        }
         audio_on();
     } else {
         audio_off();

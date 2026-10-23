@@ -1,6 +1,6 @@
 # pibridge-eyed
 
-Runs the eye tracker of a Pimax headset on its own (no Monado) and publishes the gaze in shared memory for the
+Runs the eye tracker of a Pimax headset on its own and publishes the gaze in shared memory for the
 SteamVR driver (CustomHeadsetOpenVR with the Linux patch, which hands it to SteamVR's eye tracking component and so to
 OpenXR `XR_EXT_eye_gaze_interaction`). Port of `omarchyvr eyed` (`rust/omarchyvr-tools/src/eyed.rs`, MIT OR
 Apache-2.0) on libpibridge-eye's live tracker (`pibridge::eye::live`, docs/libpibridge-eye.md) and libpibridge-hmd (the headset command).
@@ -37,7 +37,7 @@ libpibridge-hmd is `eyed::HidHeadsetCommands` (`src/hid_commands.{h,cpp}`), `src
 - **SIGTERM / SIGINT**: the tracker unsubscribes and releases the chip, the gaze file says "no gaze", the status file
   is removed, exit 0.
 
-Only one program may own the eye chip: `omarchyvr-eyed`, Monado's eye tracking and `pimax-eyecal` must not run at the
+Only one program may own the eye chip: `omarchyvr-eyed`, another runtime's eye tracking and `pimax-eyecal` must not run at the
 same time. The unit conflicts with `omarchyvr-eyed.service` and `pimax-eyed.service` (this daemon under PiBridge's earlier name), and the app stops `pibridge-eyed` while `pimax-eyecal`
 runs (Calibrate / Recenter) and starts it again afterwards.
 
@@ -113,6 +113,6 @@ Everything runs on temporary `HOME`, `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR` and ga
 ## Paused during inside-out tracking
 
 While `$XDG_RUNTIME_DIR/pibridge/inside-out.active` names a running owner (written by the app's inside-out sessions,
-`common/pibridge_pause.h`), pibridge-eyed leaves the headset to Monado's Pimax driver: it closes the device, reports
+`common/pibridge_pause.h`), pibridge-eyed leaves the headset to the inside-out session: it closes the device, reports
 `"state": "paused"` and `"paused": "paused: inside-out tracking"`, and takes it again when the marker is gone (checked
 twice a second; a stale marker of a crashed app does not count). Tests: the pause / resume cases of its test.

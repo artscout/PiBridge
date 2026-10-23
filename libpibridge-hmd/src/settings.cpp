@@ -118,6 +118,8 @@ Settings Settings::parse(std::string_view text) {
             }
         } else if (key == "audio_to_headset") {
             boolean(s.audio_to_headset);
+        } else if (key == "mic_to_headset") {
+            boolean(s.mic_to_headset);
         } else if (key == "eye_tracking") {
             boolean(s.eye_tracking);
         } else if (key == "eye_start_list") {

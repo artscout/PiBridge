@@ -111,10 +111,15 @@ fake mode). What each button does is in `core/actions.*`, tested with the FakeRu
   (tracked) / NOT TRACKED (with the reason: "Out of range", "Calibrating", "Not seen"; "standby" when asleep) /
   DISCONNECTED, and the battery (icon, "82 % charging"); header chip "N/2 CONNECTED". Other controllers and trackers
   are listed below. Without SteamVR: STEAMVR OFF and "Start SteamVR to see the controllers."; NO STEAMVR when it is
-  not installed; CONNECTING while the connection is retried. While "Monado directly" (Development page) runs the card reads
-  Monado through libmonado instead (`core/monado_devices.*`): header MONADO: N/2 ON (MONADO OFF, NO LIBMONADO,
-  CONNECTING), each controller ON with its battery, OFF ("Turn it on") or LISTED, and "Turn the controllers on." /
-  "Start tracking (Tracking page) to see the controllers."; the toolbar says "Runtime: Monado" (TRACKING.md).
+  not installed; CONNECTING while the connection is retried. Each controller row shows its serial with a copy button
+  (never logged or written to a file; made up in fake mode).
+  - **Pair**, **Unpair** (one-line confirm) and **Test vibration** (60 %, 0.3 s) per hand (`core/controllers.*`,
+    docs/keepalived.md "Controllers"): a connected controller shows Unpair, an absent one Pair. Pair and Unpair write
+    `ID pair|unpair left|right` to `$XDG_RUNTIME_DIR/pibridge/controller-request` and show keepalived's answer
+    (`ctrl_*`, a 30 s countdown while the headset listens); refused in plain words during inside-out tracking ("stop
+    VR first"), without the service or the headset. Test vibration works always: it writes `SLOT 60 300` to
+    `$XDG_RUNTIME_DIR/pimax-haptic-request`, taken by keepalived (answer `haptic_*`) or, during inside-out tracking,
+    by pibridge-headtrack. No answer in 3 s: the request is removed and the line says so.
 - **Quick settings**
   - **Eye tracking** switch -> `eye_tracking=on|off` + `systemctl --user start|stop pibridge-eyed`.
   - **Calibrate** -> `pibridge-eyecal` (the chip's own calibration, as Pimax Play does it, see docs/eyecal.md);
@@ -122,7 +127,8 @@ fake mode). What each button does is in `core/actions.*`, tested with the FakeRu
     The eye chip has one owner: both first run `systemctl --user stop pibridge-eyed`, and when the tool exits
     `systemctl --user start pibridge-eyed` (only while `eye_tracking=on`).
     While one runs, the buttons are disabled and the line below says so; then the result (last output lines).
-  - **Import calibration from Windows...** -> file dialog for `calibration.setpm`, then
+  - **Import** (in the Eye tracking row, next to Calibrate and Recenter) -> file dialog for `calibration.setpm` (Pimax
+    Play / EVO under Windows), then
     `pibridge-eye profile <file> -o ~/.config/pibridge/eye-profile-crystal-super.bin`; on success `eye_profile=<that
     path>` in the conf and SIGHUP to `pibridge-eyed`.
   - Tools are looked up in PATH, next to the app binary, in this build's `tools/*/`, then in the omarchyvr release
@@ -149,34 +155,8 @@ fake mode). What each button does is in `core/actions.*`, tested with the FakeRu
   `~/.config/pibridge/record.toml` (the file pibridge-record reads). The chip: REC (red) while recording, READY, STEAMVR,
   OFF; the line below: the length, size and encoder, or why it cannot record, or the last error in plain words; the
   last file with **Open folder** (`xdg-open`). RECORD is enabled while SteamVR runs (SteamVR's mirror texture through
-  pibridge-record-mirror, also for SteamVR + Monado and SteamVR's OpenXR runtime) or Monado's own compositor runs
-  ("Monado directly" on the Development page: Monado's tap); the card picks the source by the session. The status is read every
+  pibridge-record-mirror, also in the inside-out mode and for SteamVR's OpenXR runtime). The status is read every
   second while the Dashboard is visible. Fake mode runs nothing.
-
-### Device (`pages/device.*`, `core/device_info.*`)
-Like the headset details of Pimax EVO, read at run time and shown only in the app (COPY buttons for serials; never
-logged or written to a file; fake mode and screenshots use made-up serials). Files are re-read when the page is
-shown; the live values follow the state every second.
-- **Headset card** (title "Pimax <model>", chip STEAMVR LIVE / CONNECTING / STEAMVR OFF): model (keepalived.json,
-  else SteamVR), **Headset SN** (`Prop_SerialNumber_String` of the HMD; "Start SteamVR to read it."), **IPD** (SteamVR's
-  `Prop_UserIpdMeters_Float`, what it renders with; without SteamVR the `ipd` (+ `ipdOffset`) of the enabled
-  Crystal Super entry of CustomHeadsetOpenVR's settings.json, marked "not read live"). The headset reports no
-  hardware IPD on Linux (CHOVR's `hardwareIpd` reads it through Pimax's Windows runtime only), and the page says so.
-  **Measured IPD**: the eye tracker's `ipd_mm` from the gaze shm while it streams.
-- **Controllers and base stations**: one row per controller / tracker / station with its serial and model (SteamVR).
-- **Pair and test controllers** (`core/controllers.*`, docs/keepalived.md "Controllers"): per hand the state
-  (Connected / Not connected / In use by inside-out tracking / No headset / Headset service off) and **Pair**, **Unpair**
-  (one-line confirm) and **Test vibration** (60 %, 0.3 s). Pair and Unpair write `ID pair|unpair left|right` to
-  `$XDG_RUNTIME_DIR/pibridge/controller-request` and show keepalived's answer (`ctrl_*`, a 30 s countdown while the
-  headset listens); refused in plain words during inside-out tracking, without the service or the headset, and Pair
-  for a controller that is already connected. Test vibration writes `SLOT 60 300` to
-  `$XDG_RUNTIME_DIR/pimax-haptic-request`, taken by keepalived (answer `haptic_*`) or, during inside-out tracking, by
-  Monado's Pimax driver. No answer in 3 s: the request is removed and the page says so.
-- **Rendering**: render resolution per eye (`IVRSystem::GetRecommendedRenderTargetSize`, supersampling included, plus
-  the supersampling of `steamvr.vrsettings`: `supersampleScale` when `supersampleManualOverride`, else Auto); refresh
-  rate (`Prop_DisplayFrequency_Float`, else keepalived's panel rate, else `refresh_hz`); quad views on / off / not
-  installed (the layer's user manifest); tracking mode (Lighthouse, inside-out SteamVR + Monado, Monado directly,
-  "running" while a session runs); the Monado build (Rust / C++ (PiBridge), the markers, scanned on a worker thread).
 
 ### Apps (`pages/apps.*`)
 Steam games and your own programs as cover tiles, like the library of the Windows headset software.
@@ -234,9 +214,6 @@ Steam games and your own programs as cover tiles, like the library of the Window
   A TOML subset (strings, booleans, integers, string arrays also over several lines, comments). Every line it does
   not know (other keys, comments, other tables, `[app.x]` sub-tables, other value forms) is kept and written back as
   it was. Written atomically (QSaveFile), re-read before every change, so hand edits survive.
-- While "Monado directly" (Development page) runs, own apps start on its Monado instead
-  (`core/apps_runtime.*`): `XR_RUNTIME_JSON=<openxr_monado-dev.json>`, Play starts tracking when it is off, the tile
-  shows STARTING TRACKING, SteamVR is never started; Steam games are off with the reason ([TRACKING.md](TRACKING.md)).
 - **Play**: when SteamVR is not fully ready (below), `steam steam://rungameid/250820` first (not when vrserver already
   runs), then the tile shows STARTING STEAMVR with what it waits for, and the program starts once SteamVR is ready
   (60 s at most; else ERROR with the reason: "SteamVR does not see the headset", "the SteamVR compositor did not
@@ -294,25 +271,22 @@ started"; nothing is run or written. Screenshots: `docs/app/06-apps.png` (SteamV
   the last game's status.
 
 ### Tracking: tracking mode and inside-out settings (`pages/tracking.*`, `core/inside_out.*`, `core/io_session.*`)
-The tracking mode (**Lighthouse** / **Inside-out**, `tracking_mode`) and every setting of the inside-out session (the
-Pimax driver in Monado: Basalt SLAM, camera auto exposure, optical controllers), each with one line of help, the
-**RECOMMENDED** mark and the reason when it does not apply. All details, the sources and defaults of every knob are in
-[TRACKING.md](TRACKING.md) (also the **How tracking works** link). (This page was called "Inside-out"; the
-recorder that was called "Tracking" is the Development page.)
-- Cards: **Tracking mode**, **Session: SteamVR + Monado** (display connector, refresh rate, what a start changes in
-  SteamVR's files, **START TRACKING** / Stop), **Head tracking (SLAM)**, **Cameras**, **Controllers**, **Advanced**
-  (extra environment `rec_env`, the programs and files, what a start sets, **Reset to recommended**).
-- One environment builder (`buildIoEnv`) for START TRACKING, Record tracking and Monado directly; PiBridge's own Basalt
-  config in `~/.config/pibridge/slam/`, generated at every start.
-- START TRACKING (inside-out mode) = the broker, the tracker, then SteamVR (vrstartup.sh) with driver_monado.so of
-  the chosen Monado build; for the session CustomHeadsetOpenVR is switched off in steamvr.vrsettings and the build's
-  steamvr-monado registered in openvrpaths.vrpath (backups and a record first, put back exactly after Stop, SteamVR
-  closing, PiBridge closing or at the next start after a crash). Stop closes SteamVR PID-exactly first. Games start
-  through SteamVR; Play on the Apps page and Launch SteamVR on the Dashboard start tracking instead of a plain SteamVR.
-  Details in [TRACKING.md](TRACKING.md).
-- "Monado directly" (monado-service owns the headset, own apps on it, the home scene) moved to the Development page.
+The tracking mode (**Lighthouse** / **Inside-out**, `tracking_mode`) and every setting of the inside-out session
+(`pibridge-headtrack`: the Pimax engine or Basalt, camera auto exposure, optical controllers), each with one line of
+help, the **RECOMMENDED** mark and the reason when it does not apply. All details, the sources and defaults of every
+knob are in [TRACKING.md](TRACKING.md) (also the **How tracking works** link).
+- Cards: **Tracking mode**, **Head tracking (SLAM)**, **Cameras**, **Controllers**, **Advanced** (extra environment
+  `rec_env`, the programs and files, what a start sets, **Reset to recommended**). START VR / STOP VR are on the
+  Dashboard.
+- One environment builder (`buildIoEnv`); PiBridge's own Basalt config in `~/.config/pibridge/slam/`, generated at
+  every start.
+- START VR (inside-out mode) = the camera broker, winbridge (Pimax engine) or pibridge-ctrltrack (Basalt), then
+  `pibridge-headtrack` ([pibridge-headtrack.md](pibridge-headtrack.md)), then SteamVR (vrstartup.sh) as it is:
+  CustomHeadsetOpenVR shows the poses, SteamVR's files are not changed. Stop closes SteamVR PID-exactly first. Games
+  start through SteamVR; Play on the Apps page starts tracking instead of a plain SteamVR. Details in
+  [TRACKING.md](TRACKING.md).
 - Fake mode: fake processes, synthetic base files, SteamVR's files never touched. Screenshots `09-tracking.png` to
-  `09g-dashboard-monado-directly.png`, `06c-apps-inside-out-steamvr-off.png`, `06d-apps-monado-running.png`.
+  `09f-tracking-steamvr-some-off.png`, `06c-apps-inside-out-steamvr-off.png`.
 
 ### Room: room setup (`pages/room.*`, `core/roomsetup.*`, libpibridge-room)
 The room setup: the boundary (SteamVR's "chaperone"), the play area and its centre, saved rooms. All details, the
@@ -345,36 +319,6 @@ link). The editing is libpibridge-room's `Editor`, the same one the headset tool
   `08b-room-steamvr-running.png` (the headset button enabled, the universe in use marked), and the headset tool's
   self-test views `08c-roomsetup-headset-room.png`, `08d-roomsetup-headset-menu.png` (software preview).
 
-### Development: Monado build and Monado directly
-
-- **Monado build**: the selector (Auto / C++ (PiBridge)) on `rec_monado_service`; the build
-  (`PIBRIDGE_PIMAX_ABI` marker), the required markers (a missing one blocks every start), the SteamVR driver dir,
-  cap_sys_nice and **Fix permissions** (`pkexec setcap cap_sys_nice=ep`, only after a dialog). [DEVELOPMENT.md](DEVELOPMENT.md).
-- **Monado directly (debug / A-B)**: START MONADO / Stop, the home scene switch; while it runs own apps start on it and
-  the Dashboard reads Monado (controllers, headset card).
-
-### Development: Record tracking (`pages/development.*`, `core/rec_*`)
-Records a EuRoC dataset (tracking cameras + IMU) from a Monado 6DoF session for offline SLAM analysis, with guided
-steps read out loud; all details in [DEVELOPMENT.md](DEVELOPMENT.md) (also the **How recordings work** link).
-- **RECORD TRACKING** (mode **Guided steps** / **Free recording**): starts `pimax-cam broker`, waits for its socket,
-  `pimax-ctrltrack live`, then `monado-service` with the Pimax driver's settings and `PIMAX_SLAM_RECORD=<folder>`
-  (`core/rec_session.*`, QProcess through `QtRecProcesses`). The steps start when IMU data arrives. A failed display
-  lease (seen in monado.log) is retried once after 4 s. **Stop** / the end of the steps: SIGTERM to exactly those PIDs,
-  Monado first, SIGKILL after 10 s (Monado) / 3 s (the others).
-- Disabled, with the reasons in plain words, while SteamVR or another Monado / pimax-cam / pimax-ctrltrack runs, without
-  the headset or its cameras, without the display connector, or when a program or file is missing (named with its
-  pibridge.conf key, `rec_*`). Re-checked every second while the page is visible (`/proc` comm, `/sys` reads only).
-- **Steps** card: the planned steps while idle; during a guided recording the step in big letters, a countdown,
-  "Next: ...", **Skip step** / **Stop**; each step is spoken (`spd-say`, else a tone through `pw-play`/`paplay`).
-  The protocol is data (`core/rec_steps.*`, or a JSON file in `rec_steps=`). `steps.json` in the recording folder gives
-  each step's window on the dataset's clock and its kind (prepare / still / tilt-hold / move).
-- After the stop: the dataset check (`core/rec_check.*`, ported from `omarchyvr-slam check`) -> "OK: usable" or the
-  problem; `check.json`.
-- **Recordings**: date, length, size, mode, OK / PROBLEM with the first problem, **Open folder**, **Logs**, **Delete**
-  (asks first). **Setup**: every program and file the recording uses, where it was found, and its key.
-- Fake mode: fake processes and made-up recordings in the fake temp dir; nothing runs. Screenshots
-  `docs/app/07-development.png`, `07b-development-steamvr-running.png`, `07c-development-recording.png`, `07d-development-done.png`.
-
 ### VR home (`pages/vrhome.*`, `core/vr_backgrounds.*`, `core/vr_panel.*`)
 What pibridge-home shows in the headset ([home.md](home.md)). **In the headset**: the home's state (not running, in the
 headset, behind an app) and what it shows; **This window in the headset** (`home_panel`): the PiBridge window itself on a
@@ -405,20 +349,20 @@ source tree's `docs/`).
 
 | Dir | |
 |---|---|
-| `app/src/core/` | no widgets (library `pibridge_app_core`, tested): paths, conf writer, status readers + plain words, gaze shm reader, presets, runner, system (process check, tool lookup), actions, state source, SteamVR devices (`steamvr.*`, backend `steamvr_openvr.cpp`), SteamVR readiness (`steamvr_ready.*`), Reset SteamVR (`steamvr_reset.*`), Record tracking (`rec_setup.*` lookup and detection, `rec_steps.*` steps and steps.json, `rec_check.*` EuRoC check and recordings list, `rec_session.*` the programs, retry and stop), CustomHeadsetOpenVR detection and configurator lookup (`chovr.*`), the Apps page's logic (`apps_vdf.*` KeyValues reader, `apps_steam.*` library, `apps_own.*` apps.toml, `apps_launch.*` launcher, `apps_runtime.*` SteamVR or Monado), the tracking session (`inside_out.*` settings and env, `io_session.*` START TRACKING and the home scene), Monado's controllers (`monado_devices.*`, libmonado through dlopen), the Device page (`device_info.*`), the sound tests (`sound_test.*`) |
+| `app/src/core/` | no widgets (library `pibridge_app_core`, tested): paths, conf writer, status readers + plain words, gaze shm reader, presets, runner, system (process check, tool lookup), actions, state source, SteamVR devices (`steamvr.*`, backend `steamvr_openvr.cpp`), SteamVR readiness (`steamvr_ready.*`), Reset SteamVR (`steamvr_reset.*`), the inside-out session's programs (`rec_setup.*` lookup and detection, `rec_session.*` the programs and their stop; `rec_steps.*` and `rec_check.*` are left from the removed tracking recorder), CustomHeadsetOpenVR detection and configurator lookup (`chovr.*`), the Apps page's logic (`apps_vdf.*` KeyValues reader, `apps_steam.*` library, `apps_own.*` apps.toml, `apps_launch.*` launcher, `apps_runtime.*` the runtime apps start on), the tracking session (`inside_out.*` settings and env, `io_session.*` START VR), headset and controller details (`device_info.*`), the sound tests (`sound_test.*`); `monado_devices.*` and `monado_build.*` belong to the old Monado session (`io_headtrack=off`), which the UI no longer offers |
 | `app/third_party/openvr/` | `openvr.h` + `LICENSE` of the OpenVR SDK 2.15.6 (BSD-3, Valve), header only |
 | `app/src/qv/` | copied from artscout-qv-vulkan-linux (MIT), each file says where from: `settings.*`, `fovmath.*` (layer), `preview.*` (colours adapted), `layerinstall.*` (gui) |
 | `app/src/ui/` | theme (style sheet, fonts, colours), widgets (Toggle, Chip, Card, Segmented, TickSlider, SliderRow, RestartDot, HeadsetArt, GazeDot), line icons |
-| `app/src/pages/` | the pages (Dashboard, Display, Apps, Device, Performance, Tracking, Room, Recording, Development, Logs, About) and the Dashboard's sound tests (`sound_tests.*`) and record card (`record_card.*`) |
+| `app/src/pages/` | the pages (Dashboard, Display, Apps, Performance, Tracking, Room, Recording, VR home, Logs, About) and the Dashboard's sound tests (`sound_tests.*`) and record card (`record_card.*`) |
 | `app/tests/test_app_core.cpp` | `pibridge_app_tests` (add_test): conf writer (keeps unknown lines and comments, every live duplicate, trailing comments; locale-independent numbers), status JSON parsing and staleness, chips/words, presets, the gaze shm reader against a temp file (the Rust test sample, torn snapshots), every button's command with a FakeRunner, the /proc check; SteamVR: vrpath parsing (temp HOME; missing/broken file), the library path, the real backend without SteamVR (= not installed, never the user's SteamVR), device list -> rows/chips/battery/station counts through the fake source, the 5 s back-off and no attempt without vrserver (injected clock), the worker thread |
-| `app/tests/test_apps.cpp` | `pibridge_apps_tests`: the VDF reader (nesting, escapes, comments, tags, broken input, depth limit), the Steam library from a synthetic root in a temp dir (several libraries, tools and unfinished installs skipped, VR list, last played, the three cover layouts, old file forms, symlinked roots), running games from a fake /proc, apps.toml (round trip keeping unknown keys, comments, tables and sub-tables; ids; atomic save), argument quoting, last-played words, the launch spec (env, quad views off, log names) and log link, the readiness steps / settle / timeouts with an injected clock, the launcher with FakeRunner + FakeAppProcesses (start at once, start SteamVR and wait, timeout reason, cancel, stop by PID, exit codes, Steam games), and in "Monado directly" mode (the runtime file, XR_RUNTIME_JSON, waiting for the session, errors, Steam games refused) |
-| `app/tests/test_tracking.cpp` | `pibridge_tracking_tests`: the inside-out settings, the env builder, PiBridge's Basalt config, START TRACKING and the home scene with FakeRecProcesses (TRACKING.md) |
-| `app/tests/test_monado.cpp` | `pibridge_monado_tests`: the Dashboard's controllers from Monado (link, words, dlopen refusal, worker) with a fake source |
+| `app/tests/test_apps.cpp` | `pibridge_apps_tests`: the VDF reader (nesting, escapes, comments, tags, broken input, depth limit), the Steam library from a synthetic root in a temp dir (several libraries, tools and unfinished installs skipped, VR list, last played, the three cover layouts, old file forms, symlinked roots), running games from a fake /proc, apps.toml (round trip keeping unknown keys, comments, tables and sub-tables; ids; atomic save), argument quoting, last-played words, the launch spec (env, quad views off, log names) and log link, the readiness steps / settle / timeouts with an injected clock, the launcher with FakeRunner + FakeAppProcesses (start at once, start SteamVR and wait, timeout reason, cancel, stop by PID, exit codes, Steam games), and the old Monado session's runtime (the runtime file, XR_RUNTIME_JSON, waiting for the session, errors, Steam games refused) |
+| `app/tests/test_tracking.cpp` | `pibridge_tracking_tests`: the inside-out settings, the env builder, PiBridge's Basalt config, START VR with FakeRecProcesses (TRACKING.md) |
+| `app/tests/test_monado.cpp` | `pibridge_monado_tests`: controllers read from Monado through libmonado (link, words, dlopen refusal, worker) with a fake source, for the old session |
 
 | `app/tests/test_steamvr_reset.cpp` | `pibridge_steamvr_reset_tests`: detection against a fake /proc tree (exe links, argv[0] when exe is unreadable, the odd comm, deleted exe, pressure-vessel wrapper, steamtours, vrwebhelper; Steam, steamwebhelper, reaper, a look-alike dir and the own PID excluded; `/proc/net/unix` + fd links for the socket holders, an outside holder, an unheld socket), running-time words and lines, the dialog words (stuck, healthy, nothing running with and without Steam), the close sequence with fake signals and an injected clock (TERM, KILL at 5 s only to survivors, gone/reused PIDs never signalled, EPERM, a process that survives KILL), the stat identity check, the Steam restart with the FakeRunner (shutdown, wait, start; 20 s timeout; Steam not running) |
 | `app/tests/test_record.cpp` | `pibridge_record_tests`: EDID name/vendor and the connector over a fake /sys/class/drm, the camera and headset over fake v4l/usb trees, the lookup order (conf, PATH, fallbacks, the user's calibration first), the /proc check, the readiness words, the built-in steps, steps JSON parsing, the step runner's timing (late ticks, skip, stop), steps.json (integer ns, still windows, clock offset), the EuRoC check (the euroc.rs twins plus gaps, order, scale, overlap, parse errors), the recordings list / check.json / safe delete, the command lines and Monado's environment, the session with FakeRecProcesses and an injected clock (start order, data wait, the lease retry from a log sample and its second failure, the PID-exact TERM-then-KILL stop in reverse order, other failures, skip/stop/shutdown), speech or tone |
 | `app/tests/test_room.cpp` | `pibridge_room_page_tests`: the Room page's gates (SteamVR on / off, tool missing, no file), the universe in use from the fake devices, the fake files and the universe / room rows (a point in every locale), the fake HOME, the launch of pibridge-roomsetup with the FakeRunner |
-| `app/tests/test_device.cpp` | `pibridge_device_tests`: the Device page's rows live and without SteamVR (fallbacks, words, a point in every locale), modes / quad views / build words, CHOVR's IPD and the supersampling from temp files; the sound tests: node picking (monitors left out), the WAV header and the left/right tone, the meter scale, the speaker and microphone sequences with a scripted runner and a FakeCapture (commands, busy, meter, playback on the headset sink, temp files deleted, every error), never `set-default-*` |
+| `app/tests/test_device.cpp` | `pibridge_device_tests`: the headset and controller details live and without SteamVR (fallbacks, words, a point in every locale), modes / quad views / build words, CHOVR's IPD and the supersampling from temp files; the sound tests: node picking (monitors left out), the WAV header and the left/right tone, the meter scale, the speaker and microphone sequences with a scripted runner and a FakeCapture (commands, busy, meter, playback on the headset sink, temp files deleted, every error), never `set-default-*` |
 | `app/tests/test_chovr.cpp` | `pibridge_chovr_tests`: CustomHeadsetOpenVR registered (external_drivers, drivers/ dir, broken file), headset enabled rules (missing `enable`, all off, customShader), the configurator lookup order with a temp PATH and home (executables only), the detached start with the FakeRunner |
 
 Build and test (own build dir):
@@ -429,22 +373,16 @@ build-app/app/pibridge --screenshots /tmp/pibridge-shots
 ```
 
 Screenshots of the fake state: `docs/app/*.png` (dashboard active and idle, apps with SteamVR ready and off, quad
-views top and lower part, the Tracking page (modes, running, reasons), the Apps page in "Monado directly" mode,
-development (recording ready / blocked / recording / done), room with SteamVR off and running, logs, about,
-device (`10-device.png`, `10b-device-steamvr-off.png`)).
+views top and lower part, the Tracking page (modes, running, reasons), room with SteamVR off and running, logs,
+about, display, recording).
 
 ## Not done yet
-- Inside-out: START TRACKING and PiBridge's Basalt config are tested with fakes and synthetic files only; the SteamVR
-  (driver_monado) start is not implemented; the Monado build's markers are not checked (see TRACKING.md). Apps on
-  Monado, the home scene with a game and the controllers through libmonado are tested with fakes only.
+- Inside-out: START VR and PiBridge's Basalt config are tested with fakes and synthetic files only (see
+  TRACKING.md, "Not verified live").
 - Room setup: nothing of it has run in a headset or against a running SteamVR yet (see ROOM-SETUP.md, "Not
   verified live"). The Room page's edits are tested through the library; the page itself only through screenshots.
-- Record video is tested with a fake tap and a fake ffmpeg only; no recording has been made from a live "Monado
-  directly" session yet. The SteamVR mirror has never run against a real SteamVR (whether
+- Record video is tested with a fake tap and a fake ffmpeg only. The SteamVR mirror has never run against a real SteamVR (whether
   SteamVR's Linux compositor shares its mirror with OpenGL is not known yet).
-- Record tracking is tested with fakes only; no recording has been made from the app yet (the display lease retry,
-  the voice in the headset, Monado's SIGTERM within 10 s are to be checked live). The steps run at real speed in fake
-  mode too.
 - Apps: per-game settings for Steam games (their launch options belong to Steam); stopping a Steam game; the
   readiness and launches are tested with fakes only, the live check against a running SteamVR is still to do;
   Standby counts as ready.

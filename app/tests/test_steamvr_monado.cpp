@@ -301,7 +301,9 @@ struct SvRig {
 
     SvRig() {
         setup = fakeRecSetup(f.h.path(QStringLiteral("recordings")));
+        setup.io.slamEngine = SlamEngine::Basalt;
         setup.io.mode = TrackingMode::InsideOut;
+        setup.io.headtrack = false; // the driver_monado session (pibridge-headtrack is the default)
         setup.steamVrDriverDir = f.ours;
         setup.driverEnvFile = f.h.path(QStringLiteral("xdg_config_home/pibridge/steamvr-driver.env"));
         IoSessionControl::Deps d;
@@ -409,7 +411,9 @@ TEST(steamvr_monado_readiness_in_plain_words) {
     r.c->refresh();
     CHECK(r.c->readiness().blocking.join(QString()).contains(QStringLiteral("has no SteamVR driver")));
     r.setup = fakeRecSetup(r.f.h.path(QStringLiteral("recordings")));
+    r.setup.io.slamEngine = SlamEngine::Basalt;
     r.setup.io.mode = TrackingMode::InsideOut;
+    r.setup.io.headtrack = false;
     r.setup.connector.clear(); // SteamVR's compositor picks the display
     r.setup.build.missing = {QStringLiteral("PIMAX_AE_MODEL")};
     r.c->refresh();
@@ -699,6 +703,7 @@ TEST(monado_build_markers_and_kind) {
     a = monadoBuildInfoAsync(svc2);
     CHECK(done && a.checked && !a.checking && a.ok());
     RecSetup s = fakeRecSetup(h.path(QStringLiteral("rec")));
+    s.io.slamEngine = SlamEngine::Basalt;
     s.build = b;
     s.monado.path = svc;
     CHECK(recReadiness(s, {}).blocking.join(QString()).contains(QStringLiteral("lacks required markers")));
@@ -788,6 +793,7 @@ TEST(cap_sys_nice_reading_and_fix_permissions) {
     CHECK(runner.calls.size() == 3 && !ok); // a missing file: nothing is run
     // the setup's warning for monado-service starts, none for SteamVR + Monado
     RecSetup s = fakeRecSetup(h.path(QStringLiteral("rec")));
+    s.io.slamEngine = SlamEngine::Basalt;
     s.caps = CapState{true, false, false};
     CHECK(recReadiness(s, {}).warnings.join(QString()).contains(QStringLiteral("Fix permissions")));
     CHECK(!recReadiness(s, {}, RecUse::SteamVr).warnings.join(QString()).contains(QStringLiteral("Fix permissions")));

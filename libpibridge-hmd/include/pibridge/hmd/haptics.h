@@ -71,6 +71,26 @@ std::filesystem::path request_path();
 std::string format_request(std::uint8_t slot, std::uint8_t amp, std::uint16_t ms);
 /// Parse a request line: slot 2|3, amp 1..=100, ms 1..=65535, nothing else.
 std::optional<Due> parse_request(std::string_view s);
+
+/// A game's vibration from CustomHeadsetOpenVR (inside vrserver) to whoever owns the headset: one datagram "SLOT AMP MS"
+/// per pulse on the abstract Unix socket "\0pibridge-haptic-<uid>" (no file: vrserver may run in the Steam Runtime
+/// container with a /tmp and environment of its own; every pulse arrives, none overwrites another).
+std::string socket_name();
+/// The receiving end (non-blocking); one per process that owns the headset.
+class Receiver {
+public:
+    Receiver();
+    ~Receiver();
+    Receiver(const Receiver&) = delete;
+    Receiver& operator=(const Receiver&) = delete;
+    /// Bound (false: another owner has it, or no socket).
+    bool ok() const { return fd_ >= 0; }
+    /// The next waiting pulse, nullopt when none waits (malformed datagrams are skipped).
+    std::optional<Due> next();
+
+private:
+    int fd_ = -1;
+};
 /// Take (read and remove) a waiting request; nullopt when there is none, an error text for a malformed one (removed
 /// too) or a file that cannot be read.
 std::expected<std::optional<Due>, std::string> take_request(const std::filesystem::path& path);

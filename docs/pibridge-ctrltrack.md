@@ -50,12 +50,12 @@ pimax-hands fuser) and `dump` (one PNG of an LED frame; `track --overlay` draws 
   `live`), blob claims.
 - **Tracker** (`tracker.h`, `assign.h`): constant-velocity prediction, wide gate, few-LED track with a rotation
   prior, the loss state machine (30 failed frames), the far cold-start rule, the body model (reach, side, continuity,
-  separation, collapse), Monado's in-hand status (`$XDG_RUNTIME_DIR/pimax-ctrl-inhand`: a controller `down`/`off` of a
+  separation, collapse), the in-hand status of Monado's driver, when one runs (`$XDG_RUNTIME_DIR/pimax-ctrl-inhand`: a controller `down`/`off` of a
   live writer is not looked for).
 - **Pose file** (`shm.h`): `$XDG_RUNTIME_DIR/pimax-ctrltrack.pose`, 256 bytes, magic `0x54435850`, version 1, seqlock
   on the u32 at 8 (odd while writing; the Rust atomic orders and fences), 96 bytes per hand from 16, the heartbeat at
-  208 (beat_ns, led_frames, source_up, reopens, written at least every 0.1 s by `live`). Monado reads it with
-  `pimax_ctrltrack_shm.h`; `show` and `health` read it too.
+  208 (beat_ns, led_frames, source_up, reopens, written at least every 0.1 s by `live`). pibridge-headtrack reads it (Basalt engine; Monado's
+  driver read it with `pimax_ctrltrack_shm.h`); `show` and `health` read it too.
 - **track** (`tools/ctrltrack/src/track.cpp`): pass 1 blobs, pass 2 acquisition on all CPUs (`available_parallelism`
   as Rust computes it: the cgroup CPU quota and the affinity mask; the result does not depend on the thread count),
   pass 3 tracking with priors, the extrinsics refit, CSV, per-camera bias, summary, overlay PNGs.
@@ -76,8 +76,8 @@ CSVs `ctrl1.csv`/`ctrl2.csv` (lab data) are exactly `track REC.pxcam --calib cry
 Rust tool; `pibridge-ctrltrack` writes the same bytes (with the default reference calibration the output is a different
 one, so those CSVs were never a default-run golden). `pibridge_ctrltrack_live_broker`: `live --source broker:SOCK
 --factory` as the session runs it, against a `pibridge-cam broker` serving `ctrl1.pxcam`: it runs and exits 0, the
-start lines name the broker, LED frames reach the tracker, Monado's reader (`pimax_ctrltrack_shm.h` of
-`third_party/monado`, `ctrltrack_shm_dump`) sees a valid pose file with the heartbeat.
+start lines name the broker, LED frames reach the tracker, and (only when a Monado tree is at `third_party/monado`,
+which is no longer in the repository) Monado's reader (`ctrltrack_shm_dump`) sees a valid pose file with the heartbeat.
 `pibridge_ctrltrack_not_ported_*`: the message and exit 2. Unit twins: the 22 Rust `#[test]`s of the ported modules
 (blob 2, assign 3, p3p 2, model 4, extrinsics 4, solve 3, shm 2, tracker 2) plus 3 extra (live blob parameters,
 component order of model folders, the pose file bytes).
@@ -125,7 +125,8 @@ synthetic IMU (`--fuse`).
   their LEDs off (the take is the desk/dark one, Monado reports 0 fixes); the LED-frame exposure differs from the
   recordings (the recordings carry 25/35, with `PIMAX_CAM_AE=1` the AE sends the Windows LED pair 40/62, brighter:
   bigger, merged blobs; the live blob threshold 80 and `max_side` 40 / `max_area` 600 were tuned at 40/62 on the Dream
-  Air, blob.rs:44-56); RECORD TRACKING runs with `PIMAX_CAM_AE=0`, so recordings never show the live LED exposure.
+  Air, blob.rs:44-56); the old tracking recorder ran with `PIMAX_CAM_AE=0`, so its recordings never show the live LED
+  exposure.
   No frame-rate assumption in the tracker breaks at 30 Hz (stale prior 300 ms tracker.rs:155, wide gate after 60 ms
   :223, velocity window 5-130 ms :442; "25 Hz" in live.rs:3 is a comment only).
 - Not the tracker's: Monado's Pimax camera code feeds SLAM "at 25 Hz" (`pimax_camera.c:725`, the Basalt calib writer

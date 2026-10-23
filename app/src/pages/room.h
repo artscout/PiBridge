@@ -91,7 +91,7 @@ private:
     void apply();
     bool steamvrRunning() const;
     bool insideOut() const;
-    void createMonadoUniverse();
+    void createInsideOutUniverse();
     void mapRoom(bool quick = false);
     QString roommapTool() const;
     QString toolPath() const; // pibridge-roomsetup: the in-headset passthrough view of SETUP PLAYSPACE

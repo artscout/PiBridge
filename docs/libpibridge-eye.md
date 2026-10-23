@@ -128,14 +128,6 @@ pass; where possible the same behaviour is checked on the public base list inste
 tests of `tests/replay_fake.rs`). The proptest suites of `tests/props.rs` for TLV, TTP, pcap and the plan builder are
 replaced by deterministic pseudo-random loops. No test opens a device node.
 
-## The C ABI for Monado (`pimax_eye.h`)
-
-`monado-abi/src/eye_capi.cpp` (M8, `docs/monado-abi.md`) exports the seven `pimax_eye_*` functions of the Rust
-`pimax-capi/src/eye.rs` over `live::Tracker` with a `RealDevice` whose `HeadsetCommands` sends the allowlisted
-`eye_power_on` through libpibridge-hmd's gate. The archive compiles this library (and libpibridge-eyemath) once more with
-the parity flags and hidden visibility. Not used for the Crystal Super, whose eye runs through pibridge-eyed (one owner
-of the chip): Monado starts without `PIMAX_EYE` there.
-
 ## Not ported (yet)
 
 - `live.rs` differences: `Tracker::start(cfg)` without a device (the Rust default `RealDevice`) does not exist, the

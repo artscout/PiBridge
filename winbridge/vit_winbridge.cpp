@@ -173,8 +173,10 @@ void read_replies(vit_tracker* t, int s, std::deque<Item::Kind>* inflight, std::
             if (!recv_all(s, &p, sizeof(p))) break;
             if (p.hand < 2) {
                 std::lock_guard<std::mutex> lk(t->m);
-                t->ctrl_tracked[p.hand] = p.tracked != 0;
+                // The LED engine answers every controller IMU sample, with a pose only on some of them (zeros on the
+                // rest): the last pose stays until a newer one, the caller judges its age (no flicker between them).
                 if (p.tracked) {
+                    t->ctrl_tracked[p.hand] = true;
                     pibridge_wb_ctrl_pose& c = t->ctrl[p.hand];
                     c.ts_ns = (int64_t)p.ts;
                     memcpy(c.q, p.pose, sizeof(c.q));

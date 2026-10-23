@@ -33,7 +33,7 @@
 #include "core/inside_out.h"
 #include "core/paths.h"
 #include "pages/dashboard.h"
-#include "pages/development.h"
+#include "pages/help_window.h"
 #include "pages/record_card.h"
 #include "ui/brand.h"
 #include "ui/icons.h"
@@ -189,9 +189,6 @@ int main(int argc, char** argv) {
         bool scrolledDown = false;
         std::function<void(pibridge::app::MainWindow&)> prepare = {};
     };
-    const auto development = [](pibridge::app::MainWindow& win) {
-        return static_cast<pibridge::app::DevelopmentPage*>(win.page(pibridge::app::MainWindow::Development));
-    };
     const auto dashboard = [](pibridge::app::MainWindow& win) {
         return static_cast<pibridge::app::DashboardPage*>(win.page(pibridge::app::MainWindow::Dashboard));
     };
@@ -220,12 +217,6 @@ int main(int argc, char** argv) {
         {pibridge::app::MainWindow::Apps, false, QStringLiteral("06b-apps-steamvr-off")},
         {pibridge::app::MainWindow::Performance, true, QStringLiteral("03-performance-quadviews")},
         {pibridge::app::MainWindow::Performance, true, QStringLiteral("03b-performance-quadviews-lower"), true},
-        {pibridge::app::MainWindow::Development, false, QStringLiteral("07-development")},
-        {pibridge::app::MainWindow::Development, true, QStringLiteral("07b-development-steamvr-running")},
-        {pibridge::app::MainWindow::Development, false, QStringLiteral("07c-development-recording"), false,
-         [&](pibridge::app::MainWindow& win) { development(win)->demoRecording(19500); }},
-        {pibridge::app::MainWindow::Development, false, QStringLiteral("07d-development-done"), false,
-         [&](pibridge::app::MainWindow& win) { development(win)->demoFinish(); }},
         {pibridge::app::MainWindow::Tracking, false, QStringLiteral("09-tracking")},
         {pibridge::app::MainWindow::Tracking, false, QStringLiteral("09b-tracking-lower"), true},
         {pibridge::app::MainWindow::Tracking, false, QStringLiteral("09c-tracking-inside-out-ready"), false,
@@ -237,23 +228,12 @@ int main(int argc, char** argv) {
         {pibridge::app::MainWindow::Tracking, false, QStringLiteral("09d-tracking-running"), false,
          [&](pibridge::app::MainWindow& win) { win.trackingSession().demoRun(); }},
         {pibridge::app::MainWindow::Dashboard, false, QStringLiteral("09e-dashboard-tracking-running")},
-        {pibridge::app::MainWindow::Development, false, QStringLiteral("07e-development-blocked-by-tracking")},
         {pibridge::app::MainWindow::Room, false, QStringLiteral("08c-room-inside-out"), false,
          [&](pibridge::app::MainWindow& win) {
              win.trackingSession().stop();
              setConf({{"io_anchor", "on"}});
              reshow(win, pibridge::app::MainWindow::Room);
          }},
-        {pibridge::app::MainWindow::Development, false, QStringLiteral("07f-development-monado-directly"), false,
-         [&](pibridge::app::MainWindow& win) {
-             setConf({{"rec_monado_service", "/fake/home/gamedev/pibridge-monado-build/src/xrt/targets/service/monado-service"}});
-             reshow(win, pibridge::app::MainWindow::Development);
-             win.directSession().demoRun();
-         }},
-        {pibridge::app::MainWindow::Apps, false, QStringLiteral("06d-apps-monado-running")},
-        // the Controllers card reads Monado (a fake libmonado source on its worker thread): wait for its answer
-        {pibridge::app::MainWindow::Dashboard, false, QStringLiteral("09g-dashboard-monado-directly"), false,
-         [&](pibridge::app::MainWindow&) { settle(600); }},
         // the Record card while a recording runs, and after one ended (pibridge-record, docs/record.md)
         {pibridge::app::MainWindow::Dashboard, false, QStringLiteral("09h-dashboard-recording"), false,
          [&](pibridge::app::MainWindow& win) {
@@ -294,8 +274,6 @@ int main(int argc, char** argv) {
         {pibridge::app::MainWindow::Room, true, QStringLiteral("08b-room-steamvr-running")},
         {pibridge::app::MainWindow::Logs, true, QStringLiteral("04-logs")},
         {pibridge::app::MainWindow::About, true, QStringLiteral("05-about")},
-        {pibridge::app::MainWindow::Device, true, QStringLiteral("10-device")},
-        {pibridge::app::MainWindow::Device, false, QStringLiteral("10b-device-steamvr-off")},
         {pibridge::app::MainWindow::Display, true, QStringLiteral("11-display")},
         {pibridge::app::MainWindow::Recording, true, QStringLiteral("12-recording")},
     };
@@ -319,6 +297,19 @@ int main(int argc, char** argv) {
             failed++;
         } else {
             std::printf("%s\n", qPrintable(file));
+        }
+    }
+    // the help window (pages/help_window.h) on the user guide
+    {
+        pibridge::app::HelpWindow help(&w);
+        help.open(QStringLiteral("USER-GUIDE.md"));
+        for (int i = 0; i < 5; i++) {
+            QCoreApplication::processEvents();
+        }
+        const QString file = shotsDir + QStringLiteral("/20-help.png");
+        if (!help.grab().save(file)) {
+            std::fprintf(stderr, "could not save %s\n", qPrintable(file));
+            failed++;
         }
     }
     if (!fakeRunner.calls.empty()) { // the screenshot mode must never run anything

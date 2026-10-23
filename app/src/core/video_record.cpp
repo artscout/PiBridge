@@ -85,7 +85,7 @@ RecordCardModel recordCardModel(const RecordInputs& in) {
         m.chip = QStringLiteral("OFF");
         m.chipKind = ChipKind::Off;
         m.headline = QStringLiteral("No VR session");
-        m.detail = QStringLiteral("Start SteamVR, or \"Monado directly\" on the Development page, then press Record.");
+        m.detail = QStringLiteral("Start SteamVR, then press Record.");
     }
     // the last result, in plain words
     if (st.state == "error" && !st.note.empty()) {

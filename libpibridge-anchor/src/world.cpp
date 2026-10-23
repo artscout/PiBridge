@@ -697,6 +697,10 @@ std::vector<std::uint32_t> pids_named(std::string_view name) {
 std::vector<std::uint32_t> tracker_pids() {
     auto m = pids_named("monado-service");
     if (m.empty()) {
+        // PiBridge's head tracking without Monado writes the ring itself (comm is cut to 15 characters)
+        m = pids_named("pibridge-headtr");
+    }
+    if (m.empty()) {
         return pids_named("vrserver");
     }
     return m;

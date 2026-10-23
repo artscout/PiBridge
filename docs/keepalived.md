@@ -103,12 +103,12 @@ the live tracking flags, its sound taken when the output shows up and given back
 ## Paused during inside-out tracking
 
 While `$XDG_RUNTIME_DIR/pibridge/inside-out.active` names a running owner (written by the app's inside-out sessions,
-`common/pibridge_pause.h`), pibridge-keepalived leaves the headset to Monado's Pimax driver: it closes the device, reports
+`common/pibridge_pause.h`), pibridge-keepalived leaves the headset to `pibridge-headtrack`: it closes the device, reports
 `"state": "paused"` and `"paused": "paused: inside-out tracking"`, and takes it again when the marker is gone (checked
 twice a second; a stale marker of a crashed app does not count). Tests: the pause / resume cases of its test.
 
 ## Controllers
-Pair, Unpair and Test vibration of the app's Device page run here, on the daemon's own session (the only process that
+Pair, Unpair and Test vibration of the Dashboard's Controllers card run here, on the daemon's own session (the only process that
 has the headset open while no inside-out session runs). Every frame goes through the allowlist gate.
 - **Requests**: `$XDG_RUNTIME_DIR/pibridge/controller-request`, one line `ID pair|unpair left|right` (libpibridge-hmd
   `pairing.h`), and `$XDG_RUNTIME_DIR/pimax-haptic-request`, `SLOT AMP MS` (`haptics.h`). Taken (renamed, read,
@@ -124,8 +124,8 @@ has the headset open while no inside-out session runs). Every frame goes through
 - **Status** (keepalived.json): `ctrl_id`, `ctrl_op`, `ctrl_side`, `ctrl_state` (waiting | paired | timeout |
   unpaired | failed | refused), `ctrl_detail` (plain words), `left_connected`, `right_connected` (report or 0x37
   heartbeat within 10 s), `haptic_seq`, `haptic_result`.
-- **Paused** (inside-out): pair and unpair are refused with the reason; the vibration file is left to Monado's Pimax
-  driver (`pimax_haptic_poll_request`).
+- **Paused** (inside-out): pair and unpair are refused with the reason; the vibration file is left to
+  `pibridge-headtrack`.
 - Crystal Super: `start_pair` and `unpair` were not in its Windows capture; they are the Dream Air's approved frames
   for the same controllers (devices/crystal-super.toml). Not yet run against a headset.
 

@@ -314,8 +314,7 @@ void VrHomePage::updateView() {
     passthrough_->setCheckedQuiet(c.kind == bg::Kind::Passthrough);
     if (!h.running) {
         homeCard_->chip()->set(QStringLiteral("NOT RUNNING"), ChipKind::Off);
-        homeLine_->setText(QStringLiteral("The VR home starts with tracking in the Monado-directly mode (Development page), "
-                                          "or here in SteamVR."));
+        homeLine_->setText(QStringLiteral("The VR home starts here in SteamVR."));
         homeNote_->setText(QString());
     } else {
         const bool shown = h.state == QLatin1String("focused") || h.state == QLatin1String("visible");

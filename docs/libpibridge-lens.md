@@ -1,14 +1,14 @@
 # libpibridge-lens
 
-The lens model of the Monado Pimax driver: the `lens.conf` parser, the per-channel radial polynomial (bit-identical
+The lens model of the Pimax driver (omarchyvr's Monado driver, ported): the `lens.conf` parser, the per-channel radial polynomial (bit-identical
 to the old C model), the exact distortion tables (`lut = FILE`, the Crystal Super's `crystal-lut.bin`), the
 visibility mask meshes for `XR_KHR_visibility_mask`, and the debug pictures of `PIMAX_LENS_DEBUG_GRID`. Ported from
-omarchyvr `rust/pimax-lens` (MIT OR Apache-2.0) at commit `381eea2` (`monado-abi/spec.txt`); the Rust code is the
+omarchyvr `rust/pimax-lens` (MIT OR Apache-2.0) at commit `381eea2`; the Rust code is the
 specification and its tests have C++ twins here. Milestone M5 of `docs/research/rust-port-plan.md`.
 
-CMake targets `pibridge_lens_obj` (objects, in `libpibridge_pimax.a`) and `pibridge_lens` (static, for tests and tools),
-namespace `pibridge::lens::`, headers in `libpibridge-lens/include/pibridge/lens/`. The C ABI `pimax_lens_rs.h` is in
-`monado-abi/src/lens_capi.cpp` (`docs/monado-abi.md`). Dependencies: zlib (PNG), libpibridge-cam's `rustfmt.h`
+CMake targets `pibridge_lens_obj` (objects) and `pibridge_lens` (static, for tests and tools), namespace
+`pibridge::lens::`, headers in `libpibridge-lens/include/pibridge/lens/`. (Its C ABI `pimax_lens_rs.h` went with
+Monado; today only the tests link the library.) Dependencies: zlib (PNG), libpibridge-cam's `rustfmt.h`
 (Rust number formatting), `io.h` and `json.h` (only the dump reader). Built with libpibridge-cam's parity flags
 (`-ffp-contract=off -fno-fast-math`, hidden visibility): every f32/f64 expression keeps the Rust order, f32
 functions are the glibc ones Rust calls (`tanf`, `atanf`, `powf`, `cosf`, `sinf`, `hypotf`), `powi` is compiler-rt's
@@ -38,7 +38,6 @@ Environment (unchanged names): `PIMAX_LENS_CONF`, `XDG_CONFIG_HOME`/`HOME` (`oma
 | Test | What |
 |---|---|
 | `pibridge_lens_config`, `_model`, `_lut`, `_mask`, `_png`, `_font`, `_grid`, `_lens` | twins of the 58 Rust unit tests of config/model/lut/mask/png/font/grid/lib (same cases, same expected values), plus Path helper checks; the LUT tests read omarchyvr's public fixture `rust/pimax-lens/tests/data/pvr-dump-sub.json` (skipped without the checkout) |
-| `monado_abi_lens_capi` | twins of the 3 `capi.rs` tests through `libpibridge_pimax.a` |
 
 The difftests against the Rust `libpimax_lens.a` (synthetic scenarios, the Crystal conf + LUT, the reference
 profile; all byte-identical except where noted below) were removed with the oracle once the port was finished

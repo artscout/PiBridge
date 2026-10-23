@@ -26,13 +26,12 @@ public:
     // `fake`: fixed state, commands go to the injected runner (a FakeRunner) and nothing is read from the system.
     MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder findTool, QWidget* parent = nullptr);
 
-    // Tracking: the tracking mode and the inside-out session (pages/tracking.h); Development: the recorder
-    // (pages/development.h).
-    enum Page { Dashboard, Apps, Performance, Tracking, Room, Development, Logs, About, Device, Display, Recording, PageCount };
+    // Tracking: the tracking mode and the inside-out settings (pages/tracking.h).
+    enum Page { Dashboard, Apps, Performance, Tracking, Room, Logs, About, Display, Recording, PageCount };
     void showPage(int page);
     static QString pageSlug(int page);
     QWidget* page(int page) const;
-    // START TRACKING (SteamVR + Monado) and the Development page's "Monado directly".
+    // START VR in inside-out, and "Monado directly" (no longer started from the UI).
     IoSessionControl& trackingSession() { return *io_; }
     IoSessionControl& directSession() { return *direct_; }
 

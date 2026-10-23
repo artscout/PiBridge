@@ -134,6 +134,8 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
                  isExec);
     s.ctrl = pick(conf, reckey::kCtrl, QStringLiteral("pibridge-ctrltrack"), true,
                   ownTool(QStringLiteral("pibridge-ctrltrack")), h, isExec);
+    s.headtrack = pick(conf, reckey::kHeadtrack, QStringLiteral("pibridge-headtrack"), true,
+                       ownTool(QStringLiteral("pibridge-headtrack")), h, isExec);
     s.basalt = pick(conf, reckey::kBasalt, QStringLiteral("Basalt library (libbasalt.so)"), false,
                     {lib + QStringLiteral("/libbasalt.so"), h + QStringLiteral("/gamedev/ovr-build/basalt/lib/libbasalt.so"),
                      QStringLiteral("/usr/local/lib/libbasalt.so"), QStringLiteral("/usr/lib/libbasalt.so")},
@@ -263,6 +265,7 @@ RecSetup fakeRecSetup(const QString& recordingsDir) {
     s.monado = p(reckey::kMonado, "monado-service", "/fake/monado/monado-service", true);
     s.cam = p(reckey::kCam, "pibridge-cam", "/fake/bin/pibridge-cam", true);
     s.ctrl = p(reckey::kCtrl, "pibridge-ctrltrack", "/fake/bin/pibridge-ctrltrack", true);
+    s.headtrack = p(reckey::kHeadtrack, "pibridge-headtrack", "/fake/bin/pibridge-headtrack", true);
     s.basalt = p(reckey::kBasalt, "Basalt library (libbasalt.so)", "/fake/basalt/libbasalt.so", false);
     s.winbridge = p(reckey::kWinbridge, "winbridge.exe", "/fake/pibridge/winbridge/winbridge.exe", false);
     s.vitBridge = p(reckey::kVitBridge, "VIT library (libpibridge_vit_winbridge.so)",
@@ -440,6 +443,9 @@ RecReadiness recReadiness(const RecSetup& s, const RecSystem& sys, RecUse use) {
         const QString what = p->fromConf ? QStringLiteral("%1 not found at %2 (%3= in pibridge.conf).")
                                                .arg(p->label, p->wanted, p->key)
                                          : QStringLiteral("%1 not found. Set %2= in pibridge.conf.").arg(p->label, p->key);
+        if (p == &s.monado && use == RecUse::SteamVr && s.io.headtrack) {
+            continue; // pibridge-headtrack: no Monado
+        }
         if (p == &s.winbridge || p == &s.vitBridge) {
             // only the Pimax engine needs them
             if (s.io.slam && s.io.slamEngine == SlamEngine::Pimax) {
@@ -450,12 +456,13 @@ RecReadiness recReadiness(const RecSetup& s, const RecSystem& sys, RecUse use) {
         } else if (p == &s.basalt) {
             r.warnings << what + QStringLiteral(" The live 6DoF tracker stays off; the recording still works.");
         } else if (p == &s.slamConfig) {
-            r.warnings << what + QStringLiteral(" Monado uses its built-in SLAM settings.");
+            r.warnings << what + QStringLiteral(" Basalt uses its built-in settings.");
         } else {
             r.warnings << what + QStringLiteral(" The headset uses its default lens settings.");
         }
     }
-    if (const QString b = buildBlockingReason(s.build); !b.isEmpty() && !s.monado.path.isEmpty()) {
+    if (const QString b = buildBlockingReason(s.build);
+        !b.isEmpty() && !s.monado.path.isEmpty() && !(use == RecUse::SteamVr && s.io.headtrack)) {
         r.blocking << b;
     }
     if (use == RecUse::Monado && s.caps && s.caps->readable && !s.caps->ok() && !s.monado.path.isEmpty()) {

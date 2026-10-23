@@ -75,6 +75,12 @@ bool hasPrefix(const QStringList& l, const char* p) {
 
 // ---------------------------------------------------------------- settings
 
+// The tests below were written when Basalt was the default engine (Pimax is now).
+IoSettings basalt(IoSettings io) {
+    io.slamEngine = SlamEngine::Basalt;
+    return io;
+}
+
 TEST(defaults_are_the_recommendations) {
     Home h;
     const Conf empty(h.dir.path() + QStringLiteral("/none.conf"));
@@ -103,6 +109,7 @@ TEST(defaults_are_the_recommendations) {
 TEST(conf_round_trip_and_clamping) {
     Home h;
     IoSettings s;
+    s.slamEngine = SlamEngine::Basalt; // written for Basalt (Pimax is the default now)
     s.mode = TrackingMode::InsideOut;
     s.apps = IoApps::Monado;
     s.homeScene = false;
@@ -144,7 +151,8 @@ TEST(conf_round_trip_and_clamping) {
 
 TEST(env_of_the_recommended_settings) {
     RecSetup s = fakeRecSetup(QStringLiteral("/r"));
-    const IoSessionEnv e = buildIoEnv(IoSettings::recommended(), s, 90, QStringLiteral("/c/slam/pimax-basalt.toml"), {});
+    s.io.slamEngine = SlamEngine::Basalt;
+    const IoSessionEnv e = buildIoEnv(basalt(IoSettings::recommended()), s, 90, QStringLiteral("/c/slam/pimax-basalt.toml"), {});
     // crystal-6dof.sh's SETTINGS, in its order, then the switches
     CHECK(e.driver.mid(0, 3) == (QStringList{QStringLiteral("PIMAX_FPS=90"), QStringLiteral("PIMAX_LOG=info"),
                                              QStringLiteral("PIMAX_BIAS_TIMEOUT_MS=200")}));
@@ -163,7 +171,7 @@ TEST(env_of_the_recommended_settings) {
     CHECK(has(e.driver, "PIMAX_ANCHOR=1"));
     RecSetup nr = s;
     nr.roommap.clear();
-    CHECK(!hasPrefix(buildIoEnv(IoSettings::recommended(), nr, 90, {}, {}).driver, "PIMAX_ANCHOR"));
+    CHECK(!hasPrefix(buildIoEnv(basalt(IoSettings::recommended()), nr, 90, {}, {}).driver, "PIMAX_ANCHOR"));
     CHECK(e.ctrltrack && e.notes.isEmpty());
     // monado-service: the driver plus the compositor of crystal-6dof.sh
     CHECK(e.monado.mid(0, e.driver.size()) == e.driver);
@@ -183,8 +191,10 @@ TEST(env_of_the_recommended_settings) {
 
 TEST(env_follows_every_switch) {
     RecSetup s = fakeRecSetup(QStringLiteral("/r"));
+    s.io.slamEngine = SlamEngine::Basalt;
     s.extraEnv = {QStringLiteral("PIMAX_LOG=debug")};
     IoSettings io;
+    io.slamEngine = SlamEngine::Basalt; // written for Basalt (Pimax is the default now)
     io.driftHold = true;
     io.stillHold = false;
     io.headTilt = false;
@@ -212,6 +222,7 @@ TEST(env_follows_every_switch) {
 
     // camera AE off: no model, no law
     IoSettings off;
+    off.slamEngine = SlamEngine::Basalt; // written for Basalt (Pimax is the default now)
     off.camAe = CamAe::Off;
     off.camAeNewLaw = false;
     const IoSessionEnv o = buildIoEnv(off, s, 90, {}, {});
@@ -219,6 +230,7 @@ TEST(env_follows_every_switch) {
 
     // SLAM off: no Basalt, no output stages
     IoSettings ns;
+    ns.slamEngine = SlamEngine::Basalt; // written for Basalt (Pimax is the default now)
     ns.slam = false;
     ns.stillHold = false;
     const IoSessionEnv n = buildIoEnv(ns, s, 90, QStringLiteral("/x.toml"), {});
@@ -229,12 +241,12 @@ TEST(env_follows_every_switch) {
     RecSetup m = s;
     m.basalt.path.clear();
     m.ctrl.path.clear();
-    const IoSessionEnv x = buildIoEnv(IoSettings{}, m, 90, QStringLiteral("/x.toml"), {});
+    const IoSessionEnv x = buildIoEnv(basalt(IoSettings{}), m, 90, QStringLiteral("/x.toml"), {});
     CHECK(has(x.driver, "PIMAX_SLAM=0") && has(x.driver, "PIMAX_CTRL_TRACK=0") && !x.ctrltrack);
     CHECK(x.notes.size() == 2);
 
     // the SteamVR variant: driver_monado's file and SteamVR's launch env (crystal-6dof.sh steamvr)
-    const IoSessionEnv v = buildIoEnv(IoSettings{}, s, 90, QStringLiteral("/c.toml"), {}, QStringLiteral("/cfg/steamvr-driver.env"),
+    const IoSessionEnv v = buildIoEnv(basalt(IoSettings{}), s, 90, QStringLiteral("/c.toml"), {}, QStringLiteral("/cfg/steamvr-driver.env"),
                                       QStringLiteral("/m/steamvr-monado/bin/linux64/pimax_rttime_preload.so"));
     CHECK((v.steamvr == QStringList{QStringLiteral("VALVE_SKIP_RUNTIME_SAFETY=1"), QStringLiteral("QT_QPA_PLATFORM=xcb"),
                                     QStringLiteral("LD_PRELOAD=/m/steamvr-monado/bin/linux64/pimax_rttime_preload.so"),
@@ -351,6 +363,7 @@ TEST(basalt_config_generation) {
 TEST(prepare_session_slam_points_the_setup_at_pibridges_copy) {
     Home h;
     RecSetup s = fakeRecSetup(h.dir.path() + QStringLiteral("/rec"));
+    s.io.slamEngine = SlamEngine::Basalt;
     s.slamConfig.path = writeSyntheticSlamBase(h.dir.path() + QStringLiteral("/base"));
     s.calib.path = h.dir.path() + QStringLiteral("/base/factory.xml");
     QString note;
@@ -425,6 +438,7 @@ TEST(four_cameras_setting_and_environment) {
     CHECK(ioSettings(confWith(cp, {{iokey::kSlamCams, "3"}})).slamCams == 2);
     CHECK(ioSettings(confWith(cp, {{iokey::kSlamCams, "x"}})).slamCams == 2);
     IoSettings four;
+    four.slamEngine = SlamEngine::Basalt; // written for Basalt (Pimax is the default now)
     four.slamCams = 4;
     CHECK(ioSettings(confWith(cp, ioConfLines(four))) == four);
     bool listed = false;
@@ -434,9 +448,11 @@ TEST(four_cameras_setting_and_environment) {
     CHECK(listed);
 
     RecSetup s = fakeRecSetup(h.dir.path() + QStringLiteral("/rec"));
+
+    s.io.slamEngine = SlamEngine::Basalt;
     const QString toml = QStringLiteral("/c/slam/pimax-basalt.toml");
     // two cameras: no PIMAX_SLAM_CAMS (the driver's default 0,1), the environment of today
-    CHECK(!hasPrefix(buildIoEnv(IoSettings{}, s, 90, toml, {}).driver, "PIMAX_SLAM_CAMS"));
+    CHECK(!hasPrefix(buildIoEnv(basalt(IoSettings{}), s, 90, toml, {}).driver, "PIMAX_SLAM_CAMS"));
     // four without a four-camera calibration: the lower pair, said in plain words
     const IoSessionEnv no = buildIoEnv(four, s, 90, toml, {});
     CHECK(!hasPrefix(no.driver, "PIMAX_SLAM_CAMS"));
@@ -502,6 +518,7 @@ TEST(four_camera_basalt_config) {
 TEST(prepare_session_slam_with_four_cameras) {
     Home h;
     RecSetup s = fakeRecSetup(h.dir.path() + QStringLiteral("/rec"));
+    s.io.slamEngine = SlamEngine::Basalt;
     s.slamConfig.path = writeTwoCamBase(h.dir.path() + QStringLiteral("/base"));
     s.calib.path = h.dir.path() + QStringLiteral("/base/factory.xml");
     s.io.slamCams = 4;
@@ -558,6 +575,7 @@ struct LiveRig {
             homeProgram = QStringLiteral("/x/pibridge-home");
         }
         setup = fakeRecSetup(h.dir.path() + QStringLiteral("/recordings"));
+        setup.io.slamEngine = SlamEngine::Basalt;
         setup.io.mode = insideOut ? TrackingMode::InsideOut : TrackingMode::Lighthouse;
         setup.io.apps = monado ? IoApps::Monado : IoApps::SteamVr; // the old key: read, chooses nothing any more
         IoSessionControl::Deps d;
@@ -1046,6 +1064,7 @@ TEST(tracking_runtime_follows_the_sessions) {
 TEST(recording_keeps_the_trackers_calibration) {
     Home h;
     RecSetup s = fakeRecSetup(h.dir.path() + QStringLiteral("/recordings"));
+    s.io.slamEngine = SlamEngine::Basalt;
     s.slamConfig.path = writeSyntheticSlamBase(h.dir.path() + QStringLiteral("/base"));
     s.calib.path = h.dir.path() + QStringLiteral("/base/factory.xml");
     prepareSessionSlam(s);

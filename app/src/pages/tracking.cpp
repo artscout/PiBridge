@@ -16,6 +16,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include "help_window.h"
 #include "../core/paths.h"
 #include "../core/roomsetup.h"
 #include "../ui/icons.h"
@@ -123,15 +124,8 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
     headRow->addWidget(message_, 1);
     auto* help = pibridge::ui::linkButton(QStringLiteral("How tracking works"));
     help->setIcon(pibridge::ui::lineIcon(pibridge::ui::Icon::Help, pibridge::ui::color::accentText));
-    help->setToolTip(QStringLiteral("Opens docs/TRACKING.md: every setting, where it comes from, what is not verified."));
-    connect(help, &QPushButton::clicked, this, [this] {
-        const QString p = docPath(QStringLiteral("TRACKING.md"));
-        if (source_.fake()) {
-            say(QStringLiteral("Fake mode: nothing is opened (%1).").arg(p));
-        } else if (!p.isEmpty()) {
-            QDesktopServices::openUrl(QUrl::fromLocalFile(p));
-        }
-    });
+    help->setToolTip(QStringLiteral("Shows docs/TRACKING.md: every setting, where it comes from, what is not verified."));
+    connect(help, &QPushButton::clicked, this, [this] { showHelp(this, QStringLiteral("TRACKING.md")); });
     headRow->addWidget(help);
     outer->addLayout(headRow);
 
@@ -213,23 +207,19 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
     left->addWidget(modeCard_);
 
     // ---- session
-    sessionCard_ = new pibridge::ui::Card(QStringLiteral("Session: SteamVR + Monado"));
+    sessionCard_ = new pibridge::ui::Card(QStringLiteral("Session: SteamVR"));
     sessionCard_->body()->addWidget(pibridge::ui::dimLabel(QStringLiteral(
-        "Inside-out runs as a SteamVR driver: START VR (Dashboard) starts the camera broker, the controller tracker and "
-        "SteamVR with the Monado driver, which feeds the head and controller poses into SteamVR using the settings "
-        "below. Games start through SteamVR as usual. The display driver CustomHeadsetOpenVR keeps running (brightness, "
+        "START VR (Dashboard) starts the camera broker and pibridge-headtrack, which tracks the head and the controllers "
+        "with the settings below, then SteamVR: CustomHeadsetOpenVR shows the poses in SteamVR, as with the Lighthouse "
+        "faceplate. Games start through SteamVR as usual. The display driver CustomHeadsetOpenVR keeps running (brightness, "
         "contrast, the lens and quad views all still apply); Stop, closing SteamVR or closing PiBridge returns the "
         "headset to Lighthouse.")));
-    connector_ = new QComboBox;
-    connector_->setMinimumWidth(170);
+    // monado-service's DRM output (rec_connector=): kept in pibridge.conf, no longer shown (no Monado in the UI)
+    connector_ = new QComboBox(this);
+    connector_->hide();
     connect(connector_, &QComboBox::activated, this, [this](int i) {
         save(reckey::kConnector, i == 0 ? QString() : connector_->itemData(i).toString());
     });
-    addRow(sessionCard_, QStringLiteral("Display connector"),
-           QStringLiteral("The DRM output monado-service takes over for the headset (XRT_COMPOSITOR_WAYLAND_CONNECTOR): "
-                          "used by Record tracking and \"Monado directly\" on the Development page; with SteamVR its "
-                          "own compositor picks the display. Auto: the connector whose EDID says Pimax."),
-           connector_, [](const IoSettings&) { return true; });
     // Refresh rate is a display setting; it lives on the Display page and the Dashboard headset card, not here.
     drivers_ = pibridge::ui::dimLabel(QString());
     drivers_->setFont(pibridge::ui::bodyFont(12));
@@ -256,7 +246,9 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
     reasons_->setWordWrap(true);
     reasons_->setTextFormat(Qt::RichText);
     sessionCard_->body()->addWidget(reasons_);
-    left->addWidget(sessionCard_);
+    // START VR / STOP VR live on the Dashboard; the card is built (its state still followed) but not shown
+    sessionCard_->setParent(this);
+    sessionCard_->hide();
     connect(start_, &QPushButton::clicked, this, [this] { control_.start(); });
     connect(stop_, &QPushButton::clicked, this, [this] { control_.stop(); });
     connect(&control_, &IoSessionControl::changed, this, &TrackingPage::updateSession);
@@ -274,15 +266,14 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
            QStringLiteral("Basalt: the open-source tracker. Pimax: Pimax Play's own tracking engine with the headset's "
                           "factory calibration, run under Wine while tracking runs (its files are copied from Pimax Play "
                           "once, see docs/WINBRIDGE.md). Start and Stop start and stop it with SteamVR."),
-           engine_, [](const IoSettings& io) { return io.slamEngine == SlamEngine::Basalt; },
+           engine_, [](const IoSettings& io) { return io.slamEngine == SlamEngine::Pimax; },
            [engineMissing](const IoSettings& io, const RecSetup& s) { return engineMissing(io, s); });
     const auto needBase = [basaltOnly](const IoSettings& io, const RecSetup& s) -> QString {
         if (QString w = basaltOnly(io, s); !w.isEmpty()) {
             return w;
         }
         return s.slamConfig.path.isEmpty()
-                   ? QStringLiteral("Needs a base Basalt config (pimax-basalt.toml, Advanced); without it Monado uses "
-                                    "the driver's calibration and Basalt's built-in settings.")
+                   ? QStringLiteral("Needs a base Basalt config (pimax-basalt.toml, Advanced).")
                    : QString();
     };
     cams_ = seg({QStringLiteral("2 (lower pair)"), QStringLiteral("4 (all)")}, iokey::kSlamCams,
@@ -351,7 +342,7 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
     head->body()->addWidget(pibridge::ui::rule());
     anchor_ = toggle(iokey::kAnchor);
     addRow(head, QStringLiteral("Room anchor"),
-           QStringLiteral("Lets Monado move its world by an offset (PIMAX_ANCHOR): needed for RECENTER IN HEADSET on "
+           QStringLiteral("Lets the tracker move its world by an offset (PIMAX_ANCHOR): needed for RECENTER IN HEADSET on "
                           "the Room page, which puts the play area centre and forward where you stand and look."),
            anchor_, [](const IoSettings& io) { return !io.anchor; });
     anchorGlide_ = toggle(iokey::kAnchorGlide);
@@ -539,11 +530,9 @@ void TrackingPage::load() {
         "<p style='color:#9a9aa5'><b style='color:#f2b02e'>Inside-out</b> (experimental, no base stations): the "
         "headset's own cameras track the head in 6DoF and the controllers by their LEDs. By default it uses the "
         "<b style='color:#e6e6ec'>Pimax SLAM engine</b> &mdash; the same tracking Pimax Play uses on Windows, run on "
-        "Linux through Monado (the open-source Basalt engine is an alternative under Advanced). It needs monado-service "
-        "with the Pimax driver, the camera broker (pibridge-cam), the controller tracker (pibridge-ctrltrack) and the "
-        "headset's factory calibration. START VR runs it as a SteamVR driver, so games start through SteamVR as usual. "
-        "The settings below are used by START VR and, in every mode, by Record tracking and \"Monado directly\" "
-        "(Development page).</p>"));
+        "Linux by pibridge-headtrack (the open-source Basalt engine is an alternative under Advanced). It needs the "
+        "camera broker (pibridge-cam) and the headset's factory calibration. CustomHeadsetOpenVR shows the poses in "
+        "SteamVR, so games start through SteamVR as usual. The settings below are used by START VR.</p>"));
 
     connector_->clear();
     const QString conn = conf_.value(reckey::kConnector, QString()).trimmed();
@@ -611,8 +600,8 @@ void TrackingPage::load() {
                                                     "pibridge-slam at the start, from the factory file)")
                                    : QStringLiteral("<br>cameras: the lower pair (%1 in the base calibration)").arg(g.cams)));
         } else {
-            slamPreview_->setText(QStringLiteral("<span style='color:#f2b02e'>%1</span> Monado then uses the base "
-                                                 "config as it is, or the driver's calibration without one.")
+            slamPreview_->setText(QStringLiteral("<span style='color:#f2b02e'>%1</span> The base config is used as "
+                                                 "it is.")
                                       .arg(esc(g.error)));
         }
         slamPreview_->show();
@@ -631,15 +620,21 @@ void TrackingPage::load() {
     ps.sessionSlamCams = io_.slamCams == 4 && !ps.slamTool.isEmpty() && !ps.calib.path.isEmpty() ? 4 : 2;
     const IoSessionEnv env = buildIoEnv(io_, ps, conf_.refreshHz(), slamCfg, QString(), driverFile, s.steamVrPreload);
     QString pv;
-    if (s.steamVrPreload.isEmpty()) {
+    if (io_.headtrack) {
+        pv = QStringLiteral("pibridge-headtrack starts with:\n%1\nSteamVR (%2) starts as it is.")
+                 .arg(env.driver.join(QLatin1Char('\n')),
+                      s.steamVrStartup.isEmpty() ? QStringLiteral("not found") : s.steamVrStartup);
+    } else if (s.steamVrPreload.isEmpty()) {
         pv = QStringLiteral("Note: pimax_rttime_preload.so was not found next to monado-service (steamvr-monado/); "
                             "without it vrserver's realtime limit kills vrcompositor about 1 s after the start.\n");
     }
-    pv += QStringLiteral("START TRACKING: driver_monado reads (%1):\n%2\nSteamVR (%3) starts with:\n%4\n\n"
+    if (!io_.headtrack) {
+        pv += QStringLiteral("START TRACKING: driver_monado reads (%1):\n%2\nSteamVR (%3) starts with:\n%4\n\n"
                          "Record tracking and \"Monado directly\" (Development): monado-service:\n%5")
               .arg(driverFile, env.driver.join(QLatin1Char('\n')),
                    s.steamVrStartup.isEmpty() ? QStringLiteral("not found") : s.steamVrStartup,
                    env.steamvr.join(QLatin1Char('\n')), env.monado.join(QLatin1Char('\n')));
+    }
     for (const QString& n : env.notes) {
         pv += QStringLiteral("\nNote: ") + n;
     }
@@ -702,9 +697,8 @@ void TrackingPage::updateSession() {
     sessionCard_->chip()->set(ioChip(st, r.ready()));
     start_->setVisible(!active);
     start_->setEnabled(r.ready());
-    start_->setToolTip(r.ready() ? QStringLiteral("Starts the camera broker, the controller tracker and SteamVR with the "
-                                                  "Monado driver and the settings on this page. Stop closes exactly "
-                                                  "those and puts SteamVR's drivers back.")
+    start_->setToolTip(r.ready() ? QStringLiteral("Starts the camera broker, head tracking (pibridge-headtrack) and SteamVR "
+                                                  "with the settings on this page. Stop closes exactly those.")
                                  : r.blocking.join(QLatin1Char('\n')));
     stop_->setVisible(active);
     stop_->setEnabled(st != RecState::Stopping);
