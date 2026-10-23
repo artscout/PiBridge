@@ -1,5 +1,5 @@
 #!/bin/bash
-# PiBridge: the patched NVIDIA open modules for driver branches older than 615.71.09 (RTX 50, Ubuntu initramfs-tools),
+# PiBridge: the patched NVIDIA open modules for driver branches older than 615.71.09 (RTX 50, Ubuntu),
 # with the headset's EDID override, in one go:
 #  1. the patched modules (patches/nvidia/blackwell, signed with an enrolled MOK key) into
 #     /lib/modules/<kernel>/updates/pibridge-nvidia, which depmod prefers over the distribution's modules; they must be
@@ -63,7 +63,7 @@ install -m 644 "$HERE"/modules/*.ko "$D/"
 depmod -a "$K"
 echo "modules: $(modinfo -k "$K" -n nvidia_modeset)"
 
-# --- 2. EDID override (config, module option config_file, initramfs hook)
+# --- 2. EDID override (config, module option config_file, the initrd carry-over the helper picks)
 if [[ $EDID == 1 ]]; then
 	"$EDID_TOOL" apply
 fi
