@@ -135,7 +135,10 @@ void OverlayControl::pollRequest() {
     }
 }
 
-bool OverlayControl::wanted() const { return conf_.flag(kDashboardKey, false); }
+// Default ON: the overlay process runs with the app (it self-waits for SteamVR and reconnects), so the in-game
+// recenter ring and the dashboard launcher are there without the user turning anything on. It is invisible until the
+// SteamVR dashboard is opened or the recenter button is held, so running it always costs nothing on screen.
+bool OverlayControl::wanted() const { return conf_.flag(kDashboardKey, true); }
 
 bool OverlayControl::running() const {
     return fake_ ? fakeRunning_ : (proc_ && proc_->state() != QProcess::NotRunning);

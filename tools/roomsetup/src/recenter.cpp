@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include "recenter.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <format>
 #include <fstream>
 #include <iterator>
+#include <numbers>
 
 namespace pibridge::roomsetup {
 
@@ -66,7 +68,7 @@ std::string recenterResultText(const RecenterResult& r) {
                        r.floorStage ? std::format("{:.4f}", *r.floorStage) : std::string("keep"));
 }
 
-void RecenterFlow::frame(const room::FrameInput& in, const std::function<std::optional<RingSample>()>& ring) {
+void RecenterFlow::frame(const room::FrameInput& in, double now, const std::function<std::optional<RingSample>()>& ring) {
     if (!placed_ && in.headValid) {
         // 1.4 m in front of the head, level, facing it
         room::Vec3 f = in.head.axis(2) * -1.0;
@@ -81,22 +83,39 @@ void RecenterFlow::frame(const room::FrameInput& in, const std::function<std::op
     }
     for (std::size_t i = 0; i < 2; i++) {
         const room::HandInput& h = in.hands[i];
-        const std::uint64_t now = h.buttons;
+        const std::uint64_t btn = h.buttons;
         const std::uint64_t prev = prev_[i];
-        prev_[i] = now;
-        if (step_ == Step::Centre && pressed(now, prev, room::bit::Trigger)) {
-            const auto s = ring ? ring() : std::nullopt;
-            if (!s || s->pid == 0) {
-                error_ = "NO HEAD POSE FROM MONADO. IS ROOM ANCHOR ON (TRACKING PAGE)?";
-                continue;
+        prev_[i] = btn;
+        if (step_ == Step::Centre) {
+            // hold-to-recenter: the trigger must stay down for kHoldS while the ring fills; it fires on completion.
+            if ((btn & (1ULL << room::bit::Trigger)) != 0) {
+                const auto s = ring ? ring() : std::nullopt;
+                if (!s || s->pid == 0) {
+                    error_ = "NO HEAD POSE FROM MONADO. IS ROOM ANCHOR ON (TRACKING PAGE)?";
+                    holdHand_ = -1;
+                    holdProg_ = 0;
+                    continue;
+                }
+                error_.clear();
+                if (holdHand_ != static_cast<int>(i)) { // this hand just started the hold
+                    holdHand_ = static_cast<int>(i);
+                    holdStart_ = now;
+                }
+                holdProg_ = std::clamp((now - holdStart_) / kHoldS, 0.0, 1.0);
+                if (holdProg_ >= 1.0) { // the ring filled: take the newest head pose and move on
+                    head_ = *s;
+                    step_ = Step::Floor;
+                    holdHand_ = -1;
+                    holdProg_ = 0;
+                }
+            } else if (holdHand_ == static_cast<int>(i)) { // released before the ring filled: cancel the hold
+                holdHand_ = -1;
+                holdProg_ = 0;
             }
-            error_.clear();
-            head_ = *s;
-            step_ = Step::Floor;
-        } else if (step_ == Step::Floor && pressed(now, prev, room::bit::Menu)) {
+        } else if (step_ == Step::Floor && pressed(btn, prev, room::bit::Menu)) {
             result_ = RecenterResult{head_, std::nullopt};
             step_ = Step::Done;
-        } else if (step_ == Step::Floor && pressed(now, prev, room::bit::Trigger) && h.valid) {
+        } else if (step_ == Step::Floor && pressed(btn, prev, room::bit::Trigger) && h.valid) {
             // the floor touch is checked against the head, not against the stage's y = 0: the stage floor is what
             // is being fixed and can be off by more than a metre (live 2026-10-19: "not the floor" on the real floor)
             const double y = h.grip.pos().y;
@@ -135,13 +154,32 @@ std::vector<std::string> RecenterFlow::lines() const {
     return l;
 }
 
-void RecenterFlow::build(room::Batch& b) const {
+void RecenterFlow::build(room::Batch& b, double now) const {
     b.clear();
     const room::Vec3 up{0, 1, 0};
     double y = 0.12;
     for (const std::string& s : lines()) {
         room::drawTextCentered(b, s, at_ + up * y, right_, up, 0.008, {0.9f, 0.95f, 1.0f, 1.0f});
         y -= 0.08;
+    }
+    // the recenter hold ring (step Centre): a faint full circle (the track) with a bright wedge filling clockwise from
+    // the top to 2*pi*progress; it completes exactly as the recenter fires, so the user sees it coming.
+    if (step_ == Step::Centre && holdProg_ > 0.0) {
+        const room::Vec3 c = at_ + up * (y - 0.03); // just below the prompt
+        const double rad = 0.05;
+        const int segs = 48;
+        const auto dir = [&](double a) { return right_ * (std::sin(a) * rad) + up * (std::cos(a) * rad); };
+        const room::Rgba track{0.5F, 0.7F, 0.85F, 0.35F};
+        const float pulse = static_cast<float>(0.85 + 0.15 * std::sin(now * 8.0));
+        const room::Rgba fill = room::Rgba{0.3F, 1.0F, 0.75F, 0.95F}.alpha(0.95F * pulse);
+        const double tau = 2.0 * std::numbers::pi;
+        for (int k = 0; k < segs; k++) {
+            b.line(c + dir(tau * k / segs), c + dir(tau * (k + 1) / segs), track);
+        }
+        const int filled = static_cast<int>(std::ceil(segs * holdProg_));
+        for (int k = 0; k < filled; k++) {
+            b.tri(c, c + dir(tau * k / segs), c + dir(tau * (k + 1) / segs), fill);
+        }
     }
 }
 

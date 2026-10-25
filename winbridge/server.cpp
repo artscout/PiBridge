@@ -27,6 +27,8 @@ typedef int (*InitialFn)(const char*, const char*, const char*, void*, void*);
 typedef int (*SetByteFn)(int);
 typedef int (*PutCamFn)(void*, void*, void*, void*, float);
 typedef int (*PutImuFn)(void*, void*);
+// HeadsetGetGroundState / HeadsetGetLocModeState: one out pointer, int status (-1 engine down, 0 not ready, 1 valid).
+typedef int (*GetStateFn)(void*);
 
 // Head frame: {u64 ts; u32 exposure_ns; u32 gain; u32 idx; w; h; stride; px} (0 exposure = frame dropped).
 struct CamFrame {
@@ -55,12 +57,24 @@ typedef int (*CtrlPutImuFn)(int, void*, float*, float*);
 
 static PutCamFn g_putCam;
 static PutImuFn g_putImu;
+static GetStateFn g_getGround;  // HeadsetGetGroundState (null = DLL does not export it)
+static GetStateFn g_getLoc;     // HeadsetGetLocModeState
 static CtrlPutCamFn g_ctrlCam;
 static CtrlPutImuFn g_ctrlImu;
 static bool g_ctrlOn = false;
 static float g_devFromImu[2][4] = {{0, 0, 0, 1}, {0, 0, 0, 1}};  // ImuToDevice of each hand (quat x,y,z,w)
 static float g_head[13] = {0, 0, 0, 1};  // latest head pose (SLAM world)
 static bool g_headSeen = false;          // at least one IMU from the head arrived (otherwise world = headset)
+static uint64_t g_headTs = 0;            // timestamp of the IMU sample behind g_head (LED-frame staleness)
+// Head-pose history (SLAM world), so an LED camera frame is projected with the head pose AT ITS CAPTURE TIME, not the
+// latest IMU pose: the LED stream arrives ~17 ms after the same-time IMU (measured), and the LED engine is given no
+// timestamp for the head pose, so that lag becomes a controller error that follows head motion.
+static const int kHeadRing = 128;
+static uint64_t g_headRingTs[kHeadRing] = {0};
+static float g_headRing[kHeadRing][13];
+static int g_headRingPos = 0;
+static uint64_t g_headUsedTs = 0;        // ts of the pose head_at() last returned (for the staleness diagnostic)
+static bool g_ledHeadAlign = true;       // PIBRIDGE_LED_HEAD_ALIGN=0 feeds the latest pose instead (A/B test)
 
 // ---- LED engine axes: v_led = (x, z, -y), q_led = Q * q_slam, Q = Rx(-90 deg) ----
 static const float kQ[4] = {-0.70710678f, 0.0f, 0.0f, 0.70710678f};
@@ -72,6 +86,20 @@ static void qmul(const float a[4], const float b[4], float o[4]) {
 }
 static void to_led(const float v[3], float o[3]) { o[0] = v[0]; o[1] = v[2]; o[2] = -v[1]; }
 static void from_led(const float v[3], float o[3]) { o[0] = v[0]; o[1] = -v[2]; o[2] = v[1]; }
+
+// The head pose whose timestamp is nearest `ts` from recent history (nearest sample; IMU ~490 Hz so the residual is
+// well under 1 ms). Falls back to the latest pose while the ring is still filling.
+static const float* head_at(uint64_t ts) {
+    const float* best = g_head;
+    uint64_t bestTs = g_headTs, bestd = UINT64_MAX;
+    for (int i = 0; i < kHeadRing; ++i) {
+        if (g_headRingTs[i] == 0) continue;
+        uint64_t d = g_headRingTs[i] > ts ? g_headRingTs[i] - ts : ts - g_headRingTs[i];
+        if (d < bestd) { bestd = d; best = g_headRing[i]; bestTs = g_headRingTs[i]; }
+    }
+    g_headUsedTs = bestTs;
+    return best;
+}
 
 static bool recv_all(SOCKET s, void* buf, int n) {
     char* p = (char*)buf;
@@ -135,6 +163,10 @@ static bool init_slam() {
     if (!initial || !setMode || !enable || !g_putCam || !g_putImu) {
         fprintf(stderr, "not all SLAM exports found\n"); return false;
     }
+    // optional getters: the floor and the localization/recognition state (MSG_ROOMREQ). Absent on older DLLs.
+    g_getGround = (GetStateFn)GetProcAddress(h, "HeadsetGetGroundState");
+    g_getLoc = (GetStateFn)GetProcAddress(h, "HeadsetGetLocModeState");
+    printf("room state: GroundState=%s LocModeState=%s\n", g_getGround ? "yes" : "no", g_getLoc ? "yes" : "no");
     int r = initial(g_calib, g_slam, vocab, nullptr, nullptr);
     int m = setMode(1);
     int e = enable(1);
@@ -242,6 +274,7 @@ static void init_ctrl() {
 int main(int argc, char** argv) {
     int port = (argc > 1) ? atoi(argv[1]) : WINBRIDGE_PORT;
     setvbuf(stdout, nullptr, _IONBF, 0);
+    if (const char* a = getenv("PIBRIDGE_LED_HEAD_ALIGN")) g_ledHeadAlign = (atoi(a) != 0);
     if (!find_kit() || !init_slam()) return 1;
     init_ctrl();
 
@@ -280,6 +313,10 @@ int main(int argc, char** argv) {
                 g_putImu(&s, out);
                 memcpy(g_head, out, sizeof(g_head));
                 g_headSeen = true;
+                g_headTs = in.ts;
+                memcpy(g_headRing[g_headRingPos], out, sizeof(g_head));
+                g_headRingTs[g_headRingPos] = in.ts;
+                g_headRingPos = (g_headRingPos + 1) % kHeadRing;
                 PosePayload p;
                 p.ts = in.ts;
                 memcpy(p.pose, out, sizeof(p.pose));
@@ -318,11 +355,27 @@ int main(int argc, char** argv) {
                     // identity (controller poses are then relative to the headset)
                     HeadPoseForLed hp{};
                     hp.q[3] = 1.0f;
+                    const float* head = g_ledHeadAlign ? head_at(lh.ts) : g_head;
                     if (g_headSeen) {
-                        qmul(kQ, g_head, hp.q);
-                        to_led(g_head + 4, hp.p);
+                        qmul(kQ, head, hp.q);
+                        to_led(head + 4, hp.p);
                     }
-                    g_ctrlCam(&lf[0], &lf[1], &lf[2], &lf[3], &hp, nullptr);
+                    const int camRet = g_ctrlCam(&lf[0], &lf[1], &lf[2], &lf[3], &hp, nullptr);
+                    // DIAG (pibridge): ControllerPutCameraImage's return -- the candidate for how many LED points the
+                    // cameras matched this frame. Logged ~1/s so we can see it drop on fast swings / bad angles.
+                    static long ledFrameN = 0;
+                    if (++ledFrameN % 90 == 0) {
+                        // Head pose fed into the LED projection: how stale it is vs the LED frame (during a head turn
+                        // this Δt times the head's angular velocity is a controller error that follows head motion),
+                        // the raw SLAM head pose, and the LED-axis pose actually passed to the engine.
+                        const uint64_t usedTs = g_ledHeadAlign ? g_headUsedTs : g_headTs;
+                        const double stale_ms = (double)(int64_t)(lh.ts - usedTs) / 1e6;
+                        printf("LED optical: ControllerPutCameraImage=%d (frame %ld); head stale %.2f ms (align=%d); "
+                               "slam q[%.4f %.4f %.4f %.4f] p[%.3f %.3f %.3f]; led q[%.4f %.4f %.4f %.4f] p[%.3f %.3f %.3f]\n",
+                               camRet, ledFrameN, stale_ms, g_ledHeadAlign ? 1 : 0, head[0], head[1], head[2], head[3],
+                               head[4], head[5], head[6], hp.q[0], hp.q[1], hp.q[2], hp.q[3], hp.p[0], hp.p[1], hp.p[2]);
+                        fflush(stdout);
+                    }
                 }
                 if (!send_msg(c, MSG_ACK, nullptr, 0)) break;
                 ++ledN;
@@ -339,7 +392,16 @@ int main(int argc, char** argv) {
                     memcpy(s.accel, in.accel, sizeof(s.accel));
                     memcpy(s.gyro, in.gyro, sizeof(s.gyro));
                     float out[64] = {0};
-                    g_ctrlImu((int)in.hand, &s, out, ctrlScratch[in.hand]);
+                    const int imuRet = g_ctrlImu((int)in.hand, &s, out, ctrlScratch[in.hand]);
+                    // DIAG (pibridge): ControllerPutControllerImuData's return + the out[] tail past the pose (we use
+                    // out[0..12]); one of these may be the per-hand matched-LED count or a tracking confidence.
+                    static long imuLogN[2] = {0, 0};
+                    if (++imuLogN[in.hand] % 250 == 0) {
+                        printf("ctrl %d: ControllerPutControllerImuData=%d, out[13..26] %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f\n",
+                               in.hand, imuRet, out[13], out[14], out[15], out[16], out[17], out[18], out[19], out[20],
+                               out[21], out[22], out[23], out[24], out[25], out[26]);
+                        fflush(stdout);
+                    }
                     if (out[4] != 0.0f || out[5] != 0.0f || out[6] != 0.0f) {
                         // from LED engine axes into the SLAM world: q = Q^-1 * q_led, vectors (x, -z, y)
                         const float qinv[4] = {-kQ[0], -kQ[1], -kQ[2], kQ[3]};
@@ -360,6 +422,26 @@ int main(int argc, char** argv) {
                     ++cimuN[in.hand];
                 }
                 if (!send_msg(c, MSG_CPOSE, &p, sizeof(p))) break;
+            } else if (h.type == MSG_ROOMREQ && h.len == 0) {
+                // the room state: the Pimax engine's own floor and localization getters. The engine writes a small
+                // struct into the out buffer (flag + floats for the floor, one byte for the localization state); give
+                // it a generous zeroed buffer and forward the first bytes verbatim.
+                RoomStatePayload p{};
+                if (g_getGround) {
+                    uint8_t buf[256] = {0};
+                    p.ground_ret = g_getGround(buf);
+                    memcpy(p.ground, buf, sizeof(p.ground));
+                } else {
+                    p.ground_ret = -2;
+                }
+                if (g_getLoc) {
+                    uint8_t buf[64] = {0};
+                    p.loc_ret = g_getLoc(buf);
+                    p.loc_state = buf[0];
+                } else {
+                    p.loc_ret = -2;
+                }
+                if (!send_msg(c, MSG_ROOMSTATE, &p, sizeof(p))) break;
             } else {
                 fprintf(stderr, "unknown message type=%u len=%u\n", h.type, h.len);
                 break;

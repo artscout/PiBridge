@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <initializer_list>
 #include <chrono>
 #include <cmath>
 #include <numeric>
@@ -268,7 +269,8 @@ std::optional<light::Advice> check_light(RingGuide& gd, const std::string& title
 
 R<void> map_with_feedback(RingGuide& gd, const std::string& title, const std::string& text, Args args, bool append,
                           const std::function<void(const light::MapProgress&)>& also = {},
-                          const std::function<bool()>* stop_early = nullptr) {
+                          const std::function<bool()>* stop_early = nullptr,
+                          const std::function<void(const std::vector<guide::P3f>&)>* scan = nullptr) {
     if (append) {
         args.push_back("--append");
     } else {
@@ -290,7 +292,7 @@ R<void> map_with_feedback(RingGuide& gd, const std::string& title, const std::st
         last = Clock::now();
         std::printf("room setup: %s: %s\n", title.c_str(), light::progress_text(p).c_str());
     };
-    return gd.during(title, text, [&] { return cmd_build_with(args, &cb, stop_early); });
+    return gd.during(title, text, [&] { return cmd_build_with(args, &cb, stop_early, scan); });
 }
 
 void backup_map(const std::string& dir) {
@@ -474,6 +476,14 @@ R<setup::RoomSetup> run_steps(RingGuide& gd, setup::SetupMode mode, const std::s
         }
         if (auto f = save_fix_from_current(dir, pid, "room setup (map built in this session)"); !f) {
             return std::unexpected(f.error());
+        } else {
+            // the live world becomes the corrected room frame now (see run_steps_headset): the chaperone written at
+            // the end is then in the frame every later session relocalizes into
+            Alignment al = f->align;
+            al.t[1] = 0.0;
+            if (auto w = store::write_offset(al, pid); !w) {
+                std::fprintf(stderr, "room setup: the room offset could not be applied: %s\n", w.error().text().c_str());
+            }
         }
     }
     auto res = store::RelocResult::load(cam::path_join(dir, "last-reloc.toml"));
@@ -578,6 +588,16 @@ public:
         st_.boundary = std::move(b);
         publish();
     }
+    /// The growing scan cloud for the headset overlay (room frame): a binary file of its own (not the text state),
+    /// overwritten atomically; the headset polls it during the map step. Already throttled by the caller's tick.
+    void scan(const std::vector<guide::P3f>& pts) {
+        if (auto w = guide::write_atomic(guide_, guide::POINTS_FILE, guide::format_points(pts)); !w) {
+            std::fprintf(stderr, "%s\n", w.error().c_str());
+        }
+        if (++scan_log_ % 5 == 0) {
+            std::printf("room setup: scan cloud %zu points -> %s\n", pts.size(), guide::POINTS_FILE);
+        }
+    }
 
     /// The next answer of the headset for `step`: an error when the headset tool is gone, the head feed is lost, the
     /// user stopped the setup in the headset, or nothing came in `timeout_s`.
@@ -647,7 +667,27 @@ private:
     std::optional<double> eye_;
     guide::State st_;
     std::uint64_t last_ = 0;
+    int scan_log_ = 0; // rate-limit the scan-cloud write log
 };
+
+/// The headset's next answer for `step` whose kind is one of `kinds`; any other kind (a stray repeat / back / next from
+/// a chip the step does not have) is ignored and the wait goes on. This is the rule for EVERY menu-like step: an
+/// unexpected answer must never advance the flow with a default value (the infinite-repeat / wrong-step bugs).
+R<guide::Answer> wait_for(HeadsetGuide& gd, const std::string& step, std::initializer_list<const char*> kinds,
+                          double timeout_s) {
+    for (;;) {
+        auto a = gd.wait(step, timeout_s);
+        if (!a) {
+            return a;
+        }
+        for (const char* k : kinds) {
+            if (a->kind == k) {
+                return a;
+            }
+        }
+        std::printf("room setup: ignoring answer \"%s\" on step %s\n", a->kind.c_str(), step.c_str());
+    }
+}
 
 /// The fast setup with the headset's answers: the same mapping as run_steps (relocalise a saved map or map anew, the
 /// room fix of this session), then the floor shown as a grid on the real floor (trigger = yes, or a controller
@@ -661,6 +701,9 @@ R<setup::RoomSetup> run_steps_headset(HeadsetGuide& gd, const std::string& dir, 
         return s({"--source", "broker", "--seconds", rf::fixed(secs_, 0).c_str(), "--name", name.c_str()});
     };
     const std::function<void(const light::MapProgress&)> fb = [&gd](const light::MapProgress& p) { gd.mapping(p); };
+    const std::function<void(const std::vector<guide::P3f>&)> scanCb = [&gd](const std::vector<guide::P3f>& pts) {
+        gd.scan(pts);
+    };
     gd.step("wear");
     if (auto w = wait_for_wear(gd, 60.0); !w) {
         return std::unexpected(w.error());
@@ -684,7 +727,7 @@ R<setup::RoomSetup> run_steps_headset(HeadsetGuide& gd, const std::string& dir, 
                "Point at a button and pull the trigger. FULL MAPPING: walk the room and trace the boundary. QUICK SETUP: "
                "look around where you stand and keep the free area found for you.",
                std::nullopt);
-        auto a = gd.wait("mode", 600.0);
+        auto a = wait_for(gd, "mode", {"mode"}, 600.0);
         if (!a) {
             return std::unexpected(a.error());
         }
@@ -696,6 +739,37 @@ R<setup::RoomSetup> run_steps_headset(HeadsetGuide& gd, const std::string& dir, 
     const double walk_s = full ? std::max(map_s, 60.0) : map_s;
     std::printf("room setup mode: %s (map walk %s s)\n", full ? "full" : "quick", rf::fixed(walk_s, 0).c_str());
 
+    // Full setup asks the user's standing HEIGHT (рост) up front, in one step -- there is NO separate "floor" step. The
+    // headset shows a stature taken from the head and the user fine-tunes it with the stick; the floor is derived from
+    // it (the eye height) after the walk. (Quick uses the posture preset instead.)
+    double full_eye = gd.eye().value_or(setup::FLOOR_DROP_STAND_M);
+    // the head's RAW y at the moment the stature was measured (the headset sends it with the eye height): the floor is
+    // that head, in the posture the height was taken, minus the eye height - not the head after the walk / at FINISH
+    std::optional<double> full_head_raw_y;
+    const auto take_eye = [&](const guide::Answer& a) {
+        if (a.kind == "eye" && !a.nums.empty()) {
+            full_eye = a.nums[0];
+            full_head_raw_y.reset();
+            if (a.nums.size() >= 2) {
+                full_head_raw_y = a.nums[1];
+            }
+        }
+    };
+    if (full) {
+        gd.step("height");
+        gd.say("Your height",
+               "Stand up straight and look ahead. Set your height with the thumbstick if it is off, then press NEXT.",
+               std::nullopt);
+        auto a = wait_for(gd, "height", {"eye", "next"}, 600.0);
+        if (!a) {
+            return std::unexpected(a.error());
+        }
+        take_eye(*a);
+        std::printf("room setup: height -> eye height %s m%s\n", rf::fixed(full_eye, 2).c_str(),
+                    full_head_raw_y ? (", head raw y " + rf::fixed(*full_head_raw_y, 3, true) + " m at the measure").c_str()
+                                    : "");
+    }
+
     // Quick setup asks the posture and the play-area size up front: the posture sets the floor drop below the head
     // (standing / seated) and the size sets the play-circle radius.
     setup::Posture posture = setup::Posture::Stand;
@@ -703,7 +777,7 @@ R<setup::RoomSetup> run_steps_headset(HeadsetGuide& gd, const std::string& dir, 
     if (!full) {
         gd.step("posture");
         gd.say("Posture", "Will you play STANDING or SEATED? Point at a button and pull the trigger.", std::nullopt);
-        if (auto a = gd.wait("posture", 600.0)) {
+        if (auto a = wait_for(gd, "posture", {"posture"}, 600.0)) {
             posture = setup::posture_parse(a->nums.empty() ? 0 : static_cast<int>(std::lround(a->nums[0])));
         } else {
             return std::unexpected(a.error());
@@ -711,7 +785,7 @@ R<setup::RoomSetup> run_steps_headset(HeadsetGuide& gd, const std::string& dir, 
         gd.step("size");
         gd.say("Play area size", "How much space do you have? SMALL ~1 m, MEDIUM ~1.5 m, BIG ~2 m around you.",
                std::nullopt);
-        if (auto a = gd.wait("size", 600.0)) {
+        if (auto a = wait_for(gd, "size", {"size"}, 600.0)) {
             quick_radius =
                 setup::zone_radius(setup::zone_size_parse(a->nums.empty() ? 1 : static_cast<int>(std::lround(a->nums[0]))));
         } else {
@@ -725,9 +799,12 @@ R<setup::RoomSetup> run_steps_headset(HeadsetGuide& gd, const std::string& dir, 
     // Room binding: recognise this space against a saved map (relocalize); if recognised, skip the look-around so the
     // user does not have to look around again; otherwise (not recognised, or no saved map) do one look-around to start
     // tracking and save a map. Applies to both flows.
+    // Full setup always maps the room AFRESH: never skip the look-around by recognising a saved map (the saved one is
+    // then overwritten by this walk -- a fresh scan, as the user expects from "full"). Quick still relocalizes to skip
+    // the walk when the room is recognised.
     const bool saved_room = cam::path_exists(cam::path_join(dir, "map.bin"));
     bool recognised = false;
-    if (saved_room) {
+    if (saved_room && !full) {
         gd.step("map");
         const auto r = gd.during(title, look, [&] {
             return cmd_relocalize(s({"--source", "broker", "--seconds", "20", "--name", name.c_str()}));
@@ -745,11 +822,20 @@ R<setup::RoomSetup> run_steps_headset(HeadsetGuide& gd, const std::string& dir, 
     if (!recognised) {
         gd.step("map");
         backup_map(dir);
-        if (auto m = map_with_feedback(gd, title, look, map_args(walk_s), false, fb, &stop_cb); !m) {
+        if (auto m = map_with_feedback(gd, title, look, map_args(walk_s), false, fb, &stop_cb, &scanCb); !m) {
             return std::unexpected(m.error());
         }
         if (auto f = save_fix_from_current(dir, pid, "room setup look-around"); !f) {
             return std::unexpected(f.error());
+        } else {
+            // Make the tracker's live world the CORRECTED room frame right away (room_from_slam with the walk's loop
+            // closure, y = 0: SteamVR owns the floor). The chaperone committed at the end of this setup is then written
+            // in exactly the frame every later session relocalizes into, so the play area restores where it was drawn.
+            Alignment al = f->align;
+            al.t[1] = 0.0;
+            if (auto w = store::write_offset(al, pid); !w) {
+                std::fprintf(stderr, "room setup: the room offset could not be applied: %s\n", w.error().text().c_str());
+            }
         }
     }
 
@@ -799,7 +885,7 @@ R<setup::RoomSetup> run_steps_headset(HeadsetGuide& gd, const std::string& dir, 
         if (const auto h = gd.sample().head) {
             gd.boundary(setup::circle({h->first[0], h->first[2]}, quick_radius, 32)); // preview the play circle
         }
-        if (auto a = gd.wait("confirm", 600.0); !a) {
+        if (auto a = wait_for(gd, "confirm", {"next"}, 600.0); !a) {
             return std::unexpected(a.error());
         }
         const auto [centre, yaw, head_y] = head_now();
@@ -818,36 +904,27 @@ R<setup::RoomSetup> run_steps_headset(HeadsetGuide& gd, const std::string& dir, 
     std::string phase = "floor";
     while (phase != "finish") {
         if (phase == "floor") {
-            // the floor starts the entered eye height (else 1.60 m) below the head; the headset shows "the floor is N m
-            // below your face" and the thumbstick nudges it +/- 1 cm within 1.00..2.00 m. NEXT answers with the drop.
-            const auto [c0, yaw0, head_y0] = head_now();
-            (void)c0;
-            (void)yaw0;
-            const double drop_default = gd.eye().value_or(setup::FLOOR_DROP_STAND_M);
-            gd.floor_y(head_y0 - drop_default);
-            gd.step("floor-confirm");
-            gd.say("Floor", "The grid shows the floor below your feet. Nudge it up / down with the thumbstick, then press "
-                            "NEXT.",
-                   std::nullopt);
-            auto fa = gd.wait("floor-confirm", 600.0);
-            if (!fa) {
-                return std::unexpected(fa.error());
+            // No separate floor step: the floor is the user's HEIGHT (full_eye, the eye height set on the HEIGHT step
+            // before the walk) below the head now. Record it and go straight to the boundary. BACK on the boundary
+            // re-asks the height.
+            // The head the floor hangs from: the one at the stature measurement (raw y + the room fix's vertical = the
+            // same room frame head_now() samples in), so the floor is exact for the posture the height was taken in.
+            // Without it (an old headset build) the head now, standing after the walk.
+            double head_y0 = 0;
+            if (full_head_raw_y) {
+                head_y0 = *full_head_raw_y + res->align.t[1];
+            } else {
+                const auto [c0, yaw0, hy0] = head_now();
+                (void)c0;
+                (void)yaw0;
+                head_y0 = hy0;
             }
-            if (fa->kind == "repeat") {
-                gd.floor_y(head_y0 - drop_default);
-                continue;
+            if (auto w = save_floor(head_y0, full_eye); !w) {
+                return std::unexpected(w.error());
             }
-            if (fa->kind == "height" && fa->nums.size() == 2) {
-                // nums[0] = floor room y (head - drop), nums[1] = the head-relative drop (clamped in the headset)
-                const auto [cc, yy, hy] = head_now();
-                (void)cc;
-                (void)yy;
-                if (auto w = save_floor(hy, fa->nums[1]); !w) {
-                    return std::unexpected(w.error());
-                }
-                std::printf("floor set %s m below the face\n", rf::fixed(fa->nums[1], 2).c_str());
-                phase = "boundary";
-            }
+            std::printf("floor from height: %s m below the %s (head y %s m in the room frame)\n", rf::fixed(full_eye, 2).c_str(),
+                        full_head_raw_y ? "head at the measure" : "head now", rf::fixed(head_y0, 3, true).c_str());
+            phase = "boundary";
             continue;
         }
         // phase == "boundary"
@@ -865,7 +942,17 @@ R<setup::RoomSetup> run_steps_headset(HeadsetGuide& gd, const std::string& dir, 
                 return std::unexpected(a.error());
             }
             if (a->kind == "back") {
-                phase = "floor";
+                // no floor step to go back to: re-ask the HEIGHT, then re-derive the floor from it
+                gd.step("height");
+                gd.say("Your height",
+                       "Stand up straight and look ahead. Set your height with the thumbstick, then press NEXT.",
+                       std::nullopt);
+                auto ha = wait_for(gd, "height", {"eye", "next"}, 600.0);
+                if (!ha) {
+                    return std::unexpected(ha.error());
+                }
+                take_eye(*ha);
+                phase = "floor"; // the floor block re-saves from the new height, then returns to the boundary
                 break;
             }
             if (a->kind == "repeat") {

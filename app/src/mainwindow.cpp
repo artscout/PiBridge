@@ -227,7 +227,9 @@ MainWindow::MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder 
     rv->addWidget(sb);
 
     setCentralWidget(root);
-    resize(1200, 860); // resizable; the layout stretches fine (user 2026-10-20)
+    // Open wide enough that the Dashboard cards don't overlap; before the Room page lost its "Set up your playspace"
+    // card it was the Room page's larger minimum that held the window this wide (user 2026-10-24).
+    resize(1600, 1000); // resizable; the layout stretches fine (user 2026-10-20)
     connect(&source_, &StateSource::changed, this, &MainWindow::applyState);
     applyState();
     showPage(Dashboard);

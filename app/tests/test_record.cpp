@@ -224,6 +224,24 @@ TEST(setup_lookup_order) {
     CHECK(s.camDevice.isEmpty() && s.camDeviceFromConf);
 }
 
+TEST(lens_profile_native_is_the_default) {
+    QTemporaryDir d;
+    const RecEnv env = envFor(d);
+    const QString ext = env.home + QStringLiteral("/gamedev/ext/lens/");
+    writeAll(ext + QStringLiteral("crystal-pimax-native.conf"), "lut = crystal-pimax-native-lut.bin\n");
+    writeAll(ext + QStringLiteral("crystal-chovr.conf"), "lut = crystal-chovr-lut.bin\n");
+    Conf none(d.path() + QStringLiteral("/none.conf"));
+    CHECK(resolveRecSetup(none, env).lens.path == ext + QStringLiteral("crystal-pimax-native.conf"));
+    for (const char* v : {"chovr", "default"}) { // "default" = the chovr choice saved by older versions
+        const QString cp = d.path() + QStringLiteral("/l-") + QString::fromLatin1(v) + QStringLiteral(".conf");
+        writeAll(cp, QByteArray("lens_profile=") + v + "\n");
+        Conf c(cp);
+        CHECK(resolveRecSetup(c, env).lens.path == ext + QStringLiteral("crystal-chovr.conf"));
+    }
+    CHECK(isChovrLensProfile(QStringLiteral(" chovr ")) && !isChovrLensProfile(QStringLiteral("native")) &&
+          !isChovrLensProfile(QString()));
+}
+
 TEST(system_check_from_proc) {
     QTemporaryDir d;
     writeAll(d.path() + QStringLiteral("/12/comm"), "monado-service\n");
@@ -597,7 +615,8 @@ TEST(command_lines_and_environment) {
     const RecProcSpec b = brokerSpec(s, QStringLiteral("/r/x/logs"));
     CHECK(b.program == s.cam.path);
     CHECK((b.args == QStringList{QStringLiteral("broker"), QStringLiteral("--source"), QStringLiteral("/dev/video0"),
-                                 QStringLiteral("--socket"), s.brokerSocket}));
+                                 QStringLiteral("--fps"), QString::number(s.camFps), QStringLiteral("--socket"),
+                                 s.brokerSocket}));
     CHECK(b.logPath == QStringLiteral("/r/x/logs/broker.log"));
     const RecProcSpec c = ctrltrackSpec(s, QStringLiteral("/r/x/logs"));
     CHECK((c.args == QStringList{QStringLiteral("live"), QStringLiteral("--source"), QStringLiteral("broker:") + s.brokerSocket,

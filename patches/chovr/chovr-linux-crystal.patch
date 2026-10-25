@@ -113,7 +113,7 @@ diff --git a/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp b/CustomHeadsetOpenV
 index 17cad3a..fc4ddab 100644
 --- a/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp
 +++ b/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp
-@@ -670,4 +670,371 @@ void PimaxSlamDriver::PvrTrackingThread() {
+@@ -670,4 +670,381 @@ void PimaxSlamDriver::PvrTrackingThread() {
  	DriverLog("PVR tracking thread stopped");
  }
  
@@ -183,9 +183,19 @@ index 17cad3a..fc4ddab 100644
 +			container, vr::Prop_ModelNumber_String, isLeft ? "Oculus Quest2 (Left Controller)" : "Oculus Quest2 (Right Controller)");
 +		vr::VRProperties()->SetStringProperty(container, vr::Prop_InputProfilePath_String, "{oculus}/input/touch_profile.json");
 +		vr::VRProperties()->SetStringProperty(container, vr::Prop_ControllerType_String, "oculus_touch");
-+		// SteamVR's own model (the Crystal controller models are in Pimax's Windows driver)
-+		vr::VRProperties()->SetStringProperty(
-+			container, vr::Prop_RenderModelName_String, isLeft ? "oculus_quest2_controller_left" : "oculus_quest2_controller_right");
++		// Pimax's own Crystal controller model when it has been copied into SteamVR's render models
++		// (SteamVR/resources/rendermodels/crystal_controller_{left,right}/, see INSTALL.md); otherwise the Oculus model
++		// so a controller still shows. SteamVR does not search an EXTERNAL driver's own resources for models by name,
++		// so they live in the SteamVR resources, not here.
++		const char* crystalName = isLeft ? "crystal_controller_left" : "crystal_controller_right";
++		const std::string crystalObj =
++			driverConfigLoader.info.steamvrResources + "rendermodels/" + crystalName + "/" + crystalName + ".obj";
++		const bool haveCrystal = !driverConfigLoader.info.steamvrResources.empty() && access(crystalObj.c_str(), F_OK) == 0;
++		DriverLog("Pimax controller %s render model: %s (%s)", isLeft ? "left" : "right",
++			haveCrystal ? crystalName : (isLeft ? "oculus_quest2_controller_left" : "oculus_quest2_controller_right"),
++			haveCrystal ? crystalObj.c_str() : ("not found: " + crystalObj).c_str());
++		vr::VRProperties()->SetStringProperty(container, vr::Prop_RenderModelName_String,
++			haveCrystal ? crystalName : (isLeft ? "oculus_quest2_controller_left" : "oculus_quest2_controller_right"));
 +		vr::VRProperties()->SetUint64Property(container, vr::Prop_CurrentUniverseId_Uint64, k_UniverseId);
 +		vr::VRProperties()->SetBoolProperty(container, vr::Prop_DeviceProvidesBatteryStatus_Bool, true);
 +

@@ -63,6 +63,7 @@ std::unique_ptr<VitHost> VitHost::open(const std::string& library, std::uint32_t
     h->ext_led_ = ::dlsym(h->lib_, "pibridge_wb_push_led");
     h->ext_imu_ = ::dlsym(h->lib_, "pibridge_wb_push_ctrl_imu");
     h->ext_pose_ = ::dlsym(h->lib_, "pibridge_wb_ctrl_pose");
+    h->ext_room_ = ::dlsym(h->lib_, "pibridge_wb_room_state");
     h->ext_ok_ = ver != nullptr && ver() == PIBRIDGE_WB_EXT_VERSION && h->ext_led_ && h->ext_imu_ && h->ext_pose_;
     return h;
 }
@@ -173,6 +174,22 @@ std::optional<EngineControllerPose> VitHost::controller_pose(std::uint32_t hand)
     std::memcpy(e.head_p, p.head_p, sizeof e.head_p);
     std::memcpy(e.dev_from_imu, p.dev_from_imu, sizeof e.dev_from_imu);
     return e;
+}
+
+std::optional<RoomState> VitHost::room_state() {
+    if (!ext_ok_ || ext_room_ == nullptr) {
+        return std::nullopt;
+    }
+    pibridge_wb_room_state p{};
+    if (reinterpret_cast<pibridge_wb_room_state_fn>(ext_room_)(&p) != 1) {
+        return std::nullopt; // no reply received yet
+    }
+    RoomState r;
+    r.ground_ret = p.ground_ret;
+    r.loc_ret = p.loc_ret;
+    std::memcpy(r.ground, p.ground, sizeof r.ground);
+    r.loc_state = p.loc_state;
+    return r;
 }
 
 } // namespace pibridge::headtrack

@@ -5,6 +5,7 @@
 
 #include "pibridge/anchor/world.h"
 #include "pibridge/cam/calib.h"
+#include "pibridge/roommap/guide_ipc.h"
 #include "pibridge/roommap/light.h"
 #include "pibridge/roommap/session.h"
 #include "pibridge/roommap/stereo.h"
@@ -48,7 +49,10 @@ R<void> write_offset(const std::string& dir, const store::RelocResult& res, std:
 /// `build` with live progress for the room setup's panel (live source only). `stop_early` (optional) lets the
 /// headset end the look-around walk before the timer / coverage target (the Finish chip).
 R<void> cmd_build_with(Args v, const std::function<void(const light::MapProgress&)>* progress,
-                       const std::function<bool()>* stop_early = nullptr);
+                       const std::function<bool()>* stop_early = nullptr,
+                       // the growing scan cloud (room frame, metres) for the headset's "scanning" overlay, fed ~a few
+                       // times a second during the walk; nullptr when no headset is watching (plain `build`).
+                       const std::function<void(const std::vector<guide::P3f>&)>* scan = nullptr);
 R<void> cmd_relocalize(Args v);
 /// Why a live capture got no head poses, in plain words.
 std::string no_poses_text(const std::string& what);

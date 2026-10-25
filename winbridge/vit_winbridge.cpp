@@ -45,7 +45,7 @@ constexpr size_t kMaxQueue = 4096;   // ~4 s of IMU; beyond that the oldest is d
 constexpr uint32_t kMaxFrames = 6;   // frame sets queued (1.2 MB each); extra new ones are dropped
 
 struct Item {
-    enum Kind { Imu, Cam, Led, CtrlImu } kind = Imu;
+    enum Kind { Imu, Cam, Led, CtrlImu, RoomReq } kind = Imu;
     ImuPayload imu;
     CamHeader ch;
     LedHeader lh;
@@ -86,6 +86,10 @@ struct vit_tracker {
     // controllers (pibridge_winbridge_ext.h): the latest pose of each hand
     pibridge_wb_ctrl_pose ctrl[2] = {};
     bool ctrl_tracked[2] = {false, false};
+
+    // the latest room state (floor + localization) from winbridge, refreshed on each pibridge_wb_room_state() call
+    pibridge_wb_room_state room = {};
+    bool have_room = false;
 
     // The engine tracks in the saved map's frame, whose origin is tens of meters away (head poses ~95 m from 0).
     // Basalt starts at zero; we remove this constant offset on the first pose so that the head, the room map (roommap
@@ -188,6 +192,15 @@ void read_replies(vit_tracker* t, int s, std::deque<Item::Kind>* inflight, std::
                 }
                 memcpy(t->ctrl[p.hand].dev_from_imu, p.dev_from_imu, sizeof(p.dev_from_imu));
             }
+        } else if (h.type == MSG_ROOMSTATE && h.len == sizeof(RoomStatePayload) && k == Item::RoomReq) {
+            RoomStatePayload p{};
+            if (!recv_all(s, &p, sizeof(p))) break;
+            std::lock_guard<std::mutex> lk(t->m);
+            t->room.ground_ret = p.ground_ret;
+            t->room.loc_ret = p.loc_ret;
+            memcpy(t->room.ground, p.ground, sizeof(t->room.ground));
+            t->room.loc_state = p.loc_state;
+            t->have_room = true;
         } else if (h.type == MSG_ACK && h.len == 0 && (k == Item::Cam || k == Item::Led)) {
             if (k == Item::Cam) want_pose = true;
         } else {
@@ -211,6 +224,7 @@ void run(vit_tracker* t) {
                 t->q.clear();
                 t->frames_queued = 0;
                 t->ctrl_tracked[0] = t->ctrl_tracked[1] = false;
+                t->have_room = false;
             }
             std::this_thread::sleep_for(std::chrono::seconds(1));
             continue;
@@ -243,6 +257,11 @@ void run(vit_tracker* t) {
                 ok = send_all(s, &h, sizeof(h)) && send_all(s, &it.cimu, sizeof(it.cimu));
                 break;
             }
+            case Item::RoomReq: {
+                const MsgHeader h{MSG_ROOMREQ, 0};
+                ok = send_all(s, &h, sizeof(h));
+                break;
+            }
             case Item::Cam: {
                 const MsgHeader h{MSG_CAM, (uint32_t)(sizeof(CamHeader) + it.px.size())};
                 ok = send_all(s, &h, sizeof(h)) && send_all(s, &it.ch, sizeof(it.ch)) &&
@@ -265,6 +284,7 @@ void run(vit_tracker* t) {
         ::close(s);
         std::lock_guard<std::mutex> lk(t->m);
         t->ctrl_tracked[0] = t->ctrl_tracked[1] = false;
+        t->have_room = false;
     }
 }
 
@@ -490,6 +510,23 @@ __attribute__((visibility("default"))) int pibridge_wb_ctrl_pose(uint32_t hand, 
     if (!t->ctrl_tracked[hand]) return 0;
     *out = t->ctrl[hand];
     return 1;
+}
+
+__attribute__((visibility("default"))) int pibridge_wb_room_state(pibridge_wb_room_state* out) {
+    vit_tracker* t = g_tracker.load();
+    if (!t || !out) return 0;
+    int had;
+    {
+        std::lock_guard<std::mutex> lk(t->m);
+        had = t->have_room ? 1 : 0;
+        if (had) *out = t->room;
+    }
+    if (t->running) {  // queue a refresh so the next poll has a fresh value (the reply is asynchronous)
+        Item it{};
+        it.kind = Item::RoomReq;
+        enqueue(t, std::move(it));
+    }
+    return had;
 }
 
 }  // extern "C"

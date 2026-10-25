@@ -17,7 +17,9 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <string_view>
 
 namespace pibridge::headtrack {
 
@@ -41,8 +43,16 @@ public:
     RigidPose update(std::int64_t ts_ns, const RigidPose& raw, bool position_valid, double head_dps, std::int64_t now_ns);
     /// Recenter at the next update (any thread).
     void request_recenter() { recenter_wanted_ = true; }
+    /// Where the floor-aligning diagnostics go (headtrack's log). Set once, before update() runs.
+    void set_log(std::function<void(std::string_view)> f) { log_ = std::move(f); }
 
 private:
+    void say(const std::string& s) const {
+        if (log_) {
+            log_(s);
+        }
+    }
+
     void create_ring();
     void keep_ring(std::int64_t now_ns);
     void record(std::int64_t ts_ns, const RigidPose& raw, bool position_valid);
@@ -60,6 +70,14 @@ private:
     std::uint32_t generation_ = 0, seen_generation_ = 0;
     RigidPose recenter_;
     std::atomic<bool> recenter_wanted_{false};
+    std::function<void(std::string_view)> log_;
+    std::int64_t last_glide_log_ns_ = 0; // rate-limit the glide log
+    std::int64_t last_floor_log_ns_ = 0; // rate-limit the floor diagnostic
+    bool gliding_ = false;               // a glide is in progress (log once when it settles)
+    // The anchor's vertical (floor) shift is disabled by default: the floor is SteamVR's chaperone (eye-height), not
+    // the room anchor (a Monado-era mechanism that conflicts with the chaperone floor). PIBRIDGE_ANCHOR_VERTICAL=1
+    // restores it. The horizontal recenter (x, z, yaw) is unchanged either way.
+    bool apply_vertical_ = true;
 };
 
 /// a * b

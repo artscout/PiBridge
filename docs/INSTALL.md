@@ -286,6 +286,17 @@ mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release && make -j8
 ~/.steam/steam/steamapps/common/SteamVR/bin/vrpathreg.sh adddriver "$PWD/CustomHeadsetOpenVR"
 ```
+Optional — Pimax's own controller models (otherwise SteamVR draws them as Oculus Touch). SteamVR loads render models
+from its OWN resources (it does not search an external driver's), so copy them there once from a Windows Pimax Play
+install (personal use, not in the repo; repeat after a Pimax update, and after a SteamVR update that clears them):
+```
+SV=~/.local/share/Steam/steamapps/common/SteamVR/resources/rendermodels
+cp -r "/mnt/c/Program Files/Pimax/SteamVRSupport/drivers/aapvr/resources/rendermodels/crystal_controller_left" \
+      "/mnt/c/Program Files/Pimax/SteamVRSupport/drivers/aapvr/resources/rendermodels/crystal_controller_right" "$SV/"
+```
+The controller driver uses the Pimax model (`crystal_controller_left`/`right`) only when it finds them there (it logs
+the chosen model and path); without them it keeps the Oculus Touch model, so a controller still shows.
+
 Enable the headset in `~/.config/CustomHeadset/settings.json` (or with its GUI, `CustomHeadsetGUI`; PiBridge starts that
 configurator from the Dashboard's **Headset driver settings** button once the driver is registered):
 ```
@@ -338,7 +349,9 @@ Notes:
   PC's picture.
 - Its sound output exists only while SteamVR drives its display; `pibridge-keepalived` makes it the default output as
   soon as it appears.
-- Not yet: controller vibration, its own controller models (they are drawn as Quest 2 controllers), the floor height in
+- Controller models: Pimax's own (`crystal_controller_*`) when copied into the CHOVR driver's resources (step 5.3),
+  else Oculus Touch.
+- Not yet: controller vibration, the floor height in
   inside-out (its origin is where its tracking started).
 
 ## 6. Eye tracking

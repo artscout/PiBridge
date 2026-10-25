@@ -118,6 +118,7 @@ struct Hand {
     Quat eng_dfi = cam::slam::QUAT_ID;
     std::int64_t eng_last_ns = 0;
     int logged_state = -1;
+    std::int64_t diag_last_ns = 0; // throttles the controller prediction diagnostic (~30 Hz)
     // the Pimax button: a long press (0.8 s) recenters (session thread)
     std::int64_t pimax_down_ns = 0;
     bool recentered = false;
@@ -139,6 +140,9 @@ private:
     /// The controller angle (PIMAX_CTRL_ANGLE, live file) on an aim pose (output thread).
     void aim_out(hmd::pose_shm::Device& d, std::int64_t now_ns);
     double ctrl_angle_deg_ = 30.0;
+    // Forward prediction cap of the controller pose, seconds (PIMAX_CTRL_PREDICT_MS, default 25 ms = pimax_ctrl.c).
+    // 0 reports it at the sample time and lets SteamVR do all the prediction, as the head does (A/B for the "bending").
+    double ctrl_predict_s_ = 0.025;
     std::int64_t angle_polled_ns_ = 0;
     void on_log(std::string_view line);
     void camera_loop();
@@ -160,6 +164,17 @@ private:
     std::int64_t ctrl_open_at_ = 0, ht_poll_at_ = 0;
     hmd::pose_shm::Device basalt_head(std::int64_t now_ns, std::uint32_t& tracking);
     void optical_fixes(std::int64_t now_ns);
+    /// Poll the Pimax engine's room state (floor + localization) at a low rate, write room-state.json and log changes
+    /// (output thread). This is the observe-and-pin-down step for GetGroundState / GetLocModeState.
+    void room_state_poll(std::int64_t now_ns);
+    std::int64_t room_poll_at_ = 0;
+    bool room_logged_ = false;
+    std::int32_t room_loc_ret_ = -3, room_ground_ret_ = -3;
+    std::uint8_t room_loc_state_ = 0, room_ground_flag_ = 0;
+    // the last published head height (y-up world; y is the engine z, unaffected by the x/z origin shift and the yaw
+    // recenter) so room_state_poll can turn the engine-frame floor points into a head-relative drop
+    float room_head_y_ = 0;
+    bool room_head_valid_ = false;
     /// The room offset and the recenter on a head pose (output thread).
     void to_world(hmd::pose_shm::Device& d, bool position_valid, std::int64_t now_ns);
     std::optional<hmd::pose_shm::Publisher> pub_;

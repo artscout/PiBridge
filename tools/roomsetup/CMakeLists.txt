@@ -10,6 +10,20 @@ target_include_directories(pibridge_roomsetup_core PUBLIC ${CMAKE_CURRENT_SOURCE
 # of the synthetic room (libpibridge-roommap synth.h) with the CPU reference (tools/xrkit passthrough.h)
 target_link_libraries(pibridge_roomsetup_core PUBLIC pibridge_room pibridge_roommap pibridge_passthrough pibridge_ptsynth)
 
+# The VR panel, painted with QPainter (panelpaint.*): procedural by default (no assets), an optional PVRGuardian skin.
+# Qt 6 Gui is already a PiBridge dependency (the app). pibridge-panelpaint dumps sample panels to PNG without a headset.
+find_package(Qt6 QUIET COMPONENTS Gui)
+if(Qt6Gui_FOUND)
+    add_library(pibridge_roomsetup_panel STATIC src/panelpaint.cpp)
+    target_include_directories(pibridge_roomsetup_panel PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(pibridge_roomsetup_panel PUBLIC Qt6::Gui)
+    add_executable(pibridge-panelpaint src/panelpaint_main.cpp)
+    target_link_libraries(pibridge-panelpaint PRIVATE pibridge_roomsetup_panel)
+    set(PIBRIDGE_ROOMSETUP_PANEL 1)
+else()
+    message(STATUS "pibridge-roomsetup: no Qt6 Gui: the painted VR panel is off (vector panel only)")
+endif()
+
 # the OpenVR SDK header only (app/third_party/openvr, BSD-3); libopenvr_api.so is loaded with dlopen at run time
 set(PIBRIDGE_ROOMSETUP_OPENVR_INCLUDE ${PROJECT_SOURCE_DIR}/app/third_party/openvr)
 
@@ -20,6 +34,11 @@ if(PIBRIDGE_XRKIT)
     add_executable(pibridge-roomsetup ${PIBRIDGE_ROOMSETUP_SOURCES} src/xrapp.cpp src/rendermodel.cpp)
     target_compile_definitions(pibridge-roomsetup PRIVATE PIBRIDGE_ROOMSETUP_XR=1)
     target_link_libraries(pibridge-roomsetup PRIVATE pibridge_xrkit)
+    if(PIBRIDGE_ROOMSETUP_PANEL)
+        # the painted VR panel (QPainter -> TexPass); without Qt the vector panel is used
+        target_compile_definitions(pibridge-roomsetup PRIVATE PIBRIDGE_ROOMSETUP_PANEL=1)
+        target_link_libraries(pibridge-roomsetup PRIVATE pibridge_roomsetup_panel)
+    endif()
 else()
     message(STATUS "pibridge-roomsetup: no pibridge_xrkit (OpenXR loader, Vulkan or glslangValidator missing): no headset mode")
     add_executable(pibridge-roomsetup ${PIBRIDGE_ROOMSETUP_SOURCES})

@@ -21,7 +21,12 @@ int vrZoneMain(const ZoneArg& z);
 /// Set the SteamVR chaperone standing pose from the live raw head pose: the floor `eyeHeight` m below the eyes, the
 /// centre where the head is and forward where it looks, written to the Live chaperone (IVRChaperoneSetup). The
 /// existing collision bounds are kept. The user must be standing in the centre, looking forward, when this runs.
-int vrStandingMain(std::optional<double> eyeHeight, std::optional<double> radius = std::nullopt, bool seated = false,
-                   const std::string& perimeterFile = {});
+/// `floorY`: the floor plane in SteamVR's RAW tracking space (the room setup's stored floor, placed through the
+/// relocalize's vertical): used as the standing origin y instead of head y - eye height, so the floor is the SAVED one,
+/// not wherever the head happened to be at this instant. `o.keepFloor`: keep the current standing origin y (an in-game
+/// recenter changes centre / forward only; it must never move the floor). `o.floorOnly`: the opposite - keep the
+/// current centre / forward and set only the floor to `floorY` (the room recognised in a new session: its raw space is
+/// new, so the stored floor must be put back; the head is wherever it is, so it must NOT give the centre).
+int vrStandingMain(const Options& o, std::optional<double> floorY);
 
 } // namespace pibridge::roomsetup

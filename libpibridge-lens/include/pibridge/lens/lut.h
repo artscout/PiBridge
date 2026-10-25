@@ -77,6 +77,13 @@ public:
     /// FOV port half-angles in degrees: left, right, up, down.
     std::array<float, 4> fov_deg(std::size_t eye) const;
     std::vector<std::uint8_t> to_bytes() const;
+    /// The same LUT seen through each eye's frame turned about the vertical axis by `yaw_rad[eye]` (positive turns
+    /// the rays to the right, +x): every stored ray tangent is rotated exactly (projectively, not as a tangent shift),
+    /// and the FOV port is the old port's edges rotated the same way (up / down grow by the larger 1/denominator of the
+    /// two side edges). This is how the Crystal Super's own profile is built from the like-Pimax LUT (left eye
+    /// +atan(0.0819), right eye -atan(0.0819), docs/libpibridge-lens.md "The Crystal Super profile"): a linear tangent
+    /// shift instead of a rotation shears shapes off-axis.
+    Lut rotated_yaw(std::array<double, 2> yaw_rad) const;
     /// Ray tangent (x right, y up) that channel `c` shows at display point (u, v) of `eye` (v = 0 at the top).
     /// Points outside [0,1] are clamped to the grid.
     Tan sample(std::size_t eye, std::size_t c, float u, float v, Interp interp) const;

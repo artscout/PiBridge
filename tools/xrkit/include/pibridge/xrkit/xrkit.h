@@ -243,6 +243,7 @@ struct Session {
     std::array<Hand, 2> hands;        // the tool fills them (left, right)
     std::string runtimeName;
     bool timespec = false;            // XR_KHR_convert_timespec_time is enabled
+    bool controllerModelExt = false;  // XR_MSFT_controller_model is enabled (runtime glTF controller models)
 
     Session() = default;
     Session(const Session&) = delete;

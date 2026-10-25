@@ -4,6 +4,8 @@
 #include "pibridge_status.h" // json_escape
 
 #include <array>
+#include <cmath>
+#include <cstring>
 
 namespace pibridge::overlay {
 
@@ -193,6 +195,55 @@ Hit hitTest(float x, float y) {
         return {Hit::Kind::QuickRoom};
     }
     return {};
+}
+
+std::vector<std::uint8_t> drawRing(double progress) {
+    std::vector<std::uint8_t> px(static_cast<std::size_t>(kRingSize) * kRingSize * 4, 0); // transparent background
+    const double c = kRingSize / 2.0;
+    const double rOut = kRingSize * 0.46, rIn = kRingSize * 0.30; // a thicker band reads denser
+    const double p = progress < 0.0 ? 0.0 : (progress > 1.0 ? 1.0 : progress);
+    constexpr double tau = 6.283185307179586;
+    for (std::uint32_t y = 0; y < kRingSize; y++) {
+        for (std::uint32_t x = 0; x < kRingSize; x++) {
+            const double dx = x + 0.5 - c, dy = y + 0.5 - c;
+            const double r = std::sqrt(dx * dx + dy * dy);
+            if (r < rIn || r > rOut) {
+                continue;
+            }
+            double a = std::atan2(dx, -dy); // 0 at the top, growing clockwise
+            if (a < 0.0) {
+                a += tau;
+            }
+            std::uint8_t* q = &px[(static_cast<std::size_t>(y) * kRingSize + x) * 4];
+            if (a <= tau * p) { // the filled arc: bright green-cyan, opaque
+                q[0] = 77;
+                q[1] = 255;
+                q[2] = 191;
+                q[3] = 255;
+            } else { // the track: dimmer but solid
+                q[0] = 120;
+                q[1] = 170;
+                q[2] = 205;
+                q[3] = 140;
+            }
+        }
+    }
+    return px;
+}
+
+std::vector<std::uint8_t> drawRingSheet() {
+    const std::uint32_t side = kRingSize * static_cast<std::uint32_t>(kRingGrid); // square sheet
+    std::vector<std::uint8_t> sheet(static_cast<std::size_t>(side) * side * 4, 0);
+    for (int i = 0; i < kRingFrames; i++) {
+        const std::vector<std::uint8_t> fr = drawRing(static_cast<double>(i) / (kRingFrames - 1));
+        const std::uint32_t x0 = kRingSize * static_cast<std::uint32_t>(i % kRingGrid);
+        const std::uint32_t y0 = kRingSize * static_cast<std::uint32_t>(i / kRingGrid);
+        for (std::uint32_t y = 0; y < kRingSize; y++) {
+            std::memcpy(&sheet[(static_cast<std::size_t>(y0 + y) * side + x0) * 4],
+                        &fr[static_cast<std::size_t>(y) * kRingSize * 4], static_cast<std::size_t>(kRingSize) * 4);
+        }
+    }
+    return sheet;
 }
 
 std::vector<std::uint8_t> drawPanel(bool recording, Hit hovered) {

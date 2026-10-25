@@ -208,8 +208,9 @@ IoSettings ioSettings(const Conf& c) {
     s.camAe = ae == QLatin1String("dry") ? CamAe::Dry : (confBool(ae.toStdString(), true) ? CamAe::On : CamAe::Off);
     s.camAeCrystal = word(c, iokey::kCamAeModel) != QLatin1String("auto");
     s.camAeNewLaw = word(c, iokey::kCamAeLaw) != QLatin1String("old");
+    s.camFps = intOr(c, iokey::kCamFps, 60, 50, 60) >= 55 ? 60 : 50;
     s.ctrlTrack = flag(iokey::kCtrlTrack, true);
-    s.ctrlAngle = intOr(c, iokey::kCtrlAngle, 30, kCtrlAngleMin, kCtrlAngleMax);
+    s.ctrlAngle = intOr(c, iokey::kCtrlAngle, 52, kCtrlAngleMin, kCtrlAngleMax);
     s.ctrlLostS = intOr(c, iokey::kCtrlLost, 4, kCtrlLostMin, kCtrlLostMax);
     s.ctrlSteady = flag(iokey::kCtrlSteady, true);
     return s;
@@ -239,6 +240,7 @@ std::vector<std::pair<std::string, std::string>> ioConfLines(const IoSettings& s
     l.emplace_back(iokey::kCamAe, s.camAe == CamAe::Dry ? "dry" : onOff(s.camAe == CamAe::On));
     l.emplace_back(iokey::kCamAeModel, s.camAeCrystal ? "crystal-super" : "auto");
     l.emplace_back(iokey::kCamAeLaw, s.camAeNewLaw ? "new" : "old");
+    l.emplace_back(iokey::kCamFps, std::to_string(s.camFps));
     l.emplace_back(iokey::kCtrlTrack, onOff(s.ctrlTrack));
     l.emplace_back(iokey::kCtrlAngle, std::to_string(s.ctrlAngle));
     l.emplace_back(iokey::kCtrlLost, std::to_string(s.ctrlLostS));

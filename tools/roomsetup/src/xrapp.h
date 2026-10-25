@@ -36,6 +36,7 @@ std::expected<void, std::string> runRecenterXr(RecenterFlow& flow, const XrOpts&
 /// exit, the head ring.
 struct MapLink {
     std::function<std::optional<guide::State>()> readState;
+    std::function<std::vector<guide::P3f>()> readScanPoints; // the guide `points` file (scan cloud, room frame); optional
     std::function<void(const guide::Answer&)> writeAnswer;
     std::function<std::optional<int>()> childExit; // the exit code once pibridge-roommap has ended
     std::function<std::string()> childLastLine;

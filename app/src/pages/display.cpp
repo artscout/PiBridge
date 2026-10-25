@@ -98,22 +98,23 @@ DisplayPage::DisplayPage(StateSource& source, Conf& conf, Actions& actions, QWid
     root->addWidget(card);
 
     // Lens profile (pibridge.conf lens_profile): which lens file the Pimax (Monado) driver renders through,
-    // resolved in core/rec_setup.cpp. Inside-out only; in Lighthouse CHOVR draws with its own profile.
+    // resolved in core/rec_setup.cpp. Monado backend (inside-out and Lighthouse); with SteamVR CHOVR draws with its own.
     auto* lensCard = new pibridge::ui::Card(QStringLiteral("Lens"));
     lens_ = new QComboBox;
     lens_->setMinimumWidth(320);
-    lens_->addItem(QStringLiteral("Crystal Super Oled chovr"), QStringLiteral("default"));
-    lens_->addItem(QStringLiteral("Crystal Super Oled native"), QStringLiteral("native"));
+    lens_->addItem(QStringLiteral("Crystal Super Oled native (PiBridge)"), QStringLiteral("native"));
+    lens_->addItem(QStringLiteral("Crystal Super Oled chovr"), QStringLiteral("chovr"));
     connect(lens_, &QComboBox::activated, this, [this](int i) {
         conf_.set(reckey::kLensProfile, lens_->itemData(i).toString().toStdString());
         loadLens();
     });
     lensCard->body()->addWidget(pibridge::ui::settingRow(
         QStringLiteral("Lens profile"), lens_, nullptr, true,
-        QStringLiteral("The distortion and field of view the headset renders through in inside-out (Monado). "
-                       "chovr: CustomHeadsetOpenVR's camera-calibrated profile. native: the Pimax geometry with the "
-                       "eye axis set by a true rotation (correct world scale, straight lines on head turns). "
-                       "Lighthouse uses CustomHeadsetOpenVR's own profile.")));
+        QStringLiteral("The distortion and field of view the headset renders through with the Monado backend. "
+                       "native (default): PiBridge's Crystal Super profile, the Pimax geometry with the eye axis set "
+                       "by a true rotation (correct world scale, straight lines on head turns). chovr: "
+                       "CustomHeadsetOpenVR's camera-calibrated profile. With SteamVR, CustomHeadsetOpenVR draws with "
+                       "its own profile.")));
     lensNote_ = pibridge::ui::dimLabel(QString());
     lensNote_->setWordWrap(true);
     lensCard->body()->addWidget(lensNote_);
@@ -144,7 +145,7 @@ void DisplayPage::showEvent(QShowEvent* e) {
 void DisplayPage::loadLens() {
     conf_.reload();
     const QString profile = conf_.value(reckey::kLensProfile, QString()).trimmed();
-    const int idx = lens_->findData(profile == QLatin1String("native") ? profile : QStringLiteral("default"));
+    const int idx = lens_->findData(isChovrLensProfile(profile) ? QStringLiteral("chovr") : QStringLiteral("native"));
     lens_->setCurrentIndex(idx < 0 ? 0 : idx);
     // an explicit lens file wins over the profile (rec_setup.cpp); say so instead of silently ignoring the choice
     const QString explicitLens = conf_.value(reckey::kLens, QString()).trimmed();

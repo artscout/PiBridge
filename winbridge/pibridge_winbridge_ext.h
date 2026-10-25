@@ -20,7 +20,7 @@
 extern "C" {
 #endif
 
-#define PIBRIDGE_WB_EXT_VERSION 1
+#define PIBRIDGE_WB_EXT_VERSION 2
 
 //! One controller pose from the engine: the controller body (frame of its LED model, controller_params.json)
 //! in the head SLAM engine's world (z up, the frame of the VIT head poses), at the controller IMU sample time.
@@ -39,6 +39,18 @@ struct pibridge_wb_ctrl_pose
 	float dev_from_imu[4];
 };
 
+//! The room state from the Pimax head SLAM engine's own getters: the floor (HeadsetGetGroundState) and the
+//! localization/recognition state (HeadsetGetLocModeState). ret: -1 engine not initialised, 0 not ready, 1 valid,
+//! -2 the DLL does not export the getter. ground[] is GetGroundState's raw out buffer (flag byte + floats, layout
+//! still being pinned down), loc_state is GetLocModeState's single out byte.
+struct pibridge_wb_room_state
+{
+	int32_t ground_ret;
+	int32_t loc_ret;
+	uint8_t ground[32];
+	uint8_t loc_state;
+};
+
 typedef int (*pibridge_wb_ext_version_fn)(void);
 //! A set of controller LED frames (the short-exposure frames between the tracking frames): cameras 0..ncam-1,
 //! 640x480 Y8 each, own row stride. 0 = queued, -1 = no tracker running.
@@ -49,6 +61,10 @@ typedef int (*pibridge_wb_push_led_fn)(int64_t ts_ns, uint32_t shutter_ns, uint3
 typedef int (*pibridge_wb_push_ctrl_imu_fn)(uint32_t hand, int64_t ts_ns, const float accel[3], const float gyro[3]);
 //! The newest engine pose of a hand. 1 = tracked (out filled), 0 = the engine does not track it now.
 typedef int (*pibridge_wb_ctrl_pose_fn)(uint32_t hand, struct pibridge_wb_ctrl_pose *out);
+//! The last room state received from winbridge (out filled), and a fresh request is queued for next time. 1 = a
+//! state has ever been received (out valid), 0 = none yet / no tracker. Poll it at a low rate (the floor and the
+//! recognition change slowly); the value returned is from the previous poll.
+typedef int (*pibridge_wb_room_state_fn)(struct pibridge_wb_room_state *out);
 
 #ifdef __cplusplus
 }

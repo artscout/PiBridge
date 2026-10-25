@@ -24,6 +24,9 @@
 #include <chrono>
 #include <cinttypes>
 #include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <unordered_map>
 #include <cstdio>
 #include <numbers>
 #include <cstring>
@@ -227,7 +230,8 @@ R<void> floor_at_build_hook(const std::string& dir, const map::RoomMap& map, con
                             const std::vector<loopclose::Correction>& corr);
 
 R<void> cmd_build_with(Args v, const std::function<void(const light::MapProgress&)>* progress,
-                       const std::function<bool()>* stop_early) {
+                       const std::function<bool()>* stop_early,
+                       const std::function<void(const std::vector<guide::P3f>&)>* scan) {
     auto rr = rig(v);
     if (!rr) {
         return std::unexpected(rr.error());
@@ -350,6 +354,20 @@ R<void> cmd_build_with(Args v, const std::function<void(const light::MapProgress
         const auto cov_fraction = [&cov_seen] {
             return static_cast<double>(std::ranges::count(cov_seen, true)) / static_cast<double>(cov_seen.size());
         };
+        // the scan cloud for the headset's "scanning" overlay: room-frame points voxel-downsampled (8 cm) and capped,
+        // grown across the walk (first point per voxel wins; once full it stops growing). Sent to `scan` each tick.
+        std::unordered_map<std::int64_t, guide::P3f> scan_vox;
+        const auto scan_add = [&scan, &scan_vox](const auto& p) {
+            constexpr double voxel = 0.08;
+            constexpr std::size_t cap = 4000;
+            if (scan == nullptr || scan_vox.size() >= cap) {
+                return;
+            }
+            const auto q = [](double c) { return static_cast<std::int64_t>(std::llround(c / voxel)); };
+            const std::int64_t key = (q(p[0]) * 73856093LL) ^ (q(p[1]) * 19349663LL) ^ (q(p[2]) * 83492791LL);
+            scan_vox.try_emplace(key,
+                                 guide::P3f{static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])});
+        };
         auto st = live::capture(spec, seconds + rf::fmax(extend, 0.0), [&](live::LiveFrame& f) {
             if (!t_first) {
                 t_first = f.ts_ns;
@@ -370,6 +388,20 @@ R<void> cmd_build_with(Args v, const std::function<void(const light::MapProgress
             if (k % 3 == 0) {
                 auto feats = pipeline::frame_features(rg, f.imgs[0], f.imgs[1], orb);
                 const g::Pose rb = a.pose().compose(f.slam_from_body);
+                if (scan != nullptr) {
+                    // the scan overlay points in the RAW SLAM frame: the headset places them with its StageLink during
+                    // the walk (the room frame / conv is not published until after mapping). Drop points within 0.5 m
+                    // of the head: those are the hands, the controllers and the body (they triangulate too and would
+                    // float "in the air" right in front of the user), not the room's surfaces.
+                    const g::Vec3 hp = f.slam_from_body.apply(g::Vec3{0.0, 0.0, 0.0});
+                    for (const auto& p : pipeline::frame_points(rg, feats, f.slam_from_body, 3.5)) {
+                        const double dx = p[0] - hp[0], dy = p[1] - hp[1], dz = p[2] - hp[2];
+                        if (dx * dx + dy * dy + dz * dz < 0.5 * 0.5) {
+                            continue;
+                        }
+                        scan_add(p);
+                    }
+                }
                 floor_frames.push_back(pipeline::PointFrame{f.ts_ns, rb, pipeline::frame_points(rg, feats, rb, 3.5)});
                 // which yaw sector the head faces now (forward = the body's -Z in the room frame)
                 const g::Vec3 fwd = g::mat_vec(rb.r, {0.0, 0.0, -1.0});
@@ -385,6 +417,14 @@ R<void> cmd_build_with(Args v, const std::function<void(const light::MapProgress
                     const light::MapProgress p{el, kfs, q, light::advice(q, need), since_kf > 90};
                     if (progress != nullptr) {
                         (*progress)(p);
+                    }
+                    if (scan != nullptr) {
+                        std::vector<guide::P3f> pc;
+                        pc.reserve(scan_vox.size());
+                        for (const auto& [key, pt] : scan_vox) {
+                            pc.push_back(pt);
+                        }
+                        (*scan)(pc);
                     }
                 }
                 if (!no_loops && k % 6 == 0) {
@@ -760,29 +800,36 @@ R<void> write_offset(const std::string& dir, const store::RelocResult& res, std:
         std::printf("floor: none stored for this map (omarchyvr-roommap floor detect --save): height left as mapped\n");
     }
     const auto room_setup = setup::RoomSetup::load(dir);
-    if (room_setup) {
-        std::printf("room setup: centre (%s, %s) m and forward %s deg of the map become the STAGE origin and -Z; %s\n",
-                    rf::fixed(room_setup->centre[0], 2, true).c_str(), rf::fixed(room_setup->centre[1], 2, true).c_str(),
-                    rf::fixed(rf::to_degrees(room_setup->yaw), 1).c_str(), room_setup->describe().c_str());
-        al = store::compose(room_setup->setup_from_room(), al);
-    }
-    if (const auto sv = floor::steamvr_stage(pid)) {
-        // PiBridge: under SteamVR the app space is SteamVR's raw space; its standing frame is shown. The floor shift
-        // above already used SteamVR's standing height; the yaw and the horizontal part of the stage go on top.
-        std::printf("SteamVR stage (universe %llu): yaw %s deg, origin (%s, %s, %s) m in raw space\n",
-                    static_cast<unsigned long long>(sv->universe), rf::fixed(rf::to_degrees(sv->yaw), 1).c_str(),
-                    rf::fixed(sv->t[0], 3, true).c_str(), rf::fixed(sv->t[1], 3, true).c_str(),
-                    rf::fixed(sv->t[2], 3, true).c_str());
-        al = store::compose(Alignment{sv->yaw, {sv->t[0], 0.0, sv->t[2]}}, al);
-    } else if (floor::is_vrserver(pid)) {
-        std::printf("note: SteamVR's standing frame is unknown (PiBridge's SteamVR link writes %s): the floor is put at "
-                    "SteamVR's raw y = 0\n", floor::steamvr_stage_path().c_str());
-    }
-    if (floor::is_vrserver(pid)) {
-        // SteamVR owns the floor through its chaperone standing pose (written head-relative by the room setup). The
-        // anchor offset aligns the room horizontally and in yaw only; moving the world vertically would double-shift
-        // SteamVR's standing floor (floor in the ceiling). Keep the vertical with SteamVR: offset y = 0.
+    // the ring's writer under SteamVR: vrserver itself (driver_monado) or pibridge-headtrack feeding it through
+    // CustomHeadsetOpenVR. Testing vrserver alone sent the PiBridge path down the Monado branch below (seen 2026-10-25).
+    const bool steamvr = floor::is_vrserver(pid) || floor::is_headtrack(pid);
+    if (steamvr) {
+        // Under SteamVR the offset is ONLY room_from_slam (yaw + horizontal), so the tracker's output is the ROOM frame
+        // in every session. The setup's centre / forward / floor live in SteamVR's chaperone (universe 30, written in
+        // room coordinates at the end of the setup) and are applied by SteamVR itself. They must NOT also be folded
+        // into this offset: composing setup_from_room here, and composing the chaperone's stored standing pose (which is
+        // in the SETUP session's raw space, meaningless in a new session), shifted and turned the restored play area
+        // by an arbitrary angle after a restart (seen as ~90 deg). The floor stays SteamVR's: offset y = 0.
         al.t[1] = 0.0;
+        if (room_setup) {
+            std::printf("room setup \"%s\": centre / forward / floor are SteamVR's chaperone; the offset is room_from_slam only\n",
+                        room_setup->describe().c_str());
+        }
+    } else {
+        if (room_setup) {
+            std::printf("room setup: centre (%s, %s) m and forward %s deg of the map become the STAGE origin and -Z; %s\n",
+                        rf::fixed(room_setup->centre[0], 2, true).c_str(),
+                        rf::fixed(room_setup->centre[1], 2, true).c_str(),
+                        rf::fixed(rf::to_degrees(room_setup->yaw), 1).c_str(), room_setup->describe().c_str());
+            al = store::compose(room_setup->setup_from_room(), al);
+        }
+        if (const auto sv = floor::steamvr_stage(pid)) {
+            std::printf("SteamVR stage (universe %llu): yaw %s deg, origin (%s, %s, %s) m in raw space\n",
+                        static_cast<unsigned long long>(sv->universe), rf::fixed(rf::to_degrees(sv->yaw), 1).c_str(),
+                        rf::fixed(sv->t[0], 3, true).c_str(), rf::fixed(sv->t[1], 3, true).c_str(),
+                        rf::fixed(sv->t[2], 3, true).c_str());
+            al = store::compose(Alignment{sv->yaw, {sv->t[0], 0.0, sv->t[2]}}, al);
+        }
     }
     std::printf("offset (app_from_slam): %s\n", fmt_align(al).c_str());
     if (g::norm(al.t) > 20.0) {
@@ -804,6 +851,13 @@ R<void> write_offset(const std::string& dir, const store::RelocResult& res, std:
         return std::unexpected(p.error().text());
     }
     std::printf("wrote %s for Monado pid %u\n", p->c_str(), pid);
+    if (steamvr && floor::StoredFloor::load(dir)) {
+        // The chaperone's floor is a raw-space y of the session that wrote it; this session's raw space is new. Put the
+        // saved floor plane back through the fix just written (floor.toml y - last-reloc t[1]); centre / forward stay
+        // (they are room-frame, valid in every session). pibridge-roomsetup is the OpenVR client for that.
+        const int cs = std::system("pibridge-roomsetup --vr-standing --floor-only >/dev/null 2>&1");
+        std::printf("SteamVR chaperone floor from the saved room: %s\n", cs == 0 ? "set" : "not set (is SteamVR running?)");
+    }
     if (room_setup && pid != 0) {
         if (auto b = write_stage_bounds(pid, room_setup->play_area)) {
             std::printf("STAGE bounds %s x %s m: %s\n", rf::fixed(room_setup->play_area[0], 2).c_str(),

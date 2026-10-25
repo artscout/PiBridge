@@ -37,9 +37,9 @@ target_include_directories(pibridge_common INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}
 # tools/roomsetup is the in-headset passthrough VIEW for SETUP PLAYSPACE: it shows the room through the cameras with
 # the step text while pibridge-roommap setup fast does the mapping/floor/boundary (user 2026-10-20). Its boundary EDITOR
 # (the janky controller interactions) is not used from fast mode.
-foreach(part libpibridge-hmd libpibridge-eyemath libpibridge-eye libpibridge-room libpibridge-cam libpibridge-lens libpibridge-ctrl libpibridge-anchor libpibridge-roommap
+foreach(part libpibridge-hmd libpibridge-eyemath libpibridge-eye libpibridge-room libpibridge-cam libpibridge-lens libpibridge-ctrl libpibridge-anchor libpibridge-roommap monado-abi
         tools/keepalived tools/record tools/eyed tools/eye-tool tools/eyecal tools/cam tools/slam tools/ctrltrack tools/roommap tools/xrkit tools/roomsetup
-        tools/home tools/overlay tools/record-layer tools/headtrack app)
+        tools/home tools/overlay tools/record-layer tools/headtrack tools/posetap tools/lens app)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${part}/CMakeLists.txt)
         if(part STREQUAL "app" AND NOT PIBRIDGE_BUILD_APP)
             continue()

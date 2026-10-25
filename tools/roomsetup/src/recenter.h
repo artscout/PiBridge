@@ -50,14 +50,20 @@ bool recenterFloorPlausible(bool headValid, double headY, double controllerY);
 class RecenterFlow {
 public:
     enum class Step { Centre, Floor, Done };
-    void frame(const room::FrameInput& in, const std::function<std::optional<RingSample>()>& ring);
+    /// One frame at time `now` (seconds). The recenter (step Centre) is a HOLD: the trigger must be held for kHoldS
+    /// while a filling ring shows the progress; the recenter fires when the ring completes (so a brief touch never
+    /// recenters, and the user sees it coming).
+    void frame(const room::FrameInput& in, double now, const std::function<std::optional<RingSample>()>& ring);
     /// The prompt lines (upper case, the panel font).
     std::vector<std::string> lines() const;
-    /// The panel in front of the head (placed at the first valid head pose, then fixed).
-    void build(room::Batch& b) const;
+    /// The panel in front of the head (placed at the first valid head pose, then fixed); `now` drives the hold ring.
+    void build(room::Batch& b, double now) const;
     Step step() const { return step_; }
     bool finished() const { return step_ == Step::Done; }
     const std::optional<RecenterResult>& result() const { return result_; }
+
+    /// How long the recenter trigger must be held (seconds); the ring fills over this time.
+    static constexpr double kHoldS = 0.8;
 
 private:
     Step step_ = Step::Centre;
@@ -67,6 +73,10 @@ private:
     std::string error_;
     bool placed_ = false;
     room::Vec3 at_{0, 1.5, -1.5}, right_{1, 0, 0};
+    // the recenter hold: which hand is holding the trigger (-1 none), when it started, and 0..1 fill for build()
+    int holdHand_ = -1;
+    double holdStart_ = 0;
+    double holdProg_ = 0;
 };
 
 } // namespace pibridge::roomsetup

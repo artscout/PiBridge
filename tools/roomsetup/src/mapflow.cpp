@@ -4,9 +4,16 @@
 #include "recenter.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <format>
+#include <fstream>
+#include <iterator>
 #include <numbers>
+#include <string>
+
+#include <unistd.h>
 
 namespace pibridge::roomsetup {
 
@@ -47,6 +54,7 @@ std::string upper(std::string s) {
 }
 
 const room::Rgba kGrid{0.35F, 0.9F, 1.0F, 0.75F};
+const room::Rgba kScan{0.3F, 1.0F, 0.75F, 0.9F}; // the scanning-overlay specks (green-cyan, like a spatial scan)
 const room::Rgba kWall{0.2F, 1.0F, 0.5F, 0.22F};
 const room::Rgba kDraw{1.0F, 0.85F, 0.2F, 1.0F};
 constexpr double kWallH = 2.0;        // the boundary walls (m)
@@ -56,6 +64,11 @@ constexpr double kTouchNearGrid = 0.3;
 // the face
 constexpr double kFloorDropMin = 1.00;
 constexpr double kFloorDropMax = 2.00;
+// standing eye height as a fraction of full stature (anthropometric ~0.933): the HEIGHT step shows the stature (рост)
+// but the floor drop is the eye height, so stature = eye / kEyeFromStature and eye = stature * kEyeFromStature.
+constexpr double kEyeFromStature = 0.933;
+constexpr double kStatureMin = 1.20;
+constexpr double kStatureMax = 2.20;
 const room::Rgba kText{0.92F, 0.96F, 1.0F, 1.0F};
 // the micro-window card (room-setup rework): a framed body, a header strip, bordered button chips
 const room::Rgba kCard{0.04F, 0.06F, 0.10F, 0.82F};
@@ -70,8 +83,8 @@ const room::Rgba kZoneGrid{0.35F, 0.9F, 1.0F, 0.6F};
 // the controller laser and box proxy (so the user can see where the pointer goes)
 const room::Rgba kBeam{0.35F, 0.95F, 1.0F, 0.95F};
 const room::Rgba kBox{0.7F, 0.9F, 1.0F, 0.95F};
-constexpr double kPanelHalfW = 0.5; // the card half width (metres), matches the text columns
-constexpr double kLineH = 0.06;     // one text line's height on the panel
+constexpr double kPanelHalfW = 0.32; // the card half width (metres); compact, like Pimax's setup panel
+constexpr double kLineH = 0.044;     // one text line's height on the panel
 
 } // namespace
 
@@ -275,7 +288,7 @@ void MapFlow::placePanel(const room::FrameInput& in, bool force) {
         right_ = {-dir.z, 0, dir.x};
         up_ = right_.cross(f3);
         panelPitch_ = p;
-        return in.head.pos() + f3 * 1.3;
+        return in.head.pos() + f3 * 1.45;
     };
     if (!placed_ || force) {
         at_ = put(f, pitch);
@@ -317,6 +330,9 @@ void MapFlow::layoutButtons() {
         defs = {{"STAND", "posture-stand"}, {"SIT", "posture-sit"}};
     } else if (step_ == "size") {
         defs = {{"SMALL", "size-s"}, {"MEDIUM", "size-m"}, {"BIG", "size-b"}};
+    } else if (step_ == "height") {
+        defs.push_back({"MEASURE AGAIN", "repeat"}); // re-follow the head height
+        defs.push_back({"NEXT", "next"});            // keep this height
     } else if (step_ == "map") {
         defs = {{"DONE LOOKING", "next"}}; // only ends the look-around; it does not finish the setup
     } else if (step_ == "confirm") {
@@ -338,7 +354,7 @@ void MapFlow::layoutButtons() {
     const double nlines = static_cast<double>(lines().size());
     const double rowV = 0.06 - kLineH * nlines - 0.03;
     const bool wide = step_ == "mode" || step_ == "posture";
-    const double hw = wide ? 0.21 : 0.13, hh = wide ? 0.05 : 0.032, gap = 0.035;
+    const double hw = wide ? 0.15 : 0.095, hh = wide ? 0.037 : 0.024, gap = 0.026;
     const double total = static_cast<double>(defs.size()) * 2 * hw + static_cast<double>(defs.size() - 1) * gap;
     double u = -total / 2 + hw;
     for (const auto& d : defs) {
@@ -413,14 +429,38 @@ void MapFlow::pressButton(const std::string& action, double now) {
         return;
     }
     if (action == "repeat") {
+        if (step_ == "height") {
+            // MEASURE AGAIN is HEADSET-LOCAL on the height step: re-follow the head, send NO answer. Emitting "repeat"
+            // to the backend made its height wait loop forever, so NEXT could never advance.
+            heightNudged_ = false;
+            return;
+        }
         if (step_ == "boundary") {
             path_.clear(); // start the stroke over
             pathLen_ = 0;
         }
         if (isFloorStep(step_)) {
-            floorDrop_.reset(); // reset the floor to the posture / eye default on the next frame
+            floorDrop_.reset();  // reset the floor on the next frame
+            floorNudged_ = false; // follow the Pimax floor again (else the posture / eye default)
         }
         answer("repeat", {});
+        return;
+    }
+    if (step_ == "height" && action == "next") {
+        // heightMeas_ is the stature; the floor drop is the eye height. Keep it as eye_ and report it so the backend
+        // derives the floor from it after the walk (no separate floor step).
+        if (heightMeas_) {
+            eye_ = *heightMeas_ * kEyeFromStature;
+            // with the head's RAW y at the measurement (stage -> raw through the link): the backend hangs the floor
+            // from THAT head, not from wherever the head is after the walk or when FINISH is pressed
+            if (heightHeadY_ && link_.valid()) {
+                answer("eye", {*eye_, link_.toRaw({0.0, *heightHeadY_, 0.0}).y});
+            } else {
+                answer("eye", {*eye_});
+            }
+        } else {
+            answer("next", {});
+        }
         return;
     }
     if (step_ == "map" && action == "next") {
@@ -495,6 +535,51 @@ std::optional<double> MapFlow::standingFloor(double now) const {
     return sum / static_cast<double>(n) - *eye_;
 }
 
+std::optional<double> MapFlow::pimaxFloorDrop() const {
+    if (!pimaxFloor_) {
+        return std::nullopt; // off (tests, or the real app before it is enabled)
+    }
+    // pibridge-headtrack writes $XDG_RUNTIME_DIR/pibridge/room-state.json (status::StatusWriter, flat JSON) when the
+    // Pimax SLAM engine runs. We want drop_ref_m (head above the engine's locked floor plane), valid only when the
+    // floor is estimated (ground_ret == 1) and the head is tracked (head_valid). Minimal parse: our own fixed-format
+    // file, one flat object, each value on its own line.
+    const char* xdg = std::getenv("XDG_RUNTIME_DIR");
+    std::string dir = (xdg && *xdg) ? std::string(xdg) + "/pibridge"
+                                    : std::string("/tmp/pibridge-") + std::to_string(::getuid());
+    std::ifstream f(dir + "/room-state.json");
+    if (!f) {
+        return std::nullopt;
+    }
+    std::string body((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    auto field = [&](const std::string& key) -> std::optional<double> {
+        const auto k = body.find("\"" + key + "\"");
+        if (k == std::string::npos) {
+            return std::nullopt;
+        }
+        const auto colon = body.find(':', k);
+        if (colon == std::string::npos) {
+            return std::nullopt;
+        }
+        return std::strtod(body.c_str() + colon + 1, nullptr); // true -> 0, false -> 0 (we only read numeric fields)
+    };
+    // only a FRESH file counts (pibridge-headtrack rewrites it ~5 Hz): never a floor left over from a dead session,
+    // and so tests / idle runs with a stale file ignore it.
+    const auto updated = field("updated_unix_ms");
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+    if (!updated || now_ms - static_cast<long long>(*updated) > 2000) {
+        return std::nullopt;
+    }
+    const auto ground = field("ground_ret");
+    const auto drop = field("drop_ref_m");
+    const bool headOk = body.find("\"head_valid\": true") != std::string::npos;
+    if (!ground || static_cast<int>(*ground) != 1 || !headOk || !drop) {
+        return std::nullopt;
+    }
+    return *drop;
+}
+
 void MapFlow::frame(const room::FrameInput& in, double now, const std::optional<guide::State>& st, const StageLink& link) {
     headValid_ = in.headValid;
     for (std::size_t i = 0; i < 2; i++) {
@@ -531,6 +616,7 @@ void MapFlow::frame(const room::FrameInput& in, double now, const std::optional<
         floorAdjust_ = 0; // the floor nudge is per floor step
         lastNudge_ = 0;
         floorDrop_.reset();
+        floorNudged_ = false;
     }
     // The backend reached the end (done) or failed: end the frontend here so the XR loop exits and the process returns,
     // which lets pibridge-roomsetup write the SteamVR chaperone. Previously we only ended when the backend *process*
@@ -551,6 +637,71 @@ void MapFlow::frame(const room::FrameInput& in, double now, const std::optional<
     placePanel(in, stepChanged && !isMapStep(step_));
     if (isMapStep(step_) && in.headValid) {
         cov_.look(in.head);
+        // the spatial-scan grid: laid once around where the user stands when the look-around begins; the head's gaze
+        // ray onto the floor marks the tile it crosses as scanned
+        if (!scanOrigin_) {
+            scanOrigin_ = in.head.pos();
+            tileSeen_.fill(false);
+            pointSectorSeen_ = {};
+        }
+        const room::Vec3 f = (in.head.axis(2) * -1.0).norm();
+        if (f.y < -0.05) { // looking at least a little down: the ray meets the floor
+            const double fy = floorStage();
+            const double t = (fy - in.head.pos().y) / f.y;
+            if (t > 0 && t < 12.0) {
+                const room::Vec3 hit = in.head.pos() + f * t;
+                const double half = kScanTiles * kScanTile / 2.0;
+                const int ix = static_cast<int>(std::floor((hit.x - scanOrigin_->x + half) / kScanTile));
+                const int iz = static_cast<int>(std::floor((hit.z - scanOrigin_->z + half) / kScanTile));
+                if (ix >= 0 && ix < kScanTiles && iz >= 0 && iz < kScanTiles) {
+                    tileSeen_[static_cast<std::size_t>(iz * kScanTiles + ix)] = true;
+                }
+            }
+        }
+        // DATA-driven fill (our edge over a gaze-only scan): the real map points pibridge-roommap has triangulated so
+        // far (raw SLAM frame -> stage with the StageLink). A tile fills once enough points lie in its column (any
+        // height: the floor, a desk, a wall foot), a wall panel once points lie in its sector and height band. So what
+        // lights up is what the cameras have actually mapped, not merely what the head pointed at.
+        if (!scan_.empty() && link_.valid()) {
+            const double half = kScanTiles * kScanTile / 2.0;
+            const double fy = floorStage();
+            std::array<std::uint16_t, kScanTiles * kScanTiles> hits{};
+            std::array<std::array<std::uint16_t, Coverage::kSectors>, 3> wall{};
+            for (const auto& pf : scan_) {
+                const room::Vec3 p = link_.toStage({pf[0], pf[1], pf[2]});
+                const int ix = static_cast<int>(std::floor((p.x - scanOrigin_->x + half) / kScanTile));
+                const int iz = static_cast<int>(std::floor((p.z - scanOrigin_->z + half) / kScanTile));
+                if (ix >= 0 && ix < kScanTiles && iz >= 0 && iz < kScanTiles) {
+                    hits[static_cast<std::size_t>(iz * kScanTiles + ix)]++;
+                } else {
+                    // outside the grid: a wall panel by yaw sector and height band (level 0.9-1.8 m, up 1.9-2.6 m)
+                    const double rel = p.y - fy;
+                    const int band = rel >= 1.9 ? 2 : (rel >= 0.9 ? 1 : -1);
+                    if (band > 0) {
+                        double h = std::atan2(p.x - scanOrigin_->x, -(p.z - scanOrigin_->z));
+                        if (h < 0) {
+                            h += 2 * kPi;
+                        }
+                        const int s = std::clamp(static_cast<int>(h / (2 * kPi / Coverage::kSectors)), 0, Coverage::kSectors - 1);
+                        wall[static_cast<std::size_t>(band)][static_cast<std::size_t>(s)]++;
+                    }
+                }
+            }
+            for (std::size_t i = 0; i < hits.size(); i++) {
+                if (hits[i] >= 3) {
+                    tileSeen_[i] = true;
+                }
+            }
+            for (int band = 1; band <= 2; band++) {
+                for (int s = 0; s < Coverage::kSectors; s++) {
+                    if (wall[static_cast<std::size_t>(band)][static_cast<std::size_t>(s)] >= 3) {
+                        pointSectorSeen_[static_cast<std::size_t>(band)][static_cast<std::size_t>(s)] = true;
+                    }
+                }
+            }
+        }
+    } else if (!isMapStep(step_)) {
+        scanOrigin_.reset(); // a later look-around lays a fresh grid where the user then stands
     }
     std::array<std::uint64_t, 2> btn{in.hands[0].buttons, in.hands[1].buttons};
     for (std::size_t i = 0; i < 2; i++) {
@@ -580,7 +731,13 @@ void MapFlow::frame(const room::FrameInput& in, double now, const std::optional<
     // thumbstick +/- 1 cm, clamped to [kFloorDropMin, kFloorDropMax]. Stick up raises the floor (smaller drop), down
     // lowers it. No controller-lowering, no "touch the floor" action. Quick has no floor step.
     if (isFloorStep(step_)) {
-        if (!floorDrop_) {
+        // The Pimax SLAM engine's own floor (pibridge-headtrack room-state.json), when it runs: follow it live so the
+        // drop tracks the real floor as the user looks down at it and stands upright. The user takes over the moment
+        // they nudge the stick (floorNudged_), and it is the fallback default when the engine gives no floor.
+        const std::optional<double> pimax = floorNudged_ ? std::nullopt : pimaxFloorDrop();
+        if (pimax) {
+            floorDrop_ = std::clamp(*pimax, kFloorDropMin, kFloorDropMax);
+        } else if (!floorDrop_) {
             double d = eye_.value_or(1.60);
             if (headValid_ && st_ && st_->floor) {
                 if (const auto fs = toStage({0, *st_->floor, 0})) {
@@ -595,8 +752,38 @@ void MapFlow::frame(const room::FrameInput& in, double now, const std::optional<
                 sy = h.stickY;
             }
         }
-        if (std::fabs(sy) > 0.5 && now - lastNudge_ > 0.12) {
+        if (std::fabs(sy) > 0.5 && now - lastNudge_ > 0.12 && floorDrop_) {
+            floorNudged_ = true; // from here the floor is the user's manual drop, not the engine's live estimate
             floorDrop_ = std::clamp(*floorDrop_ + (sy > 0 ? -0.01 : 0.01), kFloorDropMin, kFloorDropMax);
+            lastNudge_ = now;
+        }
+    }
+    // The HEIGHT step (full setup, "рост"): take the standing eye height from the head (its stage y ~ eye above the
+    // floor) and let the stick fine-tune it; NEXT then uses it as the floor's eye height. Follows the head live until
+    // the user nudges it, so standing up straight sets it.
+    if (step_ == "height") {
+        // heightMeas_ is the STATURE (рост). Measure the eye height as the head's stage y (height above the stage
+        // floor) and show it as a stature (eye / kEyeFromStature) so the user sets their actual height. We do NOT use
+        // the Pimax GroundState floor here: it locks onto the nearest low surface (a desk -> a bogus 1.2 m). Follows
+        // the head live until the user nudges it.
+        const double eyeMeas = headValid_ ? head_.pos().y : eye_.value_or(1.57);
+        if (!heightNudged_ && (headValid_ || !heightMeas_)) {
+            heightMeas_ = std::clamp(eyeMeas / kEyeFromStature, kStatureMin, kStatureMax);
+            if (headValid_) {
+                heightHeadY_ = head_.pos().y; // the posture the stature belongs to
+            }
+        } else if (!heightMeas_) {
+            heightMeas_ = std::clamp(eye_.value_or(1.57) / kEyeFromStature, kStatureMin, kStatureMax);
+        }
+        double sy = 0;
+        for (const auto& h : in.hands) {
+            if (std::fabs(static_cast<double>(h.stickY)) > std::fabs(sy)) {
+                sy = h.stickY;
+            }
+        }
+        if (std::fabs(sy) > 0.5 && now - lastNudge_ > 0.12 && heightMeas_) {
+            heightNudged_ = true; // stick up = taller
+            heightMeas_ = std::clamp(*heightMeas_ + (sy > 0 ? 0.01 : -0.01), kStatureMin, kStatureMax);
             lastNudge_ = now;
         }
     }
@@ -681,9 +868,65 @@ bool MapFlow::finished(double now) const {
     return endedAt_ && now - *endedAt_ > (cancelled_ ? 1.5 : 2.0);
 }
 
+// The card geometry, shared by the painted panel (panelContent/panelCorners) and the vector card in build(): the
+// half width and the top / bottom of the card in panel-local metres (along right_ / up_ from at_).
+namespace {
+struct CardBox {
+    double halfW, topV, botV;
+};
+} // namespace
+
+bool MapFlow::panelShown() const { return !lines().empty(); }
+
+panel::Content MapFlow::panelContent() const {
+    panel::Content c;
+    const auto ls = lines();
+    if (!ls.empty()) {
+        c.title = ls.front();
+        for (std::size_t i = 1; i < ls.size(); i++) {
+            c.lines.push_back(ls[i]);
+        }
+    }
+    c.scanning = isMapStep(step_);
+    const double halfW = kPanelHalfW + 0.03;
+    const double topV = 0.06 + kLineH * 0.9;
+    double botV = 0.06 - kLineH * static_cast<double>(ls.size()) - 0.03;
+    for (const auto& bt : buttons_) {
+        botV = std::min(botV, bt.v - bt.hh - 0.025);
+    }
+    const double h = topV - botV;
+    for (std::size_t i = 0; i < buttons_.size(); i++) {
+        const PanelButton& bt = buttons_[i];
+        panel::Button pb;
+        pb.label = bt.label;
+        pb.x = static_cast<float>((bt.u - bt.hw + halfW) / (2 * halfW));
+        pb.y = static_cast<float>((topV - (bt.v + bt.hh)) / h);
+        pb.w = static_cast<float>((2 * bt.hw) / (2 * halfW));
+        pb.h = static_cast<float>((2 * bt.hh) / h);
+        pb.hover = static_cast<int>(i) == hover_;
+        pb.primary = bt.action == "next" || bt.action == "save";
+        c.buttons.push_back(pb);
+    }
+    return c;
+}
+
+std::array<room::Vec3, 4> MapFlow::panelCorners() const {
+    const auto ls = lines();
+    const double halfW = kPanelHalfW + 0.03;
+    const double topV = 0.06 + kLineH * 0.9;
+    double botV = 0.06 - kLineH * static_cast<double>(ls.size()) - 0.03;
+    for (const auto& bt : buttons_) {
+        botV = std::min(botV, bt.v - bt.hh - 0.025);
+    }
+    return {at_ + right_ * -halfW + up_ * topV,   // TL  uv(0,0)
+            at_ + right_ * halfW + up_ * topV,    // TR  uv(1,0)
+            at_ + right_ * halfW + up_ * botV,    // BR  uv(1,1)
+            at_ + right_ * -halfW + up_ * botV};  // BL  uv(0,1)
+}
+
 std::vector<std::string> MapFlow::lines() const {
     std::vector<std::string> l;
-    const auto add = [&l](const std::string& s, std::size_t w = 34) {
+    const auto add = [&l](const std::string& s, std::size_t w = 30) {
         for (auto& x : room::wrapText(s, w)) {
             l.push_back(x);
         }
@@ -701,13 +944,17 @@ std::vector<std::string> MapFlow::lines() const {
     }
     if (isMapStep(step_) && st_ && step_ == "map") {
         l.push_back(std::format("VIEWS MAPPED {}   POINTS IN VIEW {}", st_->keyframes, st_->points));
-        l.push_back(std::format("ROOM SEEN {:.0f} %", cov_.fraction() * 100.0));
+        l.push_back(std::format("ROOM SEEN {:.0f} %   FLOOR SCANNED {:.0f} %", cov_.fraction() * 100.0,
+                                tileFraction() * 100.0));
         if (const auto h = cov_.hint(headValid_ ? headingOf(head_) : 0.0); !h.empty()) {
             l.push_back(h);
         }
     }
     if (isFloorStep(step_) && floorDrop_ && !endedAt_) {
         l.push_back(std::format("FLOOR IS {:.2f} M BELOW YOUR FACE", *floorDrop_));
+    }
+    if (step_ == "height" && heightMeas_ && !endedAt_) {
+        l.push_back(std::format("YOUR HEIGHT {:.2f} M", *heightMeas_));
     }
     if (!error_.empty()) {
         add(error_);
@@ -721,12 +968,67 @@ std::vector<std::string> MapFlow::lines() const {
     return l;
 }
 
+double MapFlow::tileFraction() const {
+    std::size_t n = 0;
+    for (const bool s : tileSeen_) {
+        n += s ? 1 : 0;
+    }
+    return static_cast<double>(n) / static_cast<double>(tileSeen_.size());
+}
+
 void MapFlow::build(room::Batch& b, double now) const {
     b.clear();
-    (void)now;
     const room::Vec3 up{0, 1, 0};
     const double fy = floorStage();
     const room::Vec3 hp = headValid_ ? head_.pos() : room::Vec3{0, headY_, 0};
+
+
+    // The spatial scan of the look-around step: a grid of floor tiles around where the user began, each filling in once
+    // the gaze has crossed it, and wall panels around them (one per yaw sector, a level and an upper band) filling in
+    // as the head turns to them. What is still dark is what is left to look at.
+    if (isMapStep(step_) && scanOrigin_) {
+        const double half = kScanTiles * kScanTile / 2.0;
+        const double ty = fy + 0.004;
+        const float pulse = static_cast<float>(0.8 + 0.2 * std::sin(now * 3.0));
+        const room::Rgba lit = kScan.alpha(0.55F * pulse), litEdge = kScan.alpha(0.95F), dark = kGrid.alpha(0.16F);
+        for (int iz = 0; iz < kScanTiles; iz++) {
+            for (int ix = 0; ix < kScanTiles; ix++) {
+                const double x0 = scanOrigin_->x - half + ix * kScanTile, z0 = scanOrigin_->z - half + iz * kScanTile;
+                const double x1 = x0 + kScanTile, z1 = z0 + kScanTile, g = 0.025; // a small gap between tiles
+                const bool seen = tileSeen_[static_cast<std::size_t>(iz * kScanTiles + ix)];
+                const room::Vec3 a{x0 + g, ty, z0 + g}, b2{x1 - g, ty, z0 + g}, c{x1 - g, ty, z1 - g}, d{x0 + g, ty, z1 - g};
+                if (seen) {
+                    b.quad(a, b2, c, d, lit);
+                }
+                const room::Rgba e = seen ? litEdge : dark;
+                b.line(a, b2, e);
+                b.line(b2, c, e);
+                b.line(c, d, e);
+                b.line(d, a, e);
+            }
+        }
+        // the wall panels: 12 yaw sectors x (level, up) at the grid's edge, lit once that sector was looked at
+        const double r = half + 0.3, step = 2 * kPi / Coverage::kSectors, gap = step * 0.08;
+        const auto dir = [](double h) { return room::Vec3{std::sin(h), 0.0, -std::cos(h)}; };
+        for (int band = 1; band <= 2; band++) {
+            const double y0 = band == 1 ? fy + 0.9 : fy + 1.9, y1 = band == 1 ? fy + 1.8 : fy + 2.6;
+            for (int s = 0; s < Coverage::kSectors; s++) {
+                const room::Vec3 d0 = dir(s * step + gap * 0.5), d1 = dir((s + 1) * step - gap * 0.5);
+                const room::Vec3 p0{scanOrigin_->x + d0.x * r, 0, scanOrigin_->z + d0.z * r};
+                const room::Vec3 p1{scanOrigin_->x + d1.x * r, 0, scanOrigin_->z + d1.z * r};
+                const bool seen = cov_.seen(band, s) ||
+                                  pointSectorSeen_[static_cast<std::size_t>(band)][static_cast<std::size_t>(s)];
+                if (seen) {
+                    b.quad({p0.x, y0, p0.z}, {p1.x, y0, p1.z}, {p1.x, y1, p1.z}, {p0.x, y1, p0.z}, lit);
+                }
+                const room::Rgba e = seen ? litEdge : dark;
+                b.line({p0.x, y0, p0.z}, {p1.x, y0, p1.z}, e);
+                b.line({p1.x, y0, p1.z}, {p1.x, y1, p1.z}, e);
+                b.line({p1.x, y1, p1.z}, {p0.x, y1, p0.z}, e);
+                b.line({p0.x, y1, p0.z}, {p0.x, y0, p0.z}, e);
+            }
+        }
+    }
 
     // (room-setup rework) the coverage ring around you is gone; the look-around feedback is the ROOM SEEN % and the
     // hint in the panel. A floor grid is shown only on the floor steps, so the floor can be confirmed; everywhere else
@@ -894,7 +1196,11 @@ void MapFlow::build(room::Batch& b, double now) const {
         }
     }
 
-    // the micro-window card: framed body, a header strip over the title, the text, then the button chips
+    // the micro-window card: framed body, a header strip over the title, the text, then the button chips. When the
+    // painted panel is on (xrapp draws it as a texture), this whole vector card is skipped -- no floating text.
+    if (texturedPanel_) {
+        return;
+    }
     const auto ls = lines();
     const room::Vec3 pu = up_;
     const room::Vec3 away = right_.cross(pu) * -1.0;

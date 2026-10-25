@@ -226,4 +226,80 @@ TEST(interpolation_error_on_the_real_dump) {
     CHECK(bl.max_deg < 0.12 && bc.max_deg < 0.12);
 }
 
+TEST(rotated_yaw_turns_every_ray_and_the_port) {
+    const auto dump = fixture_dump();
+    if (!dump) {
+        std::fprintf(stderr, "fixture dump not present, skipping\n");
+        return;
+    }
+    const auto lut = *Lut::from_dump(*dump);
+    const double th = std::atan(0.0819);
+    const auto rot = lut.rotated_yaw({th, -th});
+    // through the bytes and back: still a valid file with the same grid
+    const auto b = rot.to_bytes();
+    const auto back = Lut::from_bytes(sp(b));
+    CHECK(back.has_value() && back->n == lut.n && back->serial == lut.serial);
+    for (std::size_t e = 0; e < 2; e++) {
+        const double a = e == 0 ? th : -th;
+        // each ray keeps its angle to the others: compare the 3D directions, turned back
+        for (std::size_t c = 0; c < CHANNELS; c++) {
+            const auto& r0 = lut.raw(e, c);
+            const auto& r1 = rot.raw(e, c);
+            double worst = 0;
+            for (std::size_t k = 0; k < r0.size(); k++) {
+                const double x = r1[k][0], y = r1[k][1];
+                // turn (x, y, 1) back by -a
+                const double xb = x * std::cos(a) - std::sin(a), zb = std::cos(a) + x * std::sin(a);
+                worst = std::max({worst, std::fabs(xb / zb - double{r0[k][0]}), std::fabs(y / zb - double{r0[k][1]})});
+            }
+            CHECK(worst < 1e-4);
+        }
+        // the axis: a ray straight ahead before is turned by exactly `a`
+        const auto [up, dn, l, r] = lut.meta(e).fov_tan;
+        const auto [up2, dn2, l2, r2] = rot.meta(e).fov_tan;
+        CHECK(std::fabs(std::atan(double{r2}) - (std::atan(double{r}) + a)) < 1e-5);
+        CHECK(std::fabs(std::atan(double{l2}) - (std::atan(double{l}) - a)) < 1e-5);
+        CHECK(up2 > up && dn2 > dn && std::fabs(double{up2} / up - double{dn2} / dn) < 1e-5);
+    }
+    // zero turn = the same rays
+    const auto same = lut.rotated_yaw({0.0, 0.0});
+    for (std::size_t e = 0; e < 2; e++) {
+        CHECK(same.meta(e) == lut.meta(e));
+        CHECK(same.raw(e, 1) == lut.raw(e, 1));
+    }
+}
+
+// The Crystal Super profile (crystal-pimax-native-lut.bin, headset-verified 2026-10-22) is the like-Pimax LUT turned
+// by +-atan(0.0819). Both are private (made from the user's own Pimax install, never in the repo): the test runs when
+// $PIBRIDGE_LENS_EXT_DIR (default ~/gamedev/ext/lens) has them; the turn must reproduce the verified file bit for bit.
+TEST(the_crystal_super_profile_is_the_like_pimax_lut_turned) {
+    const char* d = std::getenv("PIBRIDGE_LENS_EXT_DIR");
+    const char* home = std::getenv("HOME");
+    const std::string dir = d != nullptr ? d : std::string(home != nullptr ? home : "") + "/gamedev/ext/lens";
+    const auto src = Lut::load(dir + "/crystal-pimax-lut.bin");
+    const auto want = Lut::load(dir + "/crystal-pimax-native-lut.bin");
+    if (!src || !want) {
+        std::fprintf(stderr, "private lens files not present in %s, skipping\n", dir.c_str());
+        return;
+    }
+    const double th = std::atan(0.0819);
+    const auto got = src->rotated_yaw({th, -th});
+    for (std::size_t e = 0; e < 2; e++) {
+        for (std::size_t i = 0; i < 4; i++) {
+            CHECK(got.meta(e).fov_tan[i] == want->meta(e).fov_tan[i]);
+        }
+        double worst = 0;
+        for (std::size_t c = 0; c < CHANNELS; c++) {
+            const auto& g = got.raw(e, c);
+            const auto& w = want->raw(e, c);
+            for (std::size_t k = 0; k < g.size(); k++) {
+                const double err = std::max(std::fabs(double{g[k][0]} - w[k][0]), std::fabs(double{g[k][1]} - w[k][1]));
+                worst = std::max(worst, err);
+            }
+        }
+        std::fprintf(stderr, "eye %zu: max node difference %.2e\n", e, worst);
+        CHECK(worst == 0.0);
+    }
+}
+
 PIBRIDGE_TEST_MAIN()

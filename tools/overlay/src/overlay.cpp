@@ -262,6 +262,79 @@ private:
     std::string err_;
 };
 
+// The in-game recenter ring: a small overlay fixed in front of the HMD, shown only while the recenter button is held
+// (headtrack writes the progress 0..1 to $XDG_RUNTIME_DIR/pibridge/recenter-progress), a ring filling to completion.
+// Not a dashboard overlay -- it must be visible inside a running game.
+class RingOverlay {
+public:
+    explicit RingOverlay(vr::IVROverlay* ov) : ov_(ov) {}
+    bool create() {
+        if (ov_->CreateOverlay("pibridge.recenter.ring", "PiBridge Recenter", &h_) != vr::VROverlayError_None) {
+            return false;
+        }
+        ov_->SetOverlayWidthInMeters(h_, 0.22F);
+        // fixed in front of the HMD: 0.7 m forward (-Z), a touch down
+        vr::HmdMatrix34_t m{};
+        m.m[0][0] = 1.0F;
+        m.m[1][1] = 1.0F;
+        m.m[2][2] = 1.0F;
+        m.m[1][3] = -0.03F;
+        m.m[2][3] = -0.7F;
+        ov_->SetOverlayTransformTrackedDeviceRelative(h_, vr::k_unTrackedDeviceIndex_Hmd, &m);
+        // upload the whole fill-level sprite sheet ONCE; animation is just a texture-bounds change (no re-upload, so
+        // no per-frame flicker).
+        sheet_ = drawRingSheet();
+        const std::uint32_t side = kRingSize * static_cast<std::uint32_t>(kRingGrid);
+        ov_->SetOverlayRaw(h_, sheet_.data(), side, side, 4);
+        setFrame(0);
+        ov_->HideOverlay(h_);
+        return true;
+    }
+    void update() {
+        const double p = readProgress();
+        if (p > 0.01) {
+            int frame = static_cast<int>(p * (kRingFrames - 1) + 0.5);
+            frame = frame < 0 ? 0 : (frame >= kRingFrames ? kRingFrames - 1 : frame);
+            if (frame != lastFrame_) {
+                setFrame(frame); // select the fill level: a cheap bounds change, not a texture upload
+                lastFrame_ = frame;
+            }
+            lowPolls_ = 0;
+            if (!shown_) {
+                ov_->ShowOverlay(h_);
+                shown_ = true;
+            }
+        } else if (shown_ && ++lowPolls_ >= 2) {
+            // hide only after two consecutive "no hold" polls: a single transient read must never blink the ring
+            ov_->HideOverlay(h_);
+            shown_ = false;
+            lowPolls_ = 0;
+        }
+    }
+
+private:
+    void setFrame(int f) {
+        const int col = f % kRingGrid, row = f / kRingGrid;
+        vr::VRTextureBounds_t b;
+        b.uMin = static_cast<float>(col) / kRingGrid;
+        b.uMax = static_cast<float>(col + 1) / kRingGrid;
+        b.vMin = static_cast<float>(row) / kRingGrid;
+        b.vMax = static_cast<float>(row + 1) / kRingGrid;
+        ov_->SetOverlayTextureBounds(h_, &b);
+    }
+    std::vector<std::uint8_t> sheet_;
+    int lastFrame_ = -1;
+    int lowPolls_ = 0;
+    static double readProgress() {
+        std::ifstream f(status::runtime_dir() / "recenter-progress");
+        double p = 0.0;
+        return (f >> p) ? p : 0.0;
+    }
+    vr::IVROverlay* ov_;
+    vr::VROverlayHandle_t h_ = vr::k_ulOverlayHandleInvalid;
+    bool shown_ = false;
+};
+
 } // namespace
 
 int run(const Options& o, std::atomic<bool>& stop) {
@@ -286,12 +359,17 @@ int run(const Options& o, std::atomic<bool>& stop) {
             std::fprintf(stderr, "pibridge-overlay: %s\n", app.error().c_str());
             return 1;
         }
+        RingOverlay ring(ov);
+        if (!ring.create()) {
+            std::fprintf(stderr, "pibridge-overlay: recenter ring overlay not created (non-fatal)\n");
+        }
         std::fprintf(stderr, "pibridge-overlay: dashboard launcher up\n");
         while (!stop.load()) {
             if (!app.poll()) {
                 // SteamVR is going down: exit cleanly (no shutdown). The app restarts us, and the next process waits.
                 return 0;
             }
+            ring.update(); // the in-game recenter ring (shown only while the recenter button is held)
             sleepMs(stop, 50);
         }
         return 0; // stop requested

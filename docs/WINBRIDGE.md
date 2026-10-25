@@ -18,7 +18,7 @@ pibridge-headtrack --VIT--> libpibridge_vit_winbridge.so --TCP 127.0.0.1:48291--
 |---|---|
 | `winbridge/server.cpp` -> `winbridge.exe` | The engine host: loads the DLL, `HeadsetInitialImpl` -> `HeadsetSetTrackingMode(1)` -> `HeadsetSetDeviceEnable(1)`, then serves one client. MinGW: `x86_64-w64-mingw32-g++ -O2 -static server.cpp -lws2_32 -o winbridge.exe` |
 | `winbridge/vit_winbridge.cpp` -> `libpibridge_vit_winbridge.so` | A VIT 2.0 tracker (all 21 functions Monado's `t_vit_loader` requires). `g++ -O2 -std=c++20 -fPIC -shared vit_winbridge.cpp -o libpibridge_vit_winbridge.so -pthread` |
-| `winbridge/proto.h` | The wire format: `MSG_IMU` -> `MSG_POSE`, `MSG_CAM` -> `MSG_ACK` (x86-64 little-endian structs) |
+| `winbridge/proto.h` | The wire format: `MSG_IMU` -> `MSG_POSE`, `MSG_CAM` -> `MSG_ACK`, `MSG_ROOMREQ` -> `MSG_ROOMSTATE` (x86-64 little-endian structs) |
 | `winbridge/vit/vit_interface.h` | Copy of Monado's VIT header (BSL-1.0, Collabora); needs `#define VIT_INTERFACE_IMPLEMENTATION` |
 | `winbridge/client.cpp`, `winbridge/vit_replay.cpp` | Offline checks: a recording (`replay.bin`) through the raw protocol / through the VIT library loaded like a VIT host loads it |
 | `loader/loader.cpp` | The exploration tool (`smoke`, `init`, `feed`, `play`) the above came from |
@@ -101,6 +101,17 @@ pibridge-ctrltrack is not started. Everything below is from the Frida traces of 
 - Offline (`ctrl_prep` + `vit-replay --ctrl` on a 30 s take with LED frames and both controllers' IMU, no head data):
   the engine tracks both hands, poses for about 80 % (left) and 76 % (right) of the IMU samples, nothing dropped;
   head-to-controller distance within 5 cm of the take's own tracker (a constant origin offset).
+
+## Room state (floor and recognition)
+
+The engine's own room getters are carried over the same extension (`pibridge_winbridge_ext.h`, version 2;
+`MSG_ROOMREQ` -> `MSG_ROOMSTATE`): `HeadsetGetGroundState` (the floor) and `HeadsetGetLocModeState` (the
+localization / recognition state). Each is `int fn(void* out)` returning `-1` (engine not up), `0` (not ready yet) or
+`1` (valid); GroundState fills a flag byte then a run of floats (the floor plane/height, layout still being pinned
+down), LocModeState fills one byte (the localization state). `pibridge_wb_room_state()` returns the last reply and
+queues a fresh request, so pibridge-headtrack polls it at ~5 Hz and writes `room-state.json` (ground_ret, ground_flag,
+g0..g3, loc_ret, loc_state) and logs changes -- the observe-and-pin-down step before the room setup uses them for the
+floor and a "room recognized" gate. Absent on older DLLs (the getters return `-2`).
 
 ## The session
 

@@ -48,6 +48,7 @@ inline constexpr char kAnchorGlide[] = "io_anchor_glide"; // on | off           
 inline constexpr char kCamAe[] = "io_cam_ae";             // on | dry | off       PIMAX_CAM_AE
 inline constexpr char kCamAeModel[] = "io_cam_ae_model";  // crystal-super | auto PIMAX_CAM_AE_MODEL
 inline constexpr char kCamAeLaw[] = "io_cam_ae_law";      // new | old            PIMAX_CAM_AE_LAW
+inline constexpr char kCamFps[] = "io_cam_fps";           // 50 | 60              camera capture fps (broker --fps); 60 = 30 Hz controller optics
 inline constexpr char kCtrlTrack[] = "io_ctrl_track";     // on | off             PIMAX_CTRL_TRACK + pimax-ctrltrack
 inline constexpr char kCtrlAngle[] = "io_ctrl_angle";     // -20..70 (deg)        PIMAX_CTRL_ANGLE
 inline constexpr char kCtrlLost[] = "io_ctrl_lost_s";     // 1..10 (s)            PIMAX_CTRL_TRACK_LOST_S
@@ -92,6 +93,7 @@ struct IoSettings {
     CamAe camAe = CamAe::On;
     bool camAeCrystal = true; // PIMAX_CAM_AE_MODEL=crystal-super (false: detect from USB)
     bool camAeNewLaw = true;
+    int camFps = 60; // io_cam_fps: 50 or 60 (broker --fps)
     bool ctrlTrack = true;
     int ctrlAngle = 30;
     int ctrlLostS = 4;

@@ -1,5 +1,5 @@
 diff --git a/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp b/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp
-index fc4ddab..fe20cbc 100644
+index 13df3a0..3eb0135 100644
 --- a/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp
 +++ b/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp
 @@ -1,3 +1,9 @@
@@ -12,7 +12,17 @@ index fc4ddab..fe20cbc 100644
  #include "PimaxSlam.h"
  
  #ifdef PVR_EXISTS
-@@ -683,9 +689,14 @@ void PimaxSlamDriver::PvrTrackingThread() {
+@@ -9,7 +15,9 @@
+ #include "../Helpers/vr_blockqueue.h"
+ 
+ #include <DirectXMath.h>
++#include <cmath>
+ #include <filesystem>
++#include <fstream>
+ #include <memory>
+ #include "nlohmann/json.hpp"
+ #include <PVR_Math.h>
+@@ -683,9 +691,14 @@ void PimaxSlamDriver::PvrTrackingThread() {
  #include "../Helpers/SharedMemoryPoseSource.h"
  #include "../Helpers/MiscHelper.h"
  
@@ -27,7 +37,76 @@ index fc4ddab..fe20cbc 100644
  #include <time.h>
  
  // Matches the Windows driver (driver_aapvr).
-@@ -833,6 +844,66 @@ public:
+@@ -811,6 +824,68 @@ public:
+ 		pose.vecDriverFromHeadTranslation[0] = 0;
+ 		pose.vecDriverFromHeadTranslation[1] = 0.023599;
+ 		pose.vecDriverFromHeadTranslation[2] = -0.000302;
++
++		// pibridge: deliver the controller EXACTLY as Monado's driver does (ovrd_driver.cpp GetPose + apply_pose /
++		// engine_pose). headtrack already predicts the controller forward and bakes the controller gyro into the
++		// orientation (the out-of-view "held" turn and the optical forward step). Monado reports that pose with
++		// poseTimeOffset 0 and sets NO velocity-valid flags, so SteamVR takes it as-is and does NOT extrapolate.
++		// We were instead handing SteamVR vecVelocity/vecAngularVelocity, so it re-extrapolated the controller's
++		// jittery optical<->held velocity -- and re-applied the gyro ON TOP of the already-gyro-turned orientation
++		// (a double turn in the held state). Extrapolating that flickering velocity is what made fast swings "bend".
++		// Zeroing it keeps the gyro once (in the pose) and matches Monado, which tracked far steadier with the same
++		// engine. The head is a different driver and keeps its clean SLAM velocity.
++		pose.poseTimeOffset = 0;
++		pose.vecVelocity[0] = pose.vecVelocity[1] = pose.vecVelocity[2] = 0;
++		pose.vecAngularVelocity[0] = pose.vecAngularVelocity[1] = pose.vecAngularVelocity[2] = 0;
++
++		// pibridge: summarise the controller pose feed once per second, to chase the fast-motion saber jitter. State 7 is
++		// optical, 5 is IMU-only (the position FREEZES and the linear velocity is zeroed) -- a burst of "imu-only" or
++		// "stale" during fast swings is the LED engine losing the controller, which SteamVR cannot predict through.
++		diagCount++;
++		if (!fresh) {
++			diagStale++;
++		} else if (d.state == 7) {
++			diagOptical++;
++		} else if (d.state == 5) {
++			diagImuOnly++;
++		} else {
++			diagNoPose++;
++		}
++		const double ageMs = double(nowNs - d.timeNs) / 1e6;
++		if (ageMs > diagMaxAgeMs) {
++			diagMaxAgeMs = ageMs;
++		}
++		const double lin = std::sqrt(d.linearVelocity[0] * d.linearVelocity[0] +
++			d.linearVelocity[1] * d.linearVelocity[1] + d.linearVelocity[2] * d.linearVelocity[2]);
++		const double ang = std::sqrt(d.angularVelocity[0] * d.angularVelocity[0] +
++			d.angularVelocity[1] * d.angularVelocity[1] + d.angularVelocity[2] * d.angularVelocity[2]);
++		if (lin > diagMaxLin) {
++			diagMaxLin = lin;
++		}
++		if (ang > diagMaxAng) {
++			diagMaxAng = ang;
++		}
++		if (diagLastLogNs == 0) {
++			diagLastLogNs = nowNs;
++		} else if (nowNs - diagLastLogNs >= 1000000000LL) {
++			const double dt = double(nowNs - diagLastLogNs) / 1e9;
++			DriverLog("ctrl %s: %.0f upd/s | optical %u imu-only %u none %u stale %u | maxAge %.1f ms | max|v| %.2f m/s max|w| %.0f deg/s",
++				role == vr::TrackedControllerRole_LeftHand ? "L" : "R", diagCount / dt, diagOptical, diagImuOnly,
++				diagNoPose, diagStale, diagMaxAgeMs, diagMaxLin, diagMaxAng * 180.0 / 3.14159265358979);
++			diagLastLogNs = nowNs;
++			diagCount = diagOptical = diagImuOnly = diagNoPose = diagStale = 0;
++			diagMaxAgeMs = diagMaxLin = diagMaxAng = 0;
++		}
++		// detailed pose trace (~30 Hz) to correlate the felt motion (e.g. the saber beam "bending") with what SteamVR
++		// actually gets: the raw sample age, the offset handed to SteamVR for prediction, the pose and the velocities.
++		if (nowNs - diagLastDetailNs >= 33000000LL) {
++			diagLastDetailNs = nowNs;
++			DriverLog("ctrl %s pose: st=%d fresh=%d age=%.1fms off=%.1fms pos(%.3f %.3f %.3f) quat(%.3f %.3f %.3f %.3f) |v|=%.2f |w|=%.0fdps",
++				role == vr::TrackedControllerRole_LeftHand ? "L" : "R", d.state, fresh ? 1 : 0, ageMs,
++				pose.poseTimeOffset * 1000.0, pose.vecPosition[0], pose.vecPosition[1], pose.vecPosition[2],
++				pose.qRotation.x, pose.qRotation.y, pose.qRotation.z, pose.qRotation.w, lin, ang * 180.0 / 3.14159265358979);
++		}
++
+ 		vr::VRServerDriverHost()->TrackedDevicePoseUpdated(deviceIndex, pose, sizeof(pose));
+ 	}
+ 
+@@ -843,6 +918,66 @@ public:
  		in.UpdateBooleanComponent(components[ComponentMenu], (pressed & (0x40 | 0x04)) != 0, t);
  	}
  
@@ -94,7 +173,20 @@ index fc4ddab..fe20cbc 100644
  	// From RunFrame.
  	void UpdateBattery(int battery) {
  		if (deviceIndex == vr::k_unTrackedDeviceIndexInvalid || battery < 0 || battery == lastBattery) {
-@@ -896,11 +967,14 @@ void PimaxSlamDriver::PosTrackedDeviceActivate(uint32_t& unObjectId, vr::EVRInit
+@@ -877,6 +1012,12 @@ private:
+ 	int lastBattery = -1;
+ 	uint32_t lastButtons = 0xffffffff; // the first report is always sent
+ 	float lastAxes[4] = {};
++
++	// pibridge: fast-motion jitter diagnostics, summarised once per second in UpdateTrackingState.
++	int64_t diagLastLogNs = 0;
++	uint32_t diagCount = 0, diagOptical = 0, diagImuOnly = 0, diagNoPose = 0, diagStale = 0;
++	double diagMaxAgeMs = 0, diagMaxLin = 0, diagMaxAng = 0;
++	int64_t diagLastDetailNs = 0; // the detailed pose trace is throttled to ~30 Hz
+ };
+ 
+ static std::unique_ptr<PimaxCrystalControllerDriver> s_controllerDriver[2];
+@@ -906,11 +1047,14 @@ void PimaxSlamDriver::PosTrackedDeviceActivate(uint32_t& unObjectId, vr::EVRInit
  
  	vr::VRProperties()->SetStringProperty(container, vr::Prop_TrackingSystemName_String, "aapvr");
  	vr::VRProperties()->SetStringProperty(container, vr::Prop_ManufacturerName_String, "Pimax");
@@ -112,7 +204,7 @@ index fc4ddab..fe20cbc 100644
  	vr::VRProperties()->SetFloatProperty(container, vr::Prop_DisplayFrequency_Float, 90.0f);
  	vr::VRProperties()->SetBoolProperty(container, vr::Prop_DeviceProvidesBatteryStatus_Bool, true);
  
-@@ -981,6 +1055,18 @@ void PimaxSlamDriver::RunPvrBackground() {
+@@ -991,6 +1135,18 @@ void PimaxSlamDriver::RunPvrBackground() {
  }
  
  void PimaxSlamDriver::HandleEvent(const vr::VREvent_t& event) {

@@ -31,6 +31,17 @@ struct EngineControllerPose {
     float dev_from_imu[4] = {0, 0, 0, 1}; // ImuToDevice (constant)
 };
 
+/// The room state from Pimax's head SLAM engine (winbridge's extension): the floor (GetGroundState) and the
+/// localization/recognition state (GetLocModeState). ret: -1 engine not initialised, 0 not ready, 1 valid, -2 the DLL
+/// does not export the getter. `ground` is GetGroundState's raw out buffer (layout still being pinned down),
+/// `loc_state` is GetLocModeState's single out byte.
+struct RoomState {
+    std::int32_t ground_ret = 0;
+    std::int32_t loc_ret = 0;
+    std::uint8_t ground[32] = {};
+    std::uint8_t loc_state = 0;
+};
+
 /// One engine pose: the IMU in the engine's world (z up), as VIT reports it.
 struct EnginePose {
     std::int64_t ts_ns = 0;
@@ -70,6 +81,9 @@ public:
     void push_controller_imu(std::uint32_t hand, std::int64_t ts_ns, const float accel[3], const float gyro[3]);
     /// The newest controller pose of `hand`, if the engine has one.
     std::optional<EngineControllerPose> controller_pose(std::uint32_t hand);
+    /// The last room state from the engine (floor + localization); nullopt until the first reply. Each call also
+    /// queues a fresh request, so poll it at a low rate (the floor and the recognition change slowly).
+    std::optional<RoomState> room_state();
     std::uint64_t imu_held() const { return imu_held_; }
 
 private:
@@ -87,6 +101,7 @@ private:
     void* ext_led_ = nullptr;
     void* ext_imu_ = nullptr;
     void* ext_pose_ = nullptr;
+    void* ext_room_ = nullptr;
 };
 
 } // namespace pibridge::headtrack

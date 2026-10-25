@@ -111,17 +111,7 @@ private:
     QString loadedRoom_; // the saved room shown, "" when it is the universe's own boundary
     QString lastActive_;
 
-    pibridge::ui::Card* mapCard_ = nullptr;
-    QLabel* mapSteps_ = nullptr;
-    QPushButton* map_ = nullptr;
-    QLabel* mapStatus_ = nullptr;
-    QLabel* mapWhy_ = nullptr;
-    bool mapRunning_ = false;
-    // the floor from the user's height (fed to pibridge-roommap setup fast as --eye-height)
-    QLineEdit* bodyH_ = nullptr;
-    QLineEdit* eyeH_ = nullptr;
-    QLabel* eyeNote_ = nullptr;
-    void saveHeights();
+    bool mapRunning_ = false; // the "Set up your playspace" card was removed; mapRoom still runs from the Dashboard
     QLabel* ioNote_ = nullptr;
     QPushButton* createIo_ = nullptr;
     pibridge::ui::Card* planCard_ = nullptr;

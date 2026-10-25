@@ -89,6 +89,8 @@ TEST(overlay_control_persists) {
     {
         Conf c(conf);
         OverlayControl ctl(c, /*fake=*/true);
+        CHECK(ctl.wanted() && ctl.running()); // default ON: it runs without the user turning it on
+        CHECK(ctl.setWanted(false));
         CHECK(!ctl.wanted() && !ctl.running());
         CHECK(ctl.setWanted(true));
         CHECK(ctl.wanted() && ctl.running()); // fake: "running" follows the switch

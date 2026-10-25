@@ -171,6 +171,33 @@ std::vector<std::uint8_t> Lut::to_bytes() const {
     return b;
 }
 
+Lut Lut::rotated_yaw(std::array<double, 2> yaw_rad) const {
+    Lut out = *this;
+    for (std::size_t e = 0; e < 2; e++) {
+        const double c = std::cos(yaw_rad[e]), s = std::sin(yaw_rad[e]);
+        // the ray (tx, ty, 1) turned about +y: x' = x c + s, z' = c - x s; tangents divide by z'
+        const auto turn = [&](Tan t) -> Tan {
+            const double x = t[0], y = t[1], z = c - x * s;
+            return {static_cast<float>((x * c + s) / z), static_cast<float>(y / z)};
+        };
+        for (std::size_t ch = 0; ch < CHANNELS; ch++) {
+            for (auto& p : out.eyes_[e].raw[ch]) {
+                p = turn(p);
+            }
+            for (auto& p : out.eyes_[e].data[ch]) {
+                p = turn(p);
+            }
+        }
+        const auto [up, dn, l, r] = eyes_[e].meta.fov_tan;
+        const double zl = c + static_cast<double>(l) * s, zr = c - static_cast<double>(r) * s;
+        const double zmin = std::min(zl, zr);
+        out.eyes_[e].meta.fov_tan = {static_cast<float>(up / zmin), static_cast<float>(dn / zmin),
+                                     static_cast<float>(-((-static_cast<double>(l) * c + s) / zl)),
+                                     static_cast<float>((static_cast<double>(r) * c + s) / zr)};
+    }
+    return out;
+}
+
 std::expected<Lut, std::string> Lut::from_bytes(std::span<const std::uint8_t> b) {
     if (b.size() < HEADER + 4 || std::memcmp(b.data(), LUT_MAGIC, 8) != 0) {
         return std::unexpected("not a pimax LUT file (bad magic)");

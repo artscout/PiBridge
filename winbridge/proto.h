@@ -13,6 +13,8 @@ enum {
     MSG_LED  = 5,  // client->server: controller LED frames (short exposure) -> MSG_ACK
     MSG_CIMU = 6,  // client->server: controller IMU -> MSG_CPOSE
     MSG_CPOSE = 7, // server->client: controller pose
+    MSG_ROOMREQ = 8,   // client->server: poll the room state (floor + localization) -> MSG_ROOMSTATE
+    MSG_ROOMSTATE = 9, // server->client: the room state
 };
 
 #pragma pack(push, 1)
@@ -30,4 +32,17 @@ struct CtrlImuPayload { uint32_t hand, pad; uint64_t ts; float accel[3]; float g
 // the LED engine computed the controller (quat4, pos3, same world); dev_from_imu = rotation of the controller IMU into the body
 // (ImuToDevice, quat x,y,z,w; constant).
 struct CtrlPosePayload { uint32_t hand, tracked; uint64_t ts; float pose[13]; float head[7]; float dev_from_imu[4]; };
+// The room state from the Pimax head SLAM engine's own getters (pimax_slam.pi.dll):
+//   HeadsetGetGroundState(out)  -> ret, out = { u8 flag; <pad>; float plane/height ... }  (floor)
+//   HeadsetGetLocModeState(out) -> ret, out[0] = u8 localization state                    (recognized)
+// ret: -1 engine not initialised, 0 not ready yet, 1 valid. -2 = the DLL does not export the getter.
+// ground[] is the raw out buffer of GetGroundState (its layout is still being pinned down; forwarded verbatim so
+// pibridge-headtrack can log/decode it live); loc_state is GetLocModeState's single out byte.
+struct RoomStatePayload {
+    int32_t ground_ret;
+    int32_t loc_ret;
+    uint8_t ground[32];
+    uint8_t loc_state;
+    uint8_t pad[3];
+};
 #pragma pack(pop)

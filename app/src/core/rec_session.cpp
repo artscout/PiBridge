@@ -179,7 +179,8 @@ QString logReason(const QString& log) {
 RecProcSpec brokerSpec(const RecSetup& s, const QString& logDir) {
     return {QStringLiteral("broker"),
             s.cam.path,
-            {QStringLiteral("broker"), QStringLiteral("--source"), s.camDevice, QStringLiteral("--socket"), s.brokerSocket},
+            {QStringLiteral("broker"), QStringLiteral("--source"), s.camDevice, QStringLiteral("--fps"),
+             QString::number(s.camFps), QStringLiteral("--socket"), s.brokerSocket},
             {QStringLiteral("PIMAX_CAM_CALIB=") + s.calib.path},
             logDir + QStringLiteral("/broker.log")};
 }

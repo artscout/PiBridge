@@ -352,6 +352,7 @@ int floorHeight(const Options& o) {
     std::thread worker;
     MapFlow flow;
     flow.setPid(st.pid);
+    flow.setPimaxFloorSource(true); // use the Pimax engine's floor (room-state.json) on the floor step, when it runs
     flow.setEyeHeight(o.eyeHeight);
     MapLink link;
     link.camera = o.camera;
@@ -496,6 +497,7 @@ int mapRoom(const Options& o) {
     };
     MapFlow flow;
     flow.setPid(static_cast<std::uint32_t>(::getpid()));
+    flow.setPimaxFloorSource(true); // use the Pimax engine's floor (room-state.json) on the floor step, when it runs
     flow.setEyeHeight(o.eyeHeight);
     MapLink link;
     link.camera = o.camera;
@@ -506,6 +508,10 @@ int mapRoom(const Options& o) {
         }
         auto s = roommap::guide::parse_state(*t);
         return s ? std::optional(*s) : std::nullopt;
+    };
+    link.readScanPoints = [&dir]() -> std::vector<roommap::guide::P3f> {
+        const auto t = roommap::guide::read_file(dir, roommap::guide::POINTS_FILE);
+        return t ? roommap::guide::parse_points(*t) : std::vector<roommap::guide::P3f>{};
     };
     link.writeAnswer = [&dir](const roommap::guide::Answer& a) {
         std::string nums;
@@ -653,7 +659,23 @@ int main(int argc, char** argv) {
     switch (o->run) {
     case Run::VrUniverse: return vrUniverseMain();
     case Run::VrReload: return vrReloadMain();
-    case Run::VrStanding: return vrStandingMain(o->eyeHeight, o->radius, o->seated, o->perimeterFile);
+    case Run::VrStanding: {
+        // The floor to write: the room setup's SAVED floor plane, put into SteamVR's raw space through the vertical of
+        // the current relocalize (room = Ry(yaw) raw + t, y untouched by yaw: raw_y = room_y - t[1]). It is the floor
+        // every session restores to, independent of where the head is right now. Without a stored floor / room fix
+        // (the very first setup) the writer falls back to head y - eye height.
+        std::optional<double> floorY;
+        if (!o->seated && !o->keepFloor) {
+            const std::string dir = roommap::store::map_dir(o->room);
+            const auto f = roommap::floor::StoredFloor::load(dir);
+            const auto res = roommap::store::RelocResult::load(dir + "/last-reloc.toml");
+            if (f && res) {
+                floorY = f->y - res->align.t[1];
+                std::printf("floor: the saved plane y %.3f (room) -> %.3f (raw) through the room fix\n", f->y, *floorY);
+            }
+        }
+        return vrStandingMain(*o, floorY);
+    }
     case Run::VrZone: return vrZoneMain(*parseZoneArg(o->zoneArg));
     case Run::SelfTest: return runSelfTest(o->snapshotDir);
     case Run::List: return list(*o);

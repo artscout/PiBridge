@@ -88,6 +88,7 @@ private:
     QSpinBox* ctrlAngle_ = nullptr;
     QSpinBox* ctrlLost_ = nullptr;
     pibridge::ui::Toggle* ctrlSteady_ = nullptr;
+    pibridge::ui::Segmented* camFps_ = nullptr; // io_cam_fps: 50 | 60
 
     QLineEdit* extraEnv_ = nullptr;
     QVBoxLayout* paths_ = nullptr;

@@ -50,6 +50,11 @@ struct Options {
                                          // chaperone perimeter; "x z" setup-frame points one per line (over --radius)
     bool seated = false;                 // --seated (with --vr-standing): set the seated zero pose (centre at the head
                                          // where you sit) instead of the standing one (centre on the floor)
+    bool keepFloor = false;              // --keep-floor (with --vr-standing): keep the chaperone's current floor, set
+                                         // centre / forward only (the in-game recenter)
+    bool floorOnly = false;              // --floor-only (with --vr-standing): keep the chaperone's centre / forward, set
+                                         // only the floor from the saved room floor (the room recognised in a new
+                                         // session, whose raw space is new)
     bool chaperone = false;              // --chaperone (with --map): SteamVR path - pibridge-roommap saves the setup with
                                          // --no-offset, then this tool writes the floor/centre/forward into SteamVR's
                                          // chaperone (--vr-standing) and reloads it, instead of a Monado world offset

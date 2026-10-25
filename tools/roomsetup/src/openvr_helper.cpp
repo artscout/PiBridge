@@ -139,10 +139,17 @@ int vrReloadMain() {
     return 0;
 }
 
-int vrStandingMain(std::optional<double> eyeHeight, std::optional<double> radius, bool seated,
-                   const std::string& perimeterFile) {
-    if (!seated && !eyeHeight) {
+int vrStandingMain(const Options& o, std::optional<double> floorY) {
+    const std::optional<double> eyeHeight = o.eyeHeight;
+    const std::optional<double> radius = o.radius;
+    const bool seated = o.seated, keepFloor = o.keepFloor, floorOnly = o.floorOnly;
+    const std::string& perimeterFile = o.perimeterFile;
+    if (!seated && !eyeHeight && !floorY && !keepFloor) {
         std::fprintf(stderr, "pibridge-roomsetup: --vr-standing needs --eye-height M (standing); seated needs none\n");
+        return 1;
+    }
+    if (floorOnly && !floorY) {
+        std::fprintf(stderr, "pibridge-roomsetup: --floor-only needs a saved floor and a room fix (floor.toml, last-reloc.toml)\n");
         return 1;
     }
     Client c;
@@ -155,7 +162,7 @@ int vrStandingMain(std::optional<double> eyeHeight, std::optional<double> radius
     // is expressed in this space). A just-started background client may have no pose on the first call, so poll ~2 s.
     std::array<vr::TrackedDevicePose_t, vr::k_unMaxTrackedDeviceCount> poses{};
     const vr::HmdMatrix34_t* head = nullptr;
-    for (int i = 0; i < 100 && head == nullptr; i++) {
+    for (int i = 0; i < 100 && head == nullptr && !floorOnly; i++) {
         sys->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseRawAndUncalibrated, 0.0F, poses.data(),
                                              vr::k_unMaxTrackedDeviceCount);
         const vr::TrackedDevicePose_t& p = poses[vr::k_unTrackedDeviceIndex_Hmd];
@@ -166,26 +173,64 @@ int vrStandingMain(std::optional<double> eyeHeight, std::optional<double> radius
         const timespec ts{0, 20'000'000};
         nanosleep(&ts, nullptr);
     }
-    if (head == nullptr) {
+    if (head == nullptr && !floorOnly) {
         std::fprintf(stderr, "pibridge-roomsetup: no valid head pose from SteamVR (put the headset on and stand still)\n");
         return 1;
     }
-    const double hx = head->m[0][3], hy = head->m[1][3], hz = head->m[2][3];
-    // head forward = -Z axis of the head rotation; the zero frame's -Z must match it (yaw only, on the floor)
-    const double fx = -static_cast<double>(head->m[0][2]), fz = -static_cast<double>(head->m[2][2]);
-    const double yaw = std::atan2(-fx, -fz); // forward = (-sin yaw, 0, -cos yaw), the room-frame convention
-    // standing: origin on the floor under the head (head y - eye height). seated: origin at the head (recenter the
-    // seated pose where you sit), no floor drop. Rotated by yaw about +Y (Ry = [[c,0,s],[0,1,0],[-s,0,c]]).
-    const double originY = seated ? hy : (hy - *eyeHeight);
+    setup->RevertWorkingCopy(); // start from the live config so the existing collision bounds (and floor) are kept
+    double hx = 0, hy = 0, hz = 0, yaw = 0;
+    if (floorOnly) {
+        // centre and forward stay what the chaperone has (the room setup wrote them in the room frame, which every
+        // session relocalizes into); only the floor is set below
+        vr::HmdMatrix34_t cur{};
+        if (!setup->GetWorkingStandingZeroPoseToRawTrackingPose(&cur)) {
+            std::fprintf(stderr, "pibridge-roomsetup: --floor-only: the chaperone has no standing pose to keep\n");
+            return 1;
+        }
+        hx = cur.m[0][3];
+        hy = cur.m[1][3];
+        hz = cur.m[2][3];
+        yaw = std::atan2(static_cast<double>(cur.m[0][2]), static_cast<double>(cur.m[0][0]));
+    } else {
+        hx = head->m[0][3];
+        hy = head->m[1][3];
+        hz = head->m[2][3];
+        // head forward = -Z axis of the head rotation; the zero frame's -Z must match it (yaw only, on the floor)
+        const double fx = -static_cast<double>(head->m[0][2]), fz = -static_cast<double>(head->m[2][2]);
+        yaw = std::atan2(-fx, -fz); // forward = (-sin yaw, 0, -cos yaw), the room-frame convention
+    }
+    // The standing origin y (the floor), in this order of trust:
+    //   keepFloor -> the floor already in the chaperone (an in-game recenter moves centre / forward only);
+    //   floorY    -> the room setup's SAVED floor plane, placed in raw space through the relocalize's vertical (the
+    //                floor every session restores to; it does not depend on where the head is right now);
+    //   else      -> head y - eye height (the setup's own first commit, when no stored floor exists yet).
+    // A floor taken from the live head at an arbitrary instant (looking down, mid-crouch, raw y drifted) was the
+    // "floor below the real one" after a recenter. seated: origin at the head, no floor drop.
+    double originY = hy;
+    const char* floorFrom = "the head";
+    if (!seated) {
+        vr::HmdMatrix34_t cur{};
+        if (keepFloor && setup->GetWorkingStandingZeroPoseToRawTrackingPose(&cur)) {
+            originY = cur.m[1][3];
+            floorFrom = "the chaperone (kept)";
+        } else if (floorY) {
+            originY = *floorY;
+            floorFrom = "the saved floor plane";
+        } else if (eyeHeight) {
+            originY = hy - *eyeHeight;
+            floorFrom = "head - eye height";
+        }
+    }
     const double cs = std::cos(yaw), sn = std::sin(yaw);
     vr::HmdMatrix34_t m{};
     m.m[0][0] = static_cast<float>(cs); m.m[0][1] = 0; m.m[0][2] = static_cast<float>(sn); m.m[0][3] = static_cast<float>(hx);
     m.m[1][0] = 0;                      m.m[1][1] = 1; m.m[1][2] = 0;                       m.m[1][3] = static_cast<float>(originY);
     m.m[2][0] = static_cast<float>(-sn);m.m[2][1] = 0; m.m[2][2] = static_cast<float>(cs); m.m[2][3] = static_cast<float>(hz);
-    std::printf("%s: raw head (%.3f, %.3f, %.3f), forward yaw %.1f deg; origin y %.3f%s; writing chaperone zero pose\n",
-                seated ? "seated" : "standing", hx, hy, hz, yaw * 180.0 / M_PI, originY,
-                seated ? "" : (" (floor, eye " + std::to_string(*eyeHeight) + " m)").c_str());
-    setup->RevertWorkingCopy(); // start from the live config so the existing collision bounds are kept
+    std::printf("%s: %s (%.3f, %.3f, %.3f), forward yaw %.1f deg; origin y %.3f (floor from %s%s); writing "
+                "chaperone zero pose\n",
+                seated ? "seated" : "standing", floorOnly ? "kept centre" : "raw head", hx, hy, hz, yaw * 180.0 / M_PI,
+                originY, floorFrom,
+                (!seated && eyeHeight) ? (", eye " + std::to_string(*eyeHeight) + " m").c_str() : "");
     if (seated) {
         setup->SetWorkingSeatedZeroPoseToRawTrackingPose(&m);
     } else {

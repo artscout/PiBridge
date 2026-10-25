@@ -8,7 +8,7 @@
 //     pibridge-roommap-guide 1
 //     pid N                         pibridge-roommap's pid
 //     seq N                         +1 at every rewrite
-//     step mode|posture|size|wear|light|map|floor-confirm|boundary|confirm|done|failed
+//     step mode|height|posture|size|wear|light|map|floor-confirm|boundary|confirm|done|failed
 //     title TEXT / text TEXT        the prompt (one line each)
 //     progress F                    0..1 (optional)
 //     keyframes N / points N        mapping feedback (views mapped, stereo points in view)
@@ -21,8 +21,11 @@
 //     pid N                         the headset tool's pid (pibridge-roommap stops when it is gone)
 //     id N                          +1 per answer; pibridge-roommap takes each id once
 //     step STEP                     the step answered (an answer for another step is ignored)
-//     answer yes | touch Y | height Y EYE | path X Z X Z ... | forward CX CZ YAW HEADY | cancel   (room frame;
-//            height: the floor Y from the head standing upright minus the user's eye height EYE)
+//     answer yes | touch Y | eye H [RAWY] | height Y EYE | path X Z X Z ... | forward CX CZ YAW HEADY | cancel
+//            (room frame; eye: the standing eye height H the user set on the HEIGHT step (from their stature), RAWY the
+//            head's RAW-frame y at the moment the stature was measured: the floor is RAWY (through the room fix) - H,
+//            the posture the height was taken in, not the head later. height: the floor Y from the head standing
+//            upright minus the eye height EYE)
 //            | mode M (1 = full, 0 = quick) | posture P (0 = stand, 1 = sit) | size Z (0/1/2 = small/medium/big)
 //            | back | repeat | next   (the panel's mode / posture / size menus and step buttons)
 #pragma once
@@ -41,6 +44,17 @@ using P2 = std::array<double, 2>;
 
 inline constexpr char STATE_FILE[] = "state";
 inline constexpr char ANSWER_FILE[] = "answer";
+// The live scan point cloud for the headset's "scanning" overlay: the stereo points mapped so far, in Monado's raw
+// SLAM frame (the headset converts raw -> stage with its StageLink, as it does the head). Binary (nulls, big), so a
+// file of its own rather than a line in the text state; rewritten during the map step only.
+inline constexpr char POINTS_FILE[] = "points";
+
+/// A scan point in the raw SLAM frame (metres).
+using P3f = std::array<float, 3>;
+/// Serialise scan points: a 4-byte magic, a u32 count, then count * 3 little-endian float32 (x, y, z).
+std::string format_points(const std::vector<P3f>& pts);
+/// Parse what format_points wrote (empty on a bad or truncated buffer).
+std::vector<P3f> parse_points(std::string_view text);
 
 /// room_from_raw as a yaw about +y and a translation (p_room = Ry(yaw) p_raw + t), session::Alignment's form.
 struct Conv {

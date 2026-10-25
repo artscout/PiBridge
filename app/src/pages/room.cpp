@@ -39,16 +39,6 @@ namespace room = pibridge::room;
 
 namespace {
 
-QString docPath(const QString& name) {
-    for (const QString& d : {QStringLiteral(PIBRIDGE_INSTALLED_DOCS), QStringLiteral(PIBRIDGE_SOURCE_DOCS)}) {
-        const QString p = d + QLatin1Char('/') + name;
-        if (QFileInfo::exists(p)) {
-            return p;
-        }
-    }
-    return {};
-}
-
 QString metres(double v) { return QLocale(QLocale::English).toString(v, 'f', 2) + QStringLiteral(" m"); }
 
 const QColor kGreen{0x3d, 0xdb, 0x85};
@@ -357,59 +347,9 @@ RoomPage::RoomPage(StateSource& source, Runner& runner, Actions::ToolFinder find
     cols->addLayout(left, 5);
     cols->addLayout(right, 3);
 
-    // ---- the playspace setup (inside-out): set it up once, recognised at every start (core/roommap_link.h)
-    mapCard_ = new pibridge::ui::Card(QStringLiteral("Set up your playspace"));
-    mapCard_->body()->addWidget(pibridge::ui::dimLabel(QStringLiteral(
-        "Inside-out tracking starts its world where the headset is, so the floor is at head height. Set up the playspace "
-        "once: the floor, the centre and forward are saved and come back by themselves at every START TRACKING.")));
-    mapSteps_ = pibridge::ui::dimLabel(QStringLiteral(
-        "Enter your body height below, press SETUP PLAYSPACE and put the headset on: you see your room through the "
-        "cameras with the steps over it. Nothing to press: 1. Stand in the middle and look slowly around your room for "
-        "about half a minute. 2. Stand still, look straight forward and hold until it finishes. The floor comes from "
-        "your height, the centre and forward from where you stood."));
-    mapCard_->body()->addWidget(mapSteps_);
-    auto* mapRow = new QHBoxLayout;
-    map_ = pibridge::ui::accentButton(QStringLiteral("SETUP PLAYSPACE"));
-    map_->setMinimumHeight(44);
-    map_->setToolTip(QStringLiteral("Maps the playspace from the tracking cameras (pibridge-roommap setup fast) while the "
-                                    "session runs, shown in the headset through the cameras (pibridge-roomsetup --map). "
-                                    "Saves the room and puts the floor at 0, the centre and forward where you stood. "
-                                    "No controller buttons in fast mode."));
-    mapRow->addWidget(map_);
-    mapRow->addStretch(1);
-    mapCard_->body()->addLayout(mapRow);
-    // the floor from the user's height (the default floor method of the mapping)
-    auto* hRow = new QHBoxLayout;
-    hRow->addWidget(new QLabel(QStringLiteral("Body height (m)")));
-    bodyH_ = new QLineEdit;
-    bodyH_->setPlaceholderText(QStringLiteral("e.g. 1.78"));
-    bodyH_->setMaximumWidth(90);
-    hRow->addWidget(bodyH_);
-    hRow->addWidget(new QLabel(QStringLiteral("Eye height measured (m, optional)")));
-    eyeH_ = new QLineEdit;
-    eyeH_->setPlaceholderText(QStringLiteral("from the body"));
-    eyeH_->setMaximumWidth(110);
-    hRow->addWidget(eyeH_);
-    hRow->addStretch(1);
-    mapCard_->body()->addLayout(hRow);
-    eyeNote_ = pibridge::ui::dimLabel(QString());
-    mapCard_->body()->addWidget(eyeNote_);
-    if (conf_) {
-        bodyH_->setText(conf_->value(roomkey::kBodyHeight, QString()));
-        eyeH_->setText(conf_->value(roomkey::kEyeHeight, QString()));
-    }
-    connect(bodyH_, &QLineEdit::editingFinished, this, &RoomPage::saveHeights);
-    connect(eyeH_, &QLineEdit::editingFinished, this, &RoomPage::saveHeights);
-    mapStatus_ = new QLabel;
-    mapStatus_->setWordWrap(true);
-    mapStatus_->setTextFormat(Qt::RichText);
-    mapCard_->body()->addWidget(mapStatus_);
-    mapWhy_ = new QLabel;
-    mapWhy_->setWordWrap(true);
-    mapWhy_->setObjectName(QStringLiteral("dim"));
-    mapCard_->body()->addWidget(mapWhy_);
-    connect(map_, &QPushButton::clicked, this, &RoomPage::mapRoom);
-    left->addWidget(mapCard_);
+    // The "Set up your playspace" card (its SETUP PLAYSPACE button and the body/eye-height inputs) is gone: the floor
+    // now defaults to ~1.60 m by the eye (no height entry), and the setup is launched from the Dashboard (START VR ->
+    // RoomPage::launchSetup/launchQuickSetup -> mapRoom). The floor plan is the top of the left column.
 
     // ---- the floor plan
     planCard_ = new pibridge::ui::Card(QStringLiteral("Floor plan"));
@@ -600,8 +540,9 @@ void RoomPage::mapRoom(bool quick) {
     // always ask pibridge-roomsetup to write the floor/centre/forward into SteamVR's chaperone (--chaperone). Gating this
     // on io_apps was a leftover of the old runtime choice and silently skipped the chaperone when io_apps=monado.
     constexpr bool chaperone = true;
+    // the floor is left to the room setup (the Pimax ground / the ~1.60 m eye default); no body-height entry any more
     runner_.run(toolPath(), roomMapHeadsetArgs(name, roommapTool(), AnchorFiles::defaults().ring,
-                                               eyeHeightOf(bodyH_->text(), eyeH_->text()), chaperone, quick),
+                                               std::nullopt, chaperone, quick),
                 [this, name, pid = feed.pid](int code, const QString& output) {
         mapRunning_ = false;
         QFile f(roomStatusPath());
@@ -622,13 +563,6 @@ void RoomPage::mapRoom(bool quick) {
     });
 }
 
-void RoomPage::saveHeights() {
-    if (conf_) {
-        conf_->set(roomkey::kBodyHeight, bodyH_->text().trimmed().toStdString());
-        conf_->set(roomkey::kEyeHeight, eyeH_->text().trimmed().toStdString());
-    }
-    updateView();
-}
 
 void RoomPage::createInsideOutUniverse() {
     const Gate g = applyGate(steamvrRunning(), store_ != nullptr);
@@ -805,55 +739,7 @@ void RoomPage::refreshLists() {
 void RoomPage::updateView() {
     const bool running = steamvrRunning();
     const bool io = insideOut();
-    {
-        // the playspace setup: shown in the inside-out mode; the status of the running session
-        mapCard_->setVisible(io);
-        const RingFeed feed = fake_ ? RingFeed{} : readRingFeed();
-        const RoomGate g = mapRoomHeadsetGate(io, roommapTool(), toolPath(), feed, mapRunning_);
-        map_->setEnabled(g.ok);
-        {
-            const auto eye = eyeHeightOf(bodyH_->text(), eyeH_->text());
-            const auto measured = parseHeightM(eyeH_->text(), 1.0, 2.3);
-            eyeNote_->setText(
-                measured ? QStringLiteral("Eye height %1 m (measured): the floor goes that far below your eyes.").arg(*measured, 0, 'f', 2)
-                : eye    ? QStringLiteral("Eye height %1 m (body height x 0.936): the floor goes that far below your eyes. "
-                                          "Measure it for a better floor.").arg(*eye, 0, 'f', 2)
-                         : QStringLiteral("Enter your body height: SETUP PLAYSPACE then takes the floor from your height "
-                                          "instead of the point cloud (which can mistake a table for the floor)."));
-        }
-        mapWhy_->setText(mapRunning_ ? QStringLiteral("Setting up now: follow the steps above in the headset.") : g.why);
-        mapWhy_->setVisible(!mapWhy_->text().isEmpty());
-        const QString name = conf_ ? roomName(*conf_) : QString::fromLatin1(kDefaultRoom);
-        QFile f(roomStatusPath());
-        const auto st = !fake_ && f.open(QIODevice::ReadOnly) ? parseRoomStatus(f.readAll()) : std::nullopt;
-        const quint32 session = feed.alive ? feed.pid : 0;
-        const RoomWords w = roomStatusWords(st, session, 0, !fake_ && roomSaved(roommapBaseDir(), name), false, name);
-        const char* colour = w.look == RoomLook::Recognised ? "#3ecf8e"
-                             : w.look == RoomLook::NotFound ? "#ef5a55"
-                             : w.look == RoomLook::Searching ? "#f2b02e"
-                                                             : "#9aa3ad";
-        QString floorNote;
-        if (!fake_) {
-            QFile ff(roommapBaseDir() + QLatin1Char('/') + name + QStringLiteral("/floor.toml"));
-            if (ff.open(QIODevice::ReadOnly)) {
-                floorNote = floorWarning(ff.readAll());
-            }
-        }
-        mapStatus_->setText(QStringLiteral("<b style='color:%1'>%2</b><br>%3%4")
-                                .arg(QLatin1String(colour), w.headline.toHtmlEscaped(), w.detail.toHtmlEscaped(),
-                                     floorNote.isEmpty() ? QString()
-                                                         : QStringLiteral("<br><b style='color:#f2b02e'>%1</b>")
-                                                               .arg(floorNote.toHtmlEscaped())));
-        mapCard_->chip()->set(w.look == RoomLook::Recognised  ? QStringLiteral("IN PLACE")
-                              : w.look == RoomLook::Searching ? QStringLiteral("SEARCHING")
-                              : w.look == RoomLook::NotFound  ? QStringLiteral("NOT FOUND")
-                              : w.look == RoomLook::NoRoom    ? QStringLiteral("NO ROOM")
-                                                              : QStringLiteral("SAVED"),
-                              w.look == RoomLook::Recognised  ? ChipKind::Info
-                              : w.look == RoomLook::NotFound  ? ChipKind::Error
-                              : w.look == RoomLook::Searching ? ChipKind::Warn
-                                                              : ChipKind::Off);
-    }
+    // (the "Set up your playspace" card and its running-session status were removed; setup is launched from the Dashboard)
     ioNote_->setText(io ? insideOutRoomNote() : QString());
     ioNote_->setVisible(io);
     createIo_->setVisible(io && monadoMissing_);

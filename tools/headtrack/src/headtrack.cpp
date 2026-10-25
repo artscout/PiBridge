@@ -12,6 +12,9 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstring>
+#include <atomic>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <unistd.h>
@@ -38,6 +41,51 @@ constexpr std::int64_t STALE_NS = 350'000'000;
 constexpr double G = 9.80665;
 /// Controller gyro: 8.2 LSB per deg/s (PIMAX_CTRL_GYRO_LSB_DPS, matched against Pimax's engine inputs).
 constexpr double CTRL_GYRO_SCALE = M_PI / 180.0 / 8.2;
+
+/// DIAG: distinct bright LED dots in a Y8 LED-exposure tile -- 4-connected blobs of pixels >= thr with at least
+/// `min_px` pixels (so one count per diode, not per saturated pixel; single-pixel noise is ignored). The Pimax LED
+/// engine's matched-diode count is not exposed, so we count what the cameras see ourselves; `peak_out` = brightest px.
+int led_blobs(const std::uint8_t* px, int w, int h, std::uint8_t thr, int min_px, int& peak_out) {
+    const std::size_t npx = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
+    std::vector<std::uint8_t> seen(npx, 0);
+    std::vector<int> stack;
+    int blobs = 0, peak = 0;
+    for (std::size_t i = 0; i < npx; i++) {
+        peak = px[i] > peak ? px[i] : peak;
+    }
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            const std::size_t idx = static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
+            if (seen[idx] != 0 || px[idx] < thr) {
+                continue;
+            }
+            int size = 0;
+            stack.clear();
+            stack.push_back(y * w + x);
+            seen[idx] = 1;
+            while (!stack.empty()) {
+                const int p = stack.back();
+                stack.pop_back();
+                size++;
+                const int py = p / w, pxl = p % w;
+                const int nb[4][2] = {{py - 1, pxl}, {py + 1, pxl}, {py, pxl - 1}, {py, pxl + 1}};
+                for (const auto& q : nb) {
+                    if (q[0] < 0 || q[0] >= h || q[1] < 0 || q[1] >= w) {
+                        continue;
+                    }
+                    const std::size_t qi = static_cast<std::size_t>(q[0]) * static_cast<std::size_t>(w) + static_cast<std::size_t>(q[1]);
+                    if (seen[qi] == 0 && px[qi] >= thr) {
+                        seen[qi] = 1;
+                        stack.push_back(q[0] * w + q[1]);
+                    }
+                }
+            }
+            blobs += size >= min_px ? 1 : 0;
+        }
+    }
+    peak_out = peak;
+    return blobs;
+}
 /// A controller out of the cameras' view: held this long (PIMAX_CTRL_TRACK_LOST_S).
 constexpr std::int64_t CTRL_HOLD_NS = 4'000'000'000;
 /// The aim frame: the LED model frame turned -52 degrees about x (PIMAX_CTRLTRACK_AIM_PITCH_DEG; pibridge-ctrltrack's
@@ -45,7 +93,7 @@ constexpr std::int64_t CTRL_HOLD_NS = 4'000'000'000;
 const Quat DEVICE_FROM_AIM{std::sin(-52.0 * M_PI / 360.0), 0.0, 0.0, std::cos(-52.0 * M_PI / 360.0)};
 /// PIMAX_CTRL_ANGLE (pimax_ctrl.c): degrees the aim is pitched up about its own x axis, -20..+70, default +30; live
 /// changes from $XDG_RUNTIME_DIR/pimax-ctrl-angle (the Tracking page's "Controller angle").
-constexpr double CTRL_ANGLE_DEFAULT = 30.0, CTRL_ANGLE_MIN = -20.0, CTRL_ANGLE_MAX = 70.0;
+constexpr double CTRL_ANGLE_DEFAULT = 52.0, CTRL_ANGLE_MIN = -20.0, CTRL_ANGLE_MAX = 70.0;
 
 double ctrl_angle_clamp(double deg) {
     return std::isnan(deg) ? CTRL_ANGLE_DEFAULT : std::clamp(deg, CTRL_ANGLE_MIN, CTRL_ANGLE_MAX);
@@ -171,6 +219,10 @@ Daemon::Daemon(Options o, std::function<void(std::string_view)> say) : o_(std::m
     if (const char* a = std::getenv("PIMAX_CTRL_ANGLE"); a != nullptr && *a != '\0') {
         ctrl_angle_deg_ = ctrl_angle_clamp(std::strtod(a, nullptr));
     }
+    if (const char* p = std::getenv("PIMAX_CTRL_PREDICT_MS"); p != nullptr && *p != '\0') {
+        const double ms = std::strtod(p, nullptr);
+        ctrl_predict_s_ = std::isnan(ms) ? 0.025 : std::clamp(ms, 0.0, 50.0) * 1e-3;
+    }
 }
 
 Daemon::~Daemon() { stop(); }
@@ -212,8 +264,11 @@ bool Daemon::start() {
     }
     say_("SLAM engine " + o_.vit_library + ", " + std::to_string(o_.cams.size()) + " cameras" +
          (vit_->has_controllers() ? ", controllers by Pimax's LED engine" : ", no controller tracking"));
+    say_("controller forward-prediction cap: " + std::to_string(static_cast<int>(ctrl_predict_s_ * 1000.0 + 0.5)) +
+         " ms (PIMAX_CTRL_PREDICT_MS; 0 = SteamVR predicts all, as for the head)");
     head_hist_.resize(2048);
     world_ = std::make_unique<World>();
+    world_->set_log([this](std::string_view l) { say_(l); }); // floor/anchor diagnostics into the headtrack log
     if (o_.engine == "basalt") {
         ht_ = std::make_unique<cam::headpose::HeadTracker>(slam::SupervisorParams{}, cam::headpose::HeadParams::from_env(),
                                                             head_in_imu_);
@@ -418,6 +473,34 @@ void Daemon::camera_loop() {
             continue;
         }
         const cam::FrameInfo& fi = **f;
+        {
+            // DIAG: verify the firmware's tracking<->LED exposure interleave on THIS headset directly (not from a code
+            // comment): the first 24 frame kinds as a sequence, and the per-second count of each kind.
+            static long kLed = 0, kTrk = 0, kUnk = 0;
+            static std::string kSeq;
+            static std::int64_t kLast = 0;
+            const char c = fi.kind == static_cast<std::uint32_t>(cam::FrameKind::Led)        ? 'L'
+                           : fi.kind == static_cast<std::uint32_t>(cam::FrameKind::Tracking) ? 'T'
+                                                                                             : 'U';
+            (c == 'L' ? kLed : c == 'T' ? kTrk : kUnk)++;
+            if (kSeq.size() < 24) {
+                kSeq += c;
+                if (kSeq.size() == 24) {
+                    say_("frame kind sequence (first 24): " + kSeq);
+                }
+            }
+            const std::int64_t know = monotonic_ns();
+            if (kLast == 0) {
+                kLast = know;
+            } else if (know - kLast >= 2'000'000'000) {
+                const double s = static_cast<double>(know - kLast) / 1e9;
+                say_("camera frames/s: LED " + std::to_string(static_cast<int>(kLed / s + 0.5)) + ", Tracking " +
+                     std::to_string(static_cast<int>(kTrk / s + 0.5)) + ", other " +
+                     std::to_string(static_cast<int>(kUnk / s + 0.5)));
+                kLast = know;
+                kLed = kTrk = kUnk = 0;
+            }
+        }
         if (fi.kind == static_cast<std::uint32_t>(cam::FrameKind::Led) && vit_->has_controllers() &&
             (fi.flags & cam::FLAG_NO_DEV_TIME) == 0) {
             // all four tiles of the LED exposure to Pimax's LED engine, as Pimax Play hands them (40 us)
@@ -436,6 +519,31 @@ void Daemon::camera_loop() {
                 }
                 if (ok) {
                     vit_->push_led(static_cast<std::int64_t>(cam::imu_dev_to_mono_ns(fi.dev_ts_us, ref)), 40000, lp);
+                    // DIAG (~1/s): how many bright LED dots each of the 4 LED cameras sees, and the brightest pixel.
+                    // If this drops on fast swings / bad angles, the diodes are the limit (pose stays "optical" but gets
+                    // noisy -> the "bending"); if the peak is low, the LED exposure is too dim.
+                    static long ledDiagN = 0;
+                    if (++ledDiagN % 90 == 0) {
+                        int b[4] = {}, pk[4] = {};
+                        for (int t = 0; t < 4; t++) {
+                            b[t] = led_blobs(lp[static_cast<std::size_t>(t)], 640, 480, 230, 2, pk[t]);
+                        }
+                        say_("LED dots per camera: " + std::to_string(b[0]) + " " + std::to_string(b[1]) + " " +
+                             std::to_string(b[2]) + " " + std::to_string(b[3]) + " (total " +
+                             std::to_string(b[0] + b[1] + b[2] + b[3]) + "), peak px " + std::to_string(pk[0]) + "/" +
+                             std::to_string(pk[1]) + "/" + std::to_string(pk[2]) + "/" + std::to_string(pk[3]));
+                        // DIAG: dump the 4 LED tiles (overwritten ~1/s) so we can look at the controllers' LED dots.
+                        const char* rt = std::getenv("XDG_RUNTIME_DIR");
+                        const std::string base =
+                            std::string(rt != nullptr && *rt != '\0' ? rt : "/tmp") + "/pibridge-led-cam";
+                        for (int t = 0; t < 4; t++) {
+                            std::ofstream f(base + std::to_string(t) + ".pgm", std::ios::binary);
+                            if (f) {
+                                f << "P5\n640 480\n255\n";
+                                f.write(reinterpret_cast<const char*>(lp[static_cast<std::size_t>(t)]), 640 * 480);
+                            }
+                        }
+                    }
                 }
             }
             continue;
@@ -468,6 +576,22 @@ void Daemon::camera_loop() {
         }
         if (!all) {
             continue;
+        }
+        // DIAG: dump the tracking-exposure tiles (~every 2s) next to the LED ones, to compare both exposures per camera.
+        {
+            static long trkDumpN = 0;
+            if (++trkDumpN % 50 == 0) {
+                const char* rt = std::getenv("XDG_RUNTIME_DIR");
+                const std::string base =
+                    std::string(rt != nullptr && *rt != '\0' ? rt : "/tmp") + "/pibridge-trk-cam";
+                for (std::size_t i = 0; i < o_.cams.size() && i < 4; i++) {
+                    std::ofstream f(base + std::to_string(o_.cams[i]) + ".pgm", std::ios::binary);
+                    if (f) {
+                        f << "P5\n640 480\n255\n";
+                        f.write(reinterpret_cast<const char*>(ptrs[i]), 640 * 480);
+                    }
+                }
+            }
         }
         // Basalt: the mid-exposure (the stamp marks the exposure start; pimax_camera.c push_slam_frames)
         std::int64_t adj = o_.cam_offset_ns;
@@ -588,10 +712,56 @@ void Daemon::on_controller(const hmd::ControllerReport& r) {
         } else if (!down) {
             hd.pimax_down_ns = 0;
         }
-        if (down && !hd.recentered && now - hd.pimax_down_ns > 800'000'000 && world_) {
+        // publish the long-press progress (0..1) for the in-game recenter ring (pibridge-overlay reads this file and
+        // draws a filling ring in front of the HMD); the recenter fires when it completes.
+        {
+            // Only the hand that holds the button writes; the OTHER hand's reports (not holding) must never write a 0,
+            // or the file thrashes between the hold's progress and 0 at the report rate -- the ring blinks.
+            static std::atomic<int> holdHand{-1}; // the hand holding the recenter button (-1 none)
+            static std::atomic<int> lastQ{-1};
+            const bool holding = down && !hd.recentered;
+            double prog = 0.0;
+            bool publish = false;
+            if (holding) {
+                holdHand.store(side);
+                prog = std::clamp(static_cast<double>(now - hd.pimax_down_ns) / 800'000'000.0, 0.0, 1.0);
+                publish = true;
+            } else if (holdHand.load() == side) {
+                holdHand.store(-1); // this hand released (or the recenter fired): the ring goes away
+                publish = true;
+            }
+            if (publish) {
+                const int q = static_cast<int>(std::lround(prog * 40.0));
+                if (lastQ.exchange(q) != q) { // only on a bucket change, so this is not a per-report file write
+                    const auto path = status::runtime_dir() / "recenter-progress";
+                    const std::string tmp = path.string() + ".tmp";
+                    std::ofstream(tmp) << prog << "\n";
+                    ::rename(tmp.c_str(), path.string().c_str());
+                }
+            }
+        }
+        if (down && !hd.recentered && now - hd.pimax_down_ns > 800'000'000) {
             hd.recentered = true;
-            world_->request_recenter();
-            say_(std::string("Pimax button long press (") + (side == 0 ? "left" : "right") + "): recentering");
+            // A recenter needs BOTH parts, because SteamVR splits them:
+            //  - the LIVE pose shift (our anchor), which a RUNNING game sees -- a game keeps the tracking origin it got
+            //    at launch, and only the live pose stream (as SteamVR's own recenter does) moves it; the chaperone
+            //    config does not reach it. This is the in-game recenter.
+            //  - the chaperone commit (pibridge-roomsetup --vr-standing, a client -- a driver cannot), which sets the
+            //    forward/centre SteamVR Home shows and persists it. It reads the already-anchor-recentered raw head
+            //    ~1 s later, so it captures the same recentre (no double shift). Without --radius it keeps the boundary.
+            if (world_) {
+                world_->request_recenter();
+            }
+            // --keep-floor: the recenter moves centre / forward ONLY. The floor is the room setup's (its saved plane,
+            // put into this session's raw space when the room was recognised) and must never be re-derived from the
+            // head at the press: head y - a default eye height at an arbitrary posture put the floor below the real one.
+            say_(std::string("Pimax button long press (") + (side == 0 ? "left" : "right") +
+                 "): recenter -> anchor (live, in-game) + chaperone (--vr-standing --keep-floor)");
+            std::thread([] {
+                if (std::system("pibridge-roomsetup --vr-standing --keep-floor >/dev/null 2>&1") != 0) {
+                    // best-effort: a failed commit only misses the Home-side update; the live anchor recentre still took
+                }
+            }).detach();
         }
     }
     if (vit_) {
@@ -715,7 +885,7 @@ ps::Device Daemon::controller(int side, std::int64_t now_ns) {
         const Vec3 w_body = slam::qrot(dfi, g_imu);
         // on to now, as pimax_ctrl.c engine_pose: the engine's velocity and the controller gyro, at most 25 ms ahead
         // (Pimax's own cap); SteamVR predicts the rest from now as for the head
-        const double dt = std::clamp(static_cast<double>(now_ns - e->ts_ns) * 1e-9, -0.05, 0.025);
+        const double dt = std::clamp(static_cast<double>(now_ns - e->ts_ns) * 1e-9, -0.05, ctrl_predict_s_);
         const double wn = geom::norm(w_body);
         Quat dq = slam::QUAT_ID;
         if (wn > 1e-9) {
@@ -729,7 +899,24 @@ ps::Device Daemon::controller(int side, std::int64_t now_ns) {
         put(d.orientation, aim);
         put(d.linear_velocity, v);
         put(d.angular_velocity, slam::qrot(qp, w_body));
-        d.t_ns = now_ns;
+        // diagnostics (~30 Hz): the prediction the controller pose is extrapolated with. engLat is how old the engine
+        // pose is (now - e->ts_ns); dt is the clamped forward prediction ([-50, +25] ms). If engLat keeps exceeding
+        // 25 ms (CLAMPED), the forward prediction cannot keep up -> the pose lags, which looks like the saber "bending".
+        if (now_ns - hd.diag_last_ns >= 33'000'000) {
+            hd.diag_last_ns = now_ns;
+            const double latMs = static_cast<double>(now_ns - e->ts_ns) * 1e-6;
+            const bool clamped = latMs > 25.0 || latMs < -50.0;
+            char b[224];
+            std::snprintf(b, sizeof b,
+                          "ctrl %s pred: engLat %.1f ms, dt %.1f ms%s, |v| %.2f m/s, |w| %.0f deg/s, pos(%.3f %.3f %.3f)",
+                          side == 0 ? "L" : "R", latMs, dt * 1000.0, clamped ? " CLAMPED" : "", geom::norm(v),
+                          geom::norm(w_body) * 180.0 / M_PI, pp[0], pp[1], pp[2]);
+            say_(b);
+        }
+        // Stamp the pose at the time it is valid for (e->ts_ns + dt), not "now": so when dt < the engine latency
+        // (PIMAX_CTRL_PREDICT_MS reduced, or the 25 ms cap hit) SteamVR predicts the remainder from the right age,
+        // exactly as it does for the head -- instead of getting an under-predicted pose stamped as current (a lag).
+        d.t_ns = e->ts_ns + static_cast<std::int64_t>(dt * 1e9);
         d.state = 7;
         hd.eng_have = true;
         hd.eng_pos = pp;
@@ -878,6 +1065,62 @@ void Daemon::optical_fixes(std::int64_t now_ns) {
     }
 }
 
+void Daemon::room_state_poll(std::int64_t now_ns) {
+    // Pimax's own floor (GetGroundState) and localization/recognition state (GetLocModeState), through winbridge.
+    // Polled at ~5 Hz: both change slowly. Observe-first: forward the raw values to room-state.json and the log so we
+    // can pin down GetGroundState's float layout and GetLocModeState's byte meaning against a live headset, before
+    // wiring them into the room setup (floor step, "room recognized" gate).
+    if (!vit_ || now_ns < room_poll_at_) {
+        return;
+    }
+    room_poll_at_ = now_ns + 200'000'000;
+    const auto rs = vit_->room_state();
+    if (!rs) {
+        return; // Basalt engine, or no reply yet
+    }
+    // GetGroundState out (decoded from Pimax Play's Frida captures): flag byte @0, then two 3D points in the engine's
+    // map frame (z up): A @[4,8,12] (live, drifts a little), B @[16,20,24] (constant per session: the locked floor
+    // reference). The up axis is z, so a point's floor height in the head's y-up world equals its z component (the
+    // engine->y-up turn Rx(-90) maps engine z to y; the x/z origin shift and the yaw recenter do not touch y).
+    // The head-relative drop = head.y - floor.z is what the room setup needs (chaperone --eye-height); the raw map-frame
+    // value must never be used directly (the "-45 m floor" bug). A live standing run tells which point is the floor
+    // (drop ~1.6 m) and confirms the sign.
+    const std::uint8_t flag = rs->ground[0];
+    float a[3] = {0, 0, 0}, b[3] = {0, 0, 0};
+    std::memcpy(a, rs->ground + 4, sizeof(a));
+    std::memcpy(b, rs->ground + 16, sizeof(b));
+    const bool have_head = room_head_valid_;
+    const double drop_live = have_head ? double(room_head_y_) - a[2] : 0.0;
+    const double drop_ref = have_head ? double(room_head_y_) - b[2] : 0.0;
+    status::StatusWriter w;
+    w.integer("ground_ret", rs->ground_ret)
+        .integer("ground_flag", flag)
+        .num("live_x", a[0]).num("live_y", a[1]).num("live_z", a[2])
+        .num("ref_x", b[0]).num("ref_y", b[1]).num("ref_z", b[2])
+        .num("head_y", room_head_y_)
+        .boolean("head_valid", have_head)
+        .num("drop_live_m", drop_live)
+        .num("drop_ref_m", drop_ref)
+        .integer("loc_ret", rs->loc_ret)
+        .integer("loc_state", rs->loc_state);
+    w.write("room-state");
+    // log on a meaningful change (first reply, or a change of ret / flag / localization byte)
+    if (!room_logged_ || rs->loc_ret != room_loc_ret_ || rs->loc_state != room_loc_state_ ||
+        rs->ground_ret != room_ground_ret_ || flag != room_ground_flag_) {
+        room_logged_ = true;
+        room_loc_ret_ = rs->loc_ret;
+        room_loc_state_ = rs->loc_state;
+        room_ground_ret_ = rs->ground_ret;
+        room_ground_flag_ = flag;
+        char bbuf[320];
+        std::snprintf(bbuf, sizeof bbuf,
+                      "room: ground_ret=%d flag=%u drop(live=%.3f ref=%.3f m, head_y=%.3f%s) | loc_ret=%d loc_state=%u",
+                      rs->ground_ret, flag, drop_live, drop_ref, room_head_y_, have_head ? "" : " no-head",
+                      rs->loc_ret, rs->loc_state);
+        say_(bbuf);
+    }
+}
+
 void Daemon::output_loop() {
     std::int64_t last_pose_ns = 0;
     ps::State st;
@@ -960,6 +1203,9 @@ void Daemon::output_loop() {
         st.devices[1] = controller(0, now);
         st.devices[2] = controller(1, now);
         pub_->publish(st, now);
+        room_head_valid_ = st.devices[0].state != 0;
+        room_head_y_ = st.devices[0].position[1];
+        room_state_poll(now);
         std::this_thread::sleep_for(1ms);
     }
 }

@@ -72,38 +72,46 @@ TEST(flow_centre_then_floor_touch_or_keep) {
     {
         RecenterFlow f;
         CHECK(f.step() == RecenterFlow::Step::Centre && f.lines().front() == "RECENTER");
-        f.frame(frame(0, 0), reader);
-        f.frame(frame(0, kTrig), reader); // the trigger: the head from the ring
+        f.frame(frame(0, 0), 0.0, reader);
+        f.frame(frame(0, kTrig), 0.0, reader); // the trigger goes down: the hold ring starts filling
+        CHECK(f.step() == RecenterFlow::Step::Centre); // not yet: the ring has not filled
+        room::Batch mid;
+        f.build(mid, 0.4); // mid-hold: the ring wedge is drawn (triangles beyond the prompt text)
+        CHECK(!mid.tris.empty());
+        f.frame(frame(0, kTrig), RecenterFlow::kHoldS + 0.01, reader); // held past kHoldS: the recenter fires
         CHECK(f.step() == RecenterFlow::Step::Floor);
-        f.frame(frame(0, kTrig), reader); // still held: no second press
+        f.frame(frame(0, kTrig), RecenterFlow::kHoldS + 0.02, reader); // still held: no second action
         CHECK(f.step() == RecenterFlow::Step::Floor);
-        f.frame(frame(0, 0), reader);
-        f.frame(frame(0, kTrig, 0.04), reader); // the floor touch, 4 cm above the stage floor
+        f.frame(frame(0, 0), 2.0, reader);
+        f.frame(frame(0, kTrig, 0.04), 2.1, reader); // the floor touch, 4 cm above the stage floor
         CHECK(f.finished() && f.result() && f.result()->head.pid == 77);
         CHECK(f.result()->floorStage && std::fabs(*f.result()->floorStage - 0.04) < 1e-9);
         CHECK(recenterResultText(*f.result()) ==
               "pibridge-recenter 1\npid 77\nhead 0.500000 1.700000 -1.000000 0.0000000 0.0000000 0.0000000 1.0000000\nfloor 0.0400\n");
         room::Batch b;
-        f.build(b);
+        f.build(b, 2.1);
         CHECK(!b.tris.empty());
     }
     {
         RecenterFlow f;
-        f.frame(frame(kTrig, 0), reader);
-        f.frame(frame(0, 0), reader);
-        f.frame(frame(kMenu, 0), reader); // keep the floor
+        f.frame(frame(kTrig, 0), 0.0, reader);                        // left-hand trigger: start the hold
+        f.frame(frame(kTrig, 0), RecenterFlow::kHoldS + 0.01, reader); // fills -> Floor
+        CHECK(f.step() == RecenterFlow::Step::Floor);
+        f.frame(frame(0, 0), 2.0, reader);
+        f.frame(frame(kMenu, 0), 2.1, reader); // keep the floor
         CHECK(f.finished() && !f.result()->floorStage);
         CHECK(recenterResultText(*f.result()).ends_with("floor keep\n"));
     }
     {
         RecenterFlow f; // no ring: Monado's anchor is off
-        f.frame(frame(0, kTrig), [] { return std::optional<RingSample>(); });
+        f.frame(frame(0, kTrig), 0.0, [] { return std::optional<RingSample>(); });
         CHECK(f.step() == RecenterFlow::Step::Centre && f.lines().back().starts_with("NO HEAD POSE"));
-        f.frame(frame(0, 0), reader);
-        f.frame(frame(0, kTrig), reader);
+        f.frame(frame(0, 0), 0.1, reader);
+        f.frame(frame(0, kTrig), 0.2, reader);                       // start the hold with a valid ring
+        f.frame(frame(0, kTrig), 0.2 + RecenterFlow::kHoldS + 0.01, reader); // fills -> Floor
         CHECK(f.step() == RecenterFlow::Step::Floor && !f.lines().back().starts_with("NO HEAD POSE"));
-        f.frame(frame(0, 0), reader);
-        f.frame(frame(0, kTrig, 1.9), reader); // a controller held high: not the floor
+        f.frame(frame(0, 0), 3.0, reader);
+        f.frame(frame(0, kTrig, 1.9), 3.1, reader); // a controller held high: not the floor
         CHECK(f.step() == RecenterFlow::Step::Floor && f.lines().back().starts_with("THAT IS NOT THE FLOOR"));
     }
 }

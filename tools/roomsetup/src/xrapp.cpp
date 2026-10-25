@@ -4,6 +4,7 @@
 // killdano; see NOTICE).
 #include "xrapp.h"
 
+#include "panelpaint.h"
 #include "rendermodel.h"
 
 #include "pibridge/room/draw.h"
@@ -18,8 +19,11 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <format>
+#include <functional>
+#include <string>
 #include <memory>
 #include <optional>
 #include <time.h>
@@ -182,6 +186,8 @@ struct Loop {
     std::function<void(const room::Rigid2&)> stageMoved;
     std::function<void(xrkit::Session&, const XrFrameState&)> pre; // after xrBeginFrame, before the input
     xrkit::PassthroughHook pt;                                       // the passthrough background per eye
+    // After build(), before the draw: paint the panel texture and its mesh into x.gpu.panel; return true to draw it.
+    std::function<bool(xrkit::Session&)> panelPaint;
 };
 
 std::expected<void, std::string> runLoop(xrkit::Session& x, Actions& c, const Loop& loop, const std::atomic<bool>& stop);
@@ -226,8 +232,11 @@ std::expected<void, std::string> runRecenterXr(RecenterFlow& flow, const XrOpts&
         return std::unexpected(r.error());
     }
     Loop loop;
-    loop.frame = [&flow, &readRing](const room::FrameInput& in) { flow.frame(in, readRing); };
-    loop.build = [&flow](Batch& b, double) { flow.build(b); };
+    const auto steady = [] {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    };
+    loop.frame = [&flow, &readRing, steady](const room::FrameInput& in) { flow.frame(in, steady(), readRing); };
+    loop.build = [&flow](Batch& b, double t) { flow.build(b, t); };
     loop.quit = [&flow] { return flow.finished(); };
     loop.status = [&flow] { return flow.lines().empty() ? std::string() : flow.lines().front(); };
     return runLoop(x, c, loop, stop);
@@ -368,6 +377,10 @@ std::expected<void, std::string> runMapXr(MapFlow& flow, const MapLink& link, co
                 state = std::move(st);
             }
         }
+        // the scan cloud for the map-step "scanning" overlay (read a few times a second; the file updates at that rate)
+        if (link.readScanPoints && frameNo % 6 == 0) {
+            flow.setScanPoints(link.readScanPoints());
+        }
         if (!endedAt && link.childExit) {
             if (const auto code = link.childExit()) {
                 endedAt = steady();
@@ -416,6 +429,64 @@ std::expected<void, std::string> runMapXr(MapFlow& flow, const MapLink& link, co
         look.srgb = x.srgb();
         return xrkit::pt::makeUniform(static_cast<int>(eye), v, *cams, *captureHead, look);
     };
+#ifdef PIBRIDGE_ROOMSETUP_PANEL
+    // The painted panel: QPainter into x.gpu.panel's texture, the quad on the panel plane (so clicks line up with the
+    // hit-test). Procedural by default; PIBRIDGE_PANEL_ASSETS=<dir> skins it with PVRGuardian's PNGs (A/B by eye).
+    panel::Painter painter;
+    if (const char* a = std::getenv("PIBRIDGE_PANEL_ASSETS"); a != nullptr && *a != '\0') {
+        painter.setAssetDir(a);
+        std::printf("panel skin: %s\n", a);
+    }
+    bool panelOn = true;
+    if (auto e = xrkit::enablePanel(x); !e) {
+        std::printf("painted panel off (%s): vector panel\n", e.error().c_str());
+        panelOn = false;
+    }
+    flow.setTexturedPanel(panelOn);
+    std::size_t panelHash = 0;
+    int panelW = 0, panelH = 0;
+    loop.panelPaint = [&](xrkit::Session& s) -> bool {
+        if (!panelOn || !flow.panelShown()) {
+            return false;
+        }
+        const auto C = flow.panelCorners();
+        const double wM = (C[1] - C[0]).length(), hM = (C[3] - C[0]).length();
+        if (wM < 1e-4 || hM < 1e-4) {
+            return false;
+        }
+        const int pxW = 1024;
+        const int pxH = std::clamp(static_cast<int>(std::lround(pxW * hM / wM)), 2, 2048);
+        const auto content = flow.panelContent();
+        std::size_t h = std::hash<std::string>{}(content.title) ^ (content.scanning ? 0x9e37U : 0U);
+        for (const auto& l : content.lines) {
+            h = h * 1000003U ^ std::hash<std::string>{}(l);
+        }
+        for (const auto& b : content.buttons) {
+            h = h * 1000003U ^ std::hash<std::string>{}(b.label) ^ (b.hover ? 2U : 0U) ^ (b.primary ? 4U : 0U);
+        }
+        h = h * 31U ^ static_cast<std::size_t>(pxH);
+        if (h != panelHash || pxW != panelW || pxH != panelH) {
+            int stride = 0;
+            const std::uint8_t* px = painter.paint(content, pxW, pxH, stride);
+            if (px == nullptr) {
+                return false;
+            }
+            if (auto r = s.gpu.panel.setPixels(px, static_cast<std::uint32_t>(pxW), static_cast<std::uint32_t>(pxH),
+                                               static_cast<std::size_t>(stride));
+                !r) {
+                return false;
+            }
+            panelHash = h;
+            panelW = pxW;
+            panelH = pxH;
+        }
+        const auto V = [](const room::Vec3& p, float u, float v) {
+            return xrkit::TexVertex{static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z), u, v};
+        };
+        s.gpu.panel.setMesh({V(C[0], 0, 0), V(C[1], 1, 0), V(C[2], 1, 1), V(C[0], 0, 0), V(C[2], 1, 1), V(C[3], 0, 1)});
+        return true;
+    };
+#endif
     auto r = runLoop(x, c, loop, stop);
     if (feed) {
         feed->stop();
@@ -430,6 +501,10 @@ std::expected<void, std::string> runLoop(xrkit::Session& x, Actions& c, const Lo
     std::optional<std::chrono::steady_clock::time_point> exitAt;
     std::string lastStatus;
     Batch batch;
+    std::printf("XR_MSFT_controller_model: %s\n",
+                x.controllerModelExt ? "enabled (probing for the runtime's glTF model below)"
+                                     : "not offered by this runtime");
+    std::fflush(stdout);
     auto last = std::chrono::steady_clock::now();
     const auto requestExit = [&] {
         if (!exitAt) {
@@ -498,6 +573,46 @@ std::expected<void, std::string> runLoop(xrkit::Session& x, Actions& c, const Lo
         sync.countActiveActionSets = 1;
         sync.activeActionSets = active.data();
         (void)xrSyncActions(x.session, &sync);
+        // Diagnostic probe: what does the runtime hand back through XR_MSFT_controller_model? The key only resolves once
+        // the controller is bound and the session is focused, so poll for a while, then log the glTF size and node count
+        // once per hand (this does not draw anything yet -- the models still render via OpenVR).
+        if (x.controllerModelExt) {
+            static bool mdlDone[2] = {false, false};
+            static int mdlTries = 0;
+            if ((!mdlDone[0] || !mdlDone[1]) && mdlTries < 900) {
+                mdlTries++;
+                auto keyFn = x.proc<PFN_xrGetControllerModelKeyMSFT>("xrGetControllerModelKeyMSFT");
+                auto loadFn = x.proc<PFN_xrLoadControllerModelMSFT>("xrLoadControllerModelMSFT");
+                auto propFn = x.proc<PFN_xrGetControllerModelPropertiesMSFT>("xrGetControllerModelPropertiesMSFT");
+                for (std::size_t i = 0; keyFn && loadFn && i < 2; i++) {
+                    if (mdlDone[i]) {
+                        continue;
+                    }
+                    auto ks = xr_make<XrControllerModelKeyStateMSFT>(XR_TYPE_CONTROLLER_MODEL_KEY_STATE_MSFT);
+                    const XrResult r = (*keyFn)(x.session, x.hands[i].path, &ks);
+                    if (XR_SUCCEEDED(r) && ks.modelKey != XR_NULL_CONTROLLER_MODEL_KEY_MSFT) {
+                        std::uint32_t bytes = 0;
+                        const XrResult lr = (*loadFn)(x.session, ks.modelKey, 0, &bytes, nullptr);
+                        std::uint32_t nodes = 0;
+                        if (propFn) {
+                            auto mp = xr_make<XrControllerModelPropertiesMSFT>(XR_TYPE_CONTROLLER_MODEL_PROPERTIES_MSFT);
+                            if (XR_SUCCEEDED((*propFn)(x.session, ks.modelKey, &mp))) {
+                                nodes = mp.nodeCountOutput;
+                            }
+                        }
+                        std::printf("XR_MSFT_controller_model: %s key=%llu glTF=%u bytes (load=%d) nodes=%u\n",
+                                    i == 0 ? "left" : "right", static_cast<unsigned long long>(ks.modelKey), bytes,
+                                    static_cast<int>(lr), nodes);
+                        std::fflush(stdout);
+                        mdlDone[i] = true;
+                    } else if (mdlTries == 1 || mdlTries == 300) {
+                        std::printf("XR_MSFT_controller_model: %s no model key yet (r=%d)\n", i == 0 ? "left" : "right",
+                                    static_cast<int>(r));
+                        std::fflush(stdout);
+                    }
+                }
+            }
+        }
         room::FrameInput in;
         in.dt = dt;
         in.headValid = locate(x.view, x.stage, t, in.head);
@@ -543,7 +658,11 @@ std::expected<void, std::string> runLoop(xrkit::Session& x, Actions& c, const Lo
         std::vector<XrCompositionLayerBaseHeader*> layers;
         xrkit::ProjectionLayer proj;
         if (fs.shouldRender == XR_TRUE) {
-            auto drawn = xrkit::renderStereo(x, batch, t, 0.05, 60, proj, loop.pt);
+            xrkit::Extras extras;
+            if (loop.panelPaint) {
+                extras.panel = loop.panelPaint(x);
+            }
+            auto drawn = xrkit::renderStereo(x, batch, t, 0.05, 60, proj, loop.pt, &extras);
             if (!drawn) {
                 return std::unexpected(drawn.error());
             }

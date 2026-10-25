@@ -55,6 +55,17 @@ Mesh convert(const vr::RenderModel_t& m) {
     return out;
 }
 
+/// An OpenVR HmdMatrix34_t (row-major 3x4) as our Mat34.
+room::Mat34 fromHmd34(const vr::HmdMatrix34_t& h) {
+    room::Mat34 o;
+    for (std::size_t r = 0; r < 3; r++) {
+        for (std::size_t c = 0; c < 4; c++) {
+            o.m[r][c] = h.m[r][c];
+        }
+    }
+    return o;
+}
+
 } // namespace
 
 struct ControllerModels::Impl {
@@ -152,21 +163,74 @@ struct ControllerModels::Impl {
                 }
                 hd.name = buf;
             }
-            vr::RenderModel_t* model = nullptr;
-            const vr::EVRRenderModelError e = rm->LoadRenderModel_Async(hd.name.c_str(), &model);
-            if (e == vr::VRRenderModelError_Loading) {
-                continue; // still loading; poll again next frame
+            // Component models (Pimax's crystal_controller_*): the geometry is in the components (body + buttons), not
+            // at the base name, so LoadRenderModel of the base returns nothing. Load each component's render model and
+            // append -- the parts are already in the controller frame. A model with no components loads by its name.
+            Mesh combined;
+            bool anyLoading = false, loadedSomething = false;
+            // `xf` places the loaded part into the controller frame. For a standalone model it is identity; for a
+            // component it is the component's mTrackingToComponentRenderModel (Pimax's crystal_* parts are authored
+            // already in that frame, so their transform is identity, but a stock model -- the Oculus Touch fallback --
+            // authors each part at its own origin, so without this its parts pile up at the origin as a grey mess).
+            const auto loadOne = [&](const char* rmName, const room::Mat34& xf) {
+                vr::RenderModel_t* model = nullptr;
+                const vr::EVRRenderModelError e = rm->LoadRenderModel_Async(rmName, &model);
+                if (e == vr::VRRenderModelError_Loading) {
+                    anyLoading = true;
+                    return;
+                }
+                if (e != vr::VRRenderModelError_None || model == nullptr) {
+                    return;
+                }
+                const Mesh m = convert(*model);
+                rm->FreeRenderModel(model);
+                for (const auto& tr : m.tris) {
+                    const room::Vec3 a = xf.xform(tr[0]), b = xf.xform(tr[1]), c = xf.xform(tr[2]);
+                    combined.tris.push_back({a, b, c});
+                    combined.normals.push_back((b - a).cross(c - a).norm());
+                }
+                loadedSomething = true;
+            };
+            const std::uint32_t nComp = rm->GetComponentCount(hd.name.c_str());
+            if (nComp == 0) {
+                loadOne(hd.name.c_str(), room::Mat34::identity());
+            } else {
+                for (std::uint32_t ci = 0; ci < nComp; ci++) {
+                    char comp[vr::k_unMaxPropertyStringSize];
+                    if (rm->GetComponentName(hd.name.c_str(), ci, comp, sizeof comp) == 0) {
+                        continue;
+                    }
+                    char crm[vr::k_unMaxPropertyStringSize];
+                    if (rm->GetComponentRenderModelName(hd.name.c_str(), comp, crm, sizeof crm) == 0) {
+                        continue; // a pose-only component (tip / base / openxr_aim): no geometry
+                    }
+                    // the part's pose in the controller frame, and whether it shows in the rest pose
+                    room::Mat34 xf = room::Mat34::identity();
+                    vr::RenderModel_ControllerMode_State_t mode{};
+                    vr::VRControllerState_t cs{};
+                    vr::RenderModel_ComponentState_t st{};
+                    if (rm->GetComponentState(hd.name.c_str(), comp, &cs, &mode, &st)) {
+                        if ((st.uProperties & vr::VRComponentProperty_IsVisible) == 0) {
+                            continue;
+                        }
+                        xf = fromHmd34(st.mTrackingToComponentRenderModel);
+                    }
+                    loadOne(crm, xf);
+                }
             }
-            if (e != vr::VRRenderModelError_None || model == nullptr) {
-                std::printf("controller models: hand %d (%s) did not load (%d): box proxy\n", h, hd.name.c_str(),
-                            static_cast<int>(e));
+            if (anyLoading) {
+                continue; // some part is still loading; try again next frame
+            }
+            if (!loadedSomething) {
+                std::printf("controller models: hand %d (%s) did not load (%u components): box proxy\n", h,
+                            hd.name.c_str(), nComp);
                 hd.failed = true;
                 continue;
             }
-            hd.mesh = convert(*model);
-            rm->FreeRenderModel(model);
+            hd.mesh = std::move(combined);
             hd.ready = true;
-            std::printf("controller models: hand %d = %s (%zu triangles)\n", h, hd.name.c_str(), hd.mesh.tris.size());
+            std::printf("controller models: hand %d = %s (%u components, %zu triangles)\n", h, hd.name.c_str(), nComp,
+                        hd.mesh.tris.size());
         }
     }
 };

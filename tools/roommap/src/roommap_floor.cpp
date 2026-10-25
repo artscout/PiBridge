@@ -673,7 +673,7 @@ R<std::pair<Alignment, std::optional<double>>> reloc_offset_hook(const std::stri
     // shift (tens of metres) is double-counted with SteamVR's standing frame and throws the floor into the ceiling, or
     // blows the offset past the 20 m guard. Keep only the relocalisation's own alignment here; write_offset zeroes the
     // vertical for vrserver.
-    if (floor::is_vrserver(pid)) {
+    if (floor::is_vrserver(pid) || floor::is_headtrack(pid)) {
         return std::pair{a, std::optional<double>{}};
     }
     if (auto f = floor::StoredFloor::load(dir)) {

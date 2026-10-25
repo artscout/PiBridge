@@ -91,4 +91,17 @@ TEST(files_are_written_atomically) {
     std::filesystem::remove_all(dir);
 }
 
+TEST(points_round_trip) {
+    std::vector<guide::P3f> pts{{0.0f, 1.0f, -2.0f}, {3.5f, -4.25f, 0.125f}, {-10.0f, 0.0f, 7.0f}};
+    const std::string s = guide::format_points(pts);
+    const std::vector<guide::P3f> back = guide::parse_points(s);
+    CHECK(back == pts);
+    CHECK(guide::parse_points("").empty());             // empty buffer
+    CHECK(guide::parse_points("PT01").empty());         // magic but no count
+    CHECK(guide::parse_points("junk nonsense").empty()); // wrong magic
+    CHECK(guide::parse_points(s.substr(0, s.size() - 1)).empty()); // truncated -> ignored
+    CHECK(guide::format_points({}) == guide::format_points({})); // empty cloud round-trips
+    CHECK(guide::parse_points(guide::format_points({})).empty());
+}
+
 PIBRIDGE_TEST_MAIN()

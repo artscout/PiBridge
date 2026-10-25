@@ -197,16 +197,16 @@ void mapFlowSelfTest(const std::string& snapshotDir) {
     st.seq = 2;
     st.step = "floor-confirm";
     st.title = "Floor";
-    st.text = "Is the grid on the floor? Pull the trigger. If it is not: touch the floor with a controller and pull its trigger.";
+    st.text = "The grid shows the floor below your feet. Nudge it up / down with the thumbstick, then press NEXT.";
     st.floor = 0.0;
     head = headPose({0.3, 1.65, 0.6}, 0.35, -0.6);
     frame();
+    frame();
     const pt::Frame f1 = synthFrame(rm, *cams, head, 2);
     mapSnapshot(flow, f1, *cams, head, head, now, snapshotDir, "roommap-2-floor");
-    frame(trig);
-    frame();
-    auto a = flow.takeAnswers();
-    step("map: the floor confirmed with the trigger", a.size() == 1 && a[0].kind == "yes");
+    // the floor is a head-relative drop the user tunes with the stick, then confirms with NEXT (answer "height").
+    // Here the grid sits on the published floor (room y 0): floorStage() ~ 0 and the floor is known.
+    step("map: the floor grid on the published floor", flow.floorKnown() && std::fabs(flow.floorStage()) < 0.05);
 
     st.seq = 3;
     st.step = "boundary";
@@ -224,21 +224,10 @@ void mapFlowSelfTest(const std::string& snapshotDir) {
     mapSnapshot(flow, f2, *cams, head, head, now, snapshotDir, "roommap-3-boundary");
     step("map: drawing the boundary with the ray", flow.drawn().size() > 10, std::format("{} points", flow.drawn().size()));
     frame();
-    a = flow.takeAnswers();
+    auto a = flow.takeAnswers();
     step("map: a short stroke is not a boundary", a.empty());
-
-    st.seq = 4;
-    st.step = "forward";
-    st.title = "Forward";
-    st.text = "Stand in the middle of your play space, look where forward should be and pull the trigger.";
-    head = headPose({0.3, 1.65, 0.6}, 0.35, -0.5);
-    frame();
-    const pt::Frame f3 = synthFrame(rm, *cams, head, 4);
-    mapSnapshot(flow, f3, *cams, head, head, now, snapshotDir, "roommap-4-forward");
-    frame(trig);
-    frame();
-    a = flow.takeAnswers();
-    step("map: forward with the trigger", a.size() == 1 && a[0].kind == "forward" && std::fabs(a[0].nums[2] - 0.35) < 1e-6);
+    // No separate "forward" step any more: in the custom flow the centre and forward are taken from the live head at
+    // SAVE (mapflow.cpp), so there is nothing to confirm with the trigger here.
 }
 
 } // namespace

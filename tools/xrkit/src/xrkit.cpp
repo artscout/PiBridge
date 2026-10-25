@@ -658,18 +658,30 @@ std::expected<void, std::string> openSession(Session& x, const OpenOpts& opts) {
     const bool timespec = std::ranges::any_of(props, [](const XrExtensionProperties& p) {
         return std::strcmp(p.extensionName, XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME) == 0;
     });
-    const char* exts[] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME, XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME};
+    // Optional: the runtime's own controller render model as a glTF (XR_MSFT_controller_model). We only enable it so a
+    // caller can probe what the runtime hands back; the drawing still goes through OpenVR render models for now.
+    const bool ctrlModel = std::ranges::any_of(props, [](const XrExtensionProperties& p) {
+        return std::strcmp(p.extensionName, XR_MSFT_CONTROLLER_MODEL_EXTENSION_NAME) == 0;
+    });
+    std::vector<const char*> exts = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
+    if (timespec) {
+        exts.push_back(XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME);
+    }
+    if (ctrlModel) {
+        exts.push_back(XR_MSFT_CONTROLLER_MODEL_EXTENSION_NAME);
+    }
     auto ici = xr_make<XrInstanceCreateInfo>(XR_TYPE_INSTANCE_CREATE_INFO);
     std::snprintf(ici.applicationInfo.applicationName, sizeof ici.applicationInfo.applicationName, "%s", opts.appName.c_str());
     std::snprintf(ici.applicationInfo.engineName, sizeof ici.applicationInfo.engineName, "%s", opts.appName.c_str());
     ici.applicationInfo.applicationVersion = 1;
     ici.applicationInfo.engineVersion = 1;
     ici.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
-    ici.enabledExtensionCount = timespec ? 2 : 1;
-    ici.enabledExtensionNames = exts;
+    ici.enabledExtensionCount = static_cast<std::uint32_t>(exts.size());
+    ici.enabledExtensionNames = exts.data();
     const std::string noInstance = "xrCreateInstance (" + opts.runtimeHint + ")";
     PIBRIDGE_XR(xrCreateInstance(&ici, &x.instance), noInstance.c_str());
     x.timespec = timespec;
+    x.controllerModelExt = ctrlModel;
     auto ip = xr_make<XrInstanceProperties>(XR_TYPE_INSTANCE_PROPERTIES);
     if (XR_SUCCEEDED(xrGetInstanceProperties(x.instance, &ip))) {
         x.runtimeName = ip.runtimeName;

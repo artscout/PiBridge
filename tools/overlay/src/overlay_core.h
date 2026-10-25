@@ -38,6 +38,18 @@ std::string requestFor(Hit h, bool recording);
 // [0, h] because the overlay's mouse scale is the panel size); the panel's rows run top-first, so y is flipped here.
 Hit hitTest(float x, float y);
 
+// The in-game recenter ring texture (square, RGBA8, transparent background): a faint full track with a bright arc
+// filling clockwise from the top to 2*pi*progress. Drawn in front of the HMD while the recenter button is held
+// (headtrack publishes the progress 0..1); the recenter fires when it completes.
+inline constexpr std::uint32_t kRingSize = 256;
+inline constexpr int kRingGrid = 5;                      // fill-level sprite sheet is kRingGrid x kRingGrid cells
+inline constexpr int kRingFrames = kRingGrid * kRingGrid; // 25 fill levels, 0..1 row-major
+std::vector<std::uint8_t> drawRing(double progress);
+// One SQUARE RGBA sprite sheet, kRingGrid x kRingGrid ring images (fill 0..1 row-major). Square so the overlay quad
+// stays 1:1 and each 1:1 cell shows undistorted. Uploaded ONCE; the overlay animates by selecting a cell with
+// SetOverlayTextureBounds -- no per-frame re-upload (which flickered). Side = kRingGrid * kRingSize.
+std::vector<std::uint8_t> drawRingSheet();
+
 // The panel as RGBA8 (top row first, what SetOverlayRaw wants): the dark card with the START/STOP RECORDING button and
 // the ROOM buttons, the target in `hovered` lit; the record button reads STOP RECORDING when `recording`, else START
 // RECORDING. kPanelW x kPanelH x 4.

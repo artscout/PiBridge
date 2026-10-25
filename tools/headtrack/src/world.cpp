@@ -100,6 +100,15 @@ RigidPose compose(const RigidPose& a, const RigidPose& b) {
 
 World::World() : ring_path_(path_of("PIMAX_ANCHOR_HEAD_FILE", "pimax-anchor.head")),
                  offset_path_(path_of("PIMAX_ANCHOR_FILE", "pimax-anchor.offset")) {
+    // When the floor is carried by the anchor (apply_vertical_), hold it: placed at once, NO glide (step() snaps y),
+    // changed only when a new offset is written (setup / the long-press recenter), never chased live so crouching
+    // cannot move it. Default OFF: today the chaperone's universe carries the floor (its standing translation y), so
+    // applying it here too would double it (the old "2 m above the floor" bug). Moving the floor onto this held anchor
+    // needs the chaperone written floor-neutral in the same change -- see the plan. PIMAX_ANCHOR_VERTICAL=1 to try it.
+    apply_vertical_ = false;
+    if (const char* e = std::getenv("PIMAX_ANCHOR_VERTICAL"); e != nullptr && e[0] == '1') {
+        apply_vertical_ = true;
+    }
     if (live_owner(ring_path_) != 0) {
         return; // another live tracker owns the room anchor: its ring and offset stay (room anchor off here)
     }
@@ -189,12 +198,16 @@ void World::refresh_offset(std::int64_t now_ns) {
     }
     last_check_ns_ = now_ns;
     auto cleared = [this] {
+        const bool had = have_offset_;
         have_offset_ = false;
         have_applied_ = false;
         if (placed_) {
             // cleared (Room page): the raw tracker world now; a later offset glides from there
             applied_ = RigidPose{};
             have_applied_ = true;
+        }
+        if (had) {
+            say("floor/anchor: offset cleared -> raw tracker world (no vertical/yaw shift)");
         }
     };
     struct stat st{};
@@ -223,6 +236,16 @@ void World::refresh_offset(std::int64_t now_ns) {
     offset_ = RigidPose{{v[0], v[1], v[2]}, slam::qnorm({v[3], v[4], v[5], v[6]})};
     have_offset_ = true;
     generation_++;
+    if (log_) {
+        const Vec3 fwd = slam::qrot(offset_.q, Vec3{0, 0, -1});
+        const double yaw = std::atan2(-fwd[0], -fwd[2]) * 180.0 / M_PI;
+        char b[260];
+        std::snprintf(b, sizeof b,
+                      "floor/anchor: new offset from %s: p(%.3f %.3f %.3f) m, yaw %.1f deg (gen %u) -- vertical y=%+.3f m %s",
+                      offset_path_.c_str(), offset_.p[0], offset_.p[1], offset_.p[2], yaw, generation_, offset_.p[1],
+                      apply_vertical_ ? "(applied)" : "(IGNORED: floor from chaperone)");
+        say(b);
+    }
 }
 
 void World::step(std::int64_t now_ns, double head_dps) {
@@ -233,6 +256,7 @@ void World::step(std::int64_t now_ns, double head_dps) {
         applied_ = offset_; // the first offset of the session: placed at once
         have_applied_ = true;
         placed_ = true;
+        say("floor/anchor: offset placed at once (y=" + std::to_string(applied_.p[1]) + " m, no glide)");
         return;
     }
     // faster while the head turns: 1x up to 20 deg/s, 3x from 60 deg/s
@@ -244,6 +268,25 @@ void World::step(std::int64_t now_ns, double head_dps) {
     const double ang = quat_angle(applied_.q, offset_.q);
     const double max_a = SLEW_DEG_S * boost * M_PI / 180.0 * dt;
     applied_.q = ang <= max_a || ang < 1e-6 ? offset_.q : slerp(applied_.q, offset_.q, max_a / ang);
+    if (apply_vertical_) {
+        applied_.p[1] = offset_.p[1]; // the floor (y) is held: snap to target, never glide; only x/z glide
+    }
+    // diagnostics: a glide is the floor visibly moving. Log it rate-limited while it runs, once when it settles.
+    const double gap = geom::norm(geom::sub(offset_.p, applied_.p));
+    if (gap > 1e-4 || quat_angle(applied_.q, offset_.q) > 1e-4) {
+        gliding_ = true;
+        if (log_ && now_ns - last_glide_log_ns_ > 500'000'000) {
+            last_glide_log_ns_ = now_ns;
+            char b[220];
+            std::snprintf(b, sizeof b,
+                          "floor/anchor: gliding -- applied y=%.3f -> target y=%.3f (gap %.3f m, %.1fx, head %.0f deg/s)",
+                          applied_.p[1], offset_.p[1], gap, boost, head_dps);
+            say(b);
+        }
+    } else if (gliding_) {
+        gliding_ = false;
+        say("floor/anchor: glide settled at y=" + std::to_string(applied_.p[1]) + " m");
+    }
 }
 
 RigidPose World::update(std::int64_t ts_ns, const RigidPose& raw, bool position_valid, double head_dps,
@@ -258,7 +301,11 @@ RigidPose World::update(std::int64_t ts_ns, const RigidPose& raw, bool position_
     // a new room offset (recognised or set up) replaces an earlier recenter: it would shift the room
     if (generation_ != seen_generation_) {
         seen_generation_ = generation_;
+        const bool had = recenter_.p[0] != 0 || recenter_.p[1] != 0 || recenter_.p[2] != 0;
         recenter_ = RigidPose{};
+        if (had) {
+            say("floor/anchor: recenter cleared by a new room offset");
+        }
     }
     if (recenter_wanted_.exchange(false)) {
         // the head now: its forward (-Z) onto -Z, its position over the origin, the floor kept
@@ -269,8 +316,29 @@ RigidPose World::update(std::int64_t ts_ns, const RigidPose& raw, bool position_
         t.q = {0, std::sin(-yaw / 2), 0, std::cos(-yaw / 2)};
         t.p = slam::qrot(t.q, Vec3{-w.p[0], 0, -w.p[2]});
         recenter_ = compose(t, recenter_);
+        char b[200];
+        std::snprintf(b, sizeof b, "floor/anchor: recenter applied -- yaw %.1f deg, origin over head, floor kept",
+                      yaw * 180.0 / M_PI);
+        say(b);
     }
-    return compose(recenter_, off);
+    RigidPose out = compose(recenter_, off);
+    if (!apply_vertical_) {
+        // the anchor's vertical floor shift is disabled: keep the raw head height, let SteamVR's chaperone set the floor
+        out.p[1] = 0.0;
+    }
+    // floor diagnostic (~1 Hz): the raw head height (SLAM), the stored offset vertical, what we apply, and the final
+    // head y we hand out. Shows whether the start drift is the raw SLAM y settling, and whether applying the anchor
+    // floor would double with the chaperone's own standing height.
+    if (log_ && now_ns - last_floor_log_ns_ > 1'000'000'000) {
+        last_floor_log_ns_ = now_ns;
+        char b[240];
+        std::snprintf(b, sizeof b,
+                      "floor diag: raw_y=%+.3f offset_y=%+.3f applied_y=%+.3f out_head_y=%+.3f have_offset=%d apply_vert=%d",
+                      raw.p[1], offset_.p[1], applied_.p[1], raw.p[1] + out.p[1], have_offset_ ? 1 : 0,
+                      apply_vertical_ ? 1 : 0);
+        say(b);
+    }
+    return out;
 }
 
 } // namespace pibridge::headtrack

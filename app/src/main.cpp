@@ -263,7 +263,7 @@ int main(int argc, char** argv) {
          }},
         {pibridge::app::MainWindow::Tracking, true, QStringLiteral("09f-tracking-steamvr-some-off"), false,
          [&](pibridge::app::MainWindow& win) {
-             setConf({{"io_slam", "off"}, {"io_cam_ae", "off"}, {"io_ctrl_angle", "45"}});
+             setConf({{"io_slam", "off"}, {"io_cam_ae", "off"}, {"io_ctrl_angle", "52"}});
              reshow(win, pibridge::app::MainWindow::Tracking);
          }},
         {pibridge::app::MainWindow::Room, false, QStringLiteral("08-room"), false,

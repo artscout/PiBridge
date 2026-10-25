@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // pibridge-roomsetup --map's headset side (mapflow.h) with scripted frames and made-up pibridge-roommap states: the stage
-// link, the coverage hints, the floor yes / touch, the boundary kept or drawn, forward by trigger and by holding
-// still, the stop, the end. No runtime, no files.
+// link, the coverage hints, the floor-drop shown and nudged with the stick, the boundary drawn with the ray, the stop,
+// the end, and that answers need the link. No runtime, no files. (The floor "yes/touch", the trigger-kept boundary and
+// the forward step are gone -- the floor is the stick + the NEXT chip, the boundary the SAVE chip, forward taken at SAVE.)
 #include "pibridge_test.h"
 #include "mapflow.h"
 #include "ptsynth.h"
@@ -67,6 +68,7 @@ struct Rig {
     std::array<room::Mat34, 2> hand{headPose({-0.2, 1.1, -0.3}, 0.5, -60 * kDeg), headPose({0.2, 1.1, -0.3}, 0.5, -60 * kDeg)};
     std::optional<guide::State> st;
     std::array<bool, 2> tracked{true, true};
+    std::array<float, 2> stick{0, 0}; // the thumbstick Y per hand (the floor step is nudged with it)
 
     void frame(std::uint64_t right = 0, std::uint64_t left = 0) {
         room::FrameInput in;
@@ -77,6 +79,7 @@ struct Rig {
             in.hands[i].valid = in.hands[i].aimValid = true;
             in.hands[i].grip = in.hands[i].aim = hand[i];
             in.hands[i].tracked = tracked[i];
+            in.hands[i].stickY = stick[i];
         }
         in.hands[0].buttons = left;
         in.hands[1].buttons = right;
@@ -158,120 +161,46 @@ TEST(mapping_lines_and_coverage) {
     CHECK(r.flow.takeAnswers().empty());
 }
 
-TEST(floor_yes_and_touch) {
-    Rig r;
-    r.st = state(1, "floor-confirm");
-    r.frame();
-    // the floor in the stage: room y -2.6 -> raw -1.6 -> stage -0.1
-    CHECK(r.flow.floorKnown() && near(r.flow.floorStage(), -0.1, 1e-6));
-    r.click(); // the controller at the hip (0.6 m below the head): yes
-    auto a = r.flow.takeAnswers();
-    CHECK(a.size() == 1 && a[0].kind == "yes" && a[0].step == "floor-confirm" && a[0].id == 1);
-    r.click(); // no second answer before pibridge-roommap reacted
-    CHECK(r.flow.takeAnswers().empty());
-    // pibridge-roommap asks again (new seq); the controller is on the real floor, 30 cm under the grid
-    r.st = state(2, "floor-confirm");
-    r.hand[1] = headPose({0.2, -0.4, -0.3}, 0.5, -60 * kDeg);
-    r.click();
-    a = r.flow.takeAnswers();
-    CHECK(a.size() == 1 && a[0].kind == "touch");
-    // stage -0.4 -> raw -1.9 -> room -2.9
-    CHECK(a.size() == 1 && near(a[0].nums[0], -2.9, 1e-6));
-}
-
-TEST(floor_touch_needs_a_tracked_controller_and_counts_near_the_grid) {
-    // live 2026-10-19: the controller lay on the floor out of the cameras' view; its held pose at hip height made the
-    // trigger a "yes" and the touch was lost
-    Rig r;
-    r.st = state(1, "floor-confirm");
-    r.frame();
-    r.tracked[1] = false;
-    r.click();
-    CHECK(r.flow.takeAnswers().empty());
-    CHECK(says(r.flow, "DOES NOT SEE THAT CONTROLLER"));
-    // seen again, 0.8 m below the head but within 30 cm of the grid (-0.1): a touch, not a yes
-    r.tracked[1] = true;
-    r.hand[1] = headPose({0.2, 0.9 - 0.75, -0.3}, 0.5, -60 * kDeg);
-    r.click();
-    auto a = r.flow.takeAnswers();
-    CHECK(a.size() == 1 && a[0].kind == "touch");
-}
-
-TEST(floor_from_the_eye_height_standing_still_and_level) {
-    // user decision 2026-10-19: the floor = the head standing upright minus the eye height, the default method
-    Rig r;
-    r.flow.setEyeHeight(1.68);
-    r.st = state(1, "floor-confirm");
-    r.head = headPose({0, 1.7, 0}, 0.5, 2 * kDeg);
-    for (int i = 0; i < 100; i++) {
-        r.frame();
-    }
-    CHECK(r.flow.standingFloor(r.now).has_value());
-    CHECK(says(r.flow, "YOUR EYE HEIGHT 1.68 M"));
-    r.click(); // the controller at the hip: the floor from the height
-    auto a = r.flow.takeAnswers();
-    CHECK(a.size() == 1 && a[0].kind == "height");
-    // stage 1.7 - 1.68 = 0.02 -> raw -1.48 -> room -2.48
-    CHECK(a.size() == 1 && near(a[0].nums[0], -2.48, 1e-6) && near(a[0].nums[1], 1.68, 1e-9));
-    // A: the grid is on the floor
-    r.st = state(2, "floor-confirm");
-    r.frame();
-    r.click(1ULL << room::bit::Grip);
-    a = r.flow.takeAnswers();
-    CHECK(a.size() == 1 && a[0].kind == "yes");
-    // a controller on the floor is still a touch
-    r.st = state(3, "floor-confirm");
-    r.hand[1] = headPose({0.2, -0.05, -0.3}, 0.5, -60 * kDeg);
-    r.click();
-    a = r.flow.takeAnswers();
-    CHECK(a.size() == 1 && a[0].kind == "touch");
-}
-
-TEST(floor_from_the_eye_height_refuses_a_moving_or_tilted_head) {
+TEST(floor_step_shows_the_drop_and_the_stick_nudges_it) {
+    // (room-setup rework) the floor step is no longer a trigger "yes" / "touch the floor": it shows the floor as a
+    // drop below the face (default from the eye height) and the thumbstick fine-tunes it.
     Rig r;
     r.flow.setEyeHeight(1.68);
     r.st = state(1, "floor-height");
-    for (int i = 0; i < 100; i++) { // nodding: 5 cm up and down
-        r.head = headPose({0, 1.7 + 0.05 * std::sin(i * 0.2), 0}, 0.5, 0);
-        r.frame();
-    }
-    r.click();
-    CHECK(r.flow.takeAnswers().empty());
-    CHECK(says(r.flow, "STAND STILL AND UPRIGHT"));
-    r.head = headPose({0, 1.7, 0}, 0.5, -35 * kDeg); // looking down at the floor
-    for (int i = 0; i < 100; i++) {
-        r.frame();
-    }
-    r.click();
-    CHECK(r.flow.takeAnswers().empty());
-    // in the floor-height step a low controller is not a touch: the height only
-    r.head = headPose({0, 1.7, 0}, 0.5, 0);
-    r.hand[1] = headPose({0.2, -0.05, -0.3}, 0.5, -60 * kDeg);
-    for (int i = 0; i < 100; i++) {
-        r.frame();
-    }
-    r.click();
-    auto a = r.flow.takeAnswers();
-    CHECK(a.size() == 1 && a[0].kind == "height");
-    // without an eye height nothing of this
-    Rig q;
-    CHECK(!q.flow.standingFloor(q.now));
-}
-
-TEST(floor_touch_refuses_a_hand_in_the_air) {
-    Rig r;
-    auto s = state(1, "floor-touch");
-    s.floor.reset();
-    r.st = s;
     r.frame();
-    CHECK(!r.flow.floorKnown() && near(r.flow.floorStage(), 1.7 - 1.6, 1e-9));
-    r.hand[1] = headPose({0.2, 1.5, -0.3}, 0.5, 0);
+    CHECK(r.flow.floorKnown() && says(r.flow, "FLOOR IS")); // the floor drop is shown
+    const double d0 = r.flow.floorStage();
+    // the stick held down lowers the floor (bigger drop -> lower stage floor); many frames to clear the nudge rate limit
+    r.stick[1] = -1.0;
+    for (int i = 0; i < 300; i++) {
+        r.frame();
+    }
+    CHECK(r.flow.floorStage() < d0 - 0.02);
+    // a plain trigger does not answer the floor step (that is the NEXT chip's job, driven by the pointer)
+    r.stick[1] = 0;
     r.click();
     CHECK(r.flow.takeAnswers().empty());
-    CHECK(says(r.flow, "NOT THE FLOOR"));
 }
 
-TEST(boundary_kept_with_a_click_or_drawn) {
+TEST(height_step_measures_the_head_and_the_stick_tunes_it) {
+    // full setup "рост": the step shows the standing eye height taken from the head, and the stick tunes it
+    Rig r;
+    r.head = headPose({0, 1.75, 0}, 0.5, 0);
+    r.st = state(1, "height");
+    r.frame();
+    // the eye height 1.75 is shown as a STATURE (eye / 0.933 ~ 1.88 m), not the floor-to-headset distance
+    CHECK(says(r.flow, "YOUR HEIGHT 1.88 M"));
+    r.stick[1] = 1.0; // stick up: taller
+    for (int i = 0; i < 300; i++) {
+        r.frame();
+    }
+    CHECK(says(r.flow, "YOUR HEIGHT") && !says(r.flow, "YOUR HEIGHT 1.88 M")); // changed by the stick
+}
+
+TEST(boundary_drawn_with_the_ray) {
+    // (room-setup rework) drawing the boundary with the controller ray still works, but the stroke is NOT auto-kept on
+    // release and there is no trigger "yes": the user must press the SAVE chip (pointer), so here we check the drawing
+    // and the hints, not a submit.
     Rig r;
     auto s = state(1, "boundary");
     s.boundary = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
@@ -279,23 +208,19 @@ TEST(boundary_kept_with_a_click_or_drawn) {
     r.frame();
     room::Batch b;
     r.flow.build(b, r.now);
-    CHECK(b.lines.size() > 4 * 2 * 2);
-    r.click();
-    auto a = r.flow.takeAnswers();
-    CHECK(a.size() == 1 && a[0].kind == "yes");
-    // draw: hold the trigger and sweep the ray's floor point round a circle of 0.8 m
+    CHECK(b.lines.size() > 4 * 2 * 2); // the proposed boundary is drawn
+    // draw: hold the trigger and sweep the ray's floor point round a circle of ~0.8 m
     s.seq = 2;
     r.st = s;
     for (int i = 0; i <= 120; i++) {
         const double ang = i * 2 * std::numbers::pi / 120;
-        // the hand turns: its ray (60 deg down from 1.1 m) hits the floor (-0.1) about 0.69 m away
         r.hand[1] = headPose({0.2, 1.1, -0.3}, ang, -60 * kDeg);
         r.frame(kTrig);
     }
     CHECK(r.flow.drawn().size() > 40);
-    r.frame();
-    a = r.flow.takeAnswers();
-    CHECK(a.size() == 1 && a[0].kind == "path" && a[0].nums.size() >= 80);
+    r.frame(); // release: no auto-submit; the hint asks for SAVE
+    CHECK(r.flow.takeAnswers().empty());
+    CHECK(says(r.flow, "PRESS SAVE"));
     // a too short stroke is refused in words
     s.seq = 3;
     r.st = s;
@@ -307,29 +232,6 @@ TEST(boundary_kept_with_a_click_or_drawn) {
     r.frame();
     CHECK(r.flow.takeAnswers().empty());
     CHECK(says(r.flow, "TOO SHORT"));
-}
-
-TEST(forward_by_trigger_and_by_holding_still) {
-    Rig r;
-    r.st = state(1, "forward");
-    r.head = headPose({0.5, 1.7, -0.4}, 0.25, -5 * kDeg);
-    r.frame();
-    r.click();
-    auto a = r.flow.takeAnswers();
-    CHECK(a.size() == 1 && a[0].kind == "forward");
-    if (a.size() == 1) {
-        // heading in the room = stage heading - link yaw + room fix yaw
-        CHECK(near(a[0].nums[2], 0.25 - kLinkYaw + 0.2, 1e-6));
-        // the head in the room: raw = Ry(-0.4)(p - t), room = Ry(0.2) raw + (0.1, -1, 0.3)
-        CHECK(near(a[0].nums[3], 1.7 - 1.5 - 1.0, 1e-6));
-    }
-    // still for 3 s: forward by itself
-    r.st = state(2, "forward");
-    for (int i = 0; i < 90 * 6; i++) {
-        r.frame();
-    }
-    a = r.flow.takeAnswers();
-    CHECK(a.size() == 1 && a[0].kind == "forward");
 }
 
 TEST(stop_with_b_twice_and_the_end) {
@@ -360,13 +262,15 @@ TEST(stop_with_b_twice_and_the_end) {
 }
 
 TEST(answers_need_the_link) {
+    // without the stage link the raw<->stage transform is unknown: no answer can be formed and the stage floor is not
+    // known (so the floor grid is not placed).
     Rig r;
     r.link = StageLink{};
-    r.st = state(1, "floor-confirm");
+    r.st = state(1, "floor-height");
     r.frame();
     r.click();
     CHECK(r.flow.takeAnswers().empty());
-    CHECK(says(r.flow, "WAITING FOR THE HEAD TRACKING"));
+    CHECK(!r.flow.floorKnown());
 }
 
 PIBRIDGE_TEST_MAIN()

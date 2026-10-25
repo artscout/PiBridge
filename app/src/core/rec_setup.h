@@ -109,6 +109,8 @@ struct RecSetup {
     QString roomName;             // io_room, default "home" (core/roommap_link.h)
     bool roomSaved = false;       // that room has a saved map: the session starts pibridge-roommap auto
     int refreshHz = 90;           // refresh_hz (PIMAX_FPS)
+    int camFps = 60;              // io_cam_fps (broker --fps): 50 or 60; the firmware halves it per type, so 60 -> 30 Hz
+                                  // controller-LED optics (and 30 Hz tracking), 50 -> 25 Hz
     double ipdMm = reckey::kIpdDefaultMm; // ipd_mm (OXR_DEBUG_IPD_MM)
     // Eye tracking (eye_tracking in pibridge.conf, the dashboard's Quick-settings toggle). In an inside-out session the
     // Pimax driver owns the eye chip directly (PIMAX_EYE=1): pibridge-eyed releases it for the duration (the inside-out
@@ -133,6 +135,9 @@ struct RecSetup {
 };
 
 // Resolves every item (see docs/DEVELOPMENT.md for the lookup order).
+/// lens_profile: true for CHOVR's profile ("chovr", or the legacy "default"); anything else, unset included, is
+/// PiBridge's Crystal Super profile ("native").
+bool isChovrLensProfile(const QString& value);
 RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env);
 // A made-up setup for the fake mode and screenshots (nothing looked up).
 RecSetup fakeRecSetup(const QString& recordingsDir);

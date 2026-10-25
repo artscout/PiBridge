@@ -33,8 +33,10 @@ std::string usage() {
            "  --vr-universe         print the universe id SteamVR tracks in\n"
            "  --vr-reload           ask SteamVR to reload the chaperone file\n"
            "  --vr-zone KEY=VALUE   fade=METRES|fade=default|alpha=0..255|alpha=default\n"
-           "  --vr-standing --eye-height M  set the SteamVR chaperone standing pose (floor M below your eyes, centre and\n"
-           "                        forward from the live head pose) and commit it\n";
+           "  --vr-standing --eye-height M  set the SteamVR chaperone standing pose (centre and forward from the live head\n"
+           "                        pose; the floor the saved room's, else M below your eyes) and commit it\n"
+           "        --keep-floor      centre and forward only, the floor stays (the in-game recenter)\n"
+           "        --floor-only      the floor only, centre and forward stay (the room recognised in a new session)\n";
 }
 
 std::expected<Options, std::string> parseArgs(const std::vector<std::string>& args) {
@@ -64,6 +66,10 @@ std::expected<Options, std::string> parseArgs(const std::vector<std::string>& ar
             o.chaperone = true;
         } else if (a == "--quick-direct") {
             o.quickDirect = true;
+        } else if (a == "--keep-floor") {
+            o.keepFloor = true;
+        } else if (a == "--floor-only") {
+            o.floorOnly = true;
         } else if (a == "--seated") {
             o.seated = true;
         } else if (a == "--recenter") {
@@ -162,9 +168,13 @@ std::expected<Options, std::string> parseArgs(const std::vector<std::string>& ar
     if (o.run == Run::FloorHeight && !o.eyeHeight) {
         return std::unexpected(std::string("--floor-height needs --eye-height M"));
     }
-    if (o.run == Run::VrStanding && !o.seated && !o.eyeHeight) {
-        // Seated sets a seated-zero pose at the head (no floor drop), so it needs no --eye-height; standing does.
+    if (o.run == Run::VrStanding && !o.seated && !o.eyeHeight && !o.keepFloor && !o.floorOnly) {
+        // Seated sets a seated-zero pose at the head (no floor drop), so it needs no --eye-height; --keep-floor and
+        // --floor-only take the floor from the chaperone / the saved room; a plain standing write needs it.
         return std::unexpected(std::string("--vr-standing needs --eye-height M (the floor goes that far below your eyes)"));
+    }
+    if (o.keepFloor && o.floorOnly) {
+        return std::unexpected(std::string("--keep-floor and --floor-only exclude each other"));
     }
     if (o.run == Run::Map || o.run == Run::FloorHeight) {
         if (o.room.empty() || o.room.find('/') != std::string::npos || o.room.starts_with(".")) {

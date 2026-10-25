@@ -432,6 +432,13 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
            QStringLiteral("Holds a camera fix for 220 ms instead of 80 ms and confirms before switching back, so they "
                           "jump less at the edge of the view (off: PIMAX_CTRL_TRACK_HYST=0)."),
            ctrlSteady_, [](const IoSettings& io) { return io.ctrlSteady; }, noCtrl);
+    camFps_ = seg({QStringLiteral("50 Hz"), QStringLiteral("60 Hz")}, iokey::kCamFps,
+                  {QStringLiteral("50"), QStringLiteral("60")});
+    addRow(ctrl, QStringLiteral("Camera rate"),
+           QStringLiteral("The cameras' capture rate. The headset firmware interleaves a tracking frame and a "
+                          "controller-LED frame, so each type runs at half: 60 Hz gives 30 Hz controller optics "
+                          "(steadier on fast swings), 50 Hz gives 25 Hz. Higher uses a little more USB and CPU."),
+           camFps_, [](const IoSettings& io) { return io.camFps == 60; }, noCtrl);
     right->addWidget(ctrl);
 
     // ---- advanced
@@ -568,6 +575,7 @@ void TrackingPage::load() {
     ctrlAngle_->setValue(io_.ctrlAngle);
     ctrlLost_->setValue(io_.ctrlLostS);
     ctrlSteady_->setCheckedQuiet(io_.ctrlSteady);
+    camFps_->setCurrent(io_.camFps == 60 ? 1 : 0);
     extraEnv_->setText(conf_.value(reckey::kEnv, QString()).trimmed());
 
     for (const Row& r : rows_) {

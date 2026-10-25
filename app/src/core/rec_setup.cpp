@@ -107,6 +107,11 @@ RecEnv RecEnv::defaults() {
     return e;
 }
 
+bool isChovrLensProfile(const QString& value) {
+    const QString v = value.trimmed();
+    return v == QLatin1String("chovr") || v == QLatin1String("default");
+}
+
 RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
     const QString& h = env.home;
     // The installed layout (core/paths.h): engine/plugins under <prefix>/lib/pibridge, read-only data under
@@ -176,16 +181,17 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
                          h + QStringLiteral("/gamedev/ext/slam/pimax-basalt.toml")},
                         h, isFile);
     // The lens profile (lens_profile, the Display page's selector):
-    //   "native" = crystal-pimax-native.conf (the Pimax geometry, the eye axis set by a true rotation),
-    //   else       crystal-chovr.conf        (CHOVR's camera-calibrated default, FOV 98x88 = what CHOVR renders).
+    //   "native" (and unset) = crystal-pimax-native.conf: PiBridge's Crystal Super profile (pibridge-lens
+    //                          crystal-profile: the like-Pimax geometry, the eye axis set by a true rotation; verified
+    //                          in the headset: world scale and straight lines on head turns),
+    //   "chovr" (or the legacy "default") = crystal-chovr.conf (CHOVR's camera-calibrated default, FOV 98x88).
     // The chosen profile is tried first, then the other, so a missing file still resolves. An explicit rec_lens_conf
     // path still wins. crystal.conf (the raw PVR dump, inflated 101x97 port) stays last as a legacy fallback.
-    const QString lensProfile = conf.value(reckey::kLensProfile, QString()).trimmed();
     QStringList lensNames;
-    if (lensProfile == QLatin1String("native")) {
-        lensNames = {QStringLiteral("crystal-pimax-native.conf"), QStringLiteral("crystal-chovr.conf")};
-    } else {
+    if (isChovrLensProfile(conf.value(reckey::kLensProfile, QString()))) {
         lensNames = {QStringLiteral("crystal-chovr.conf"), QStringLiteral("crystal-pimax-native.conf")};
+    } else {
+        lensNames = {QStringLiteral("crystal-pimax-native.conf"), QStringLiteral("crystal-chovr.conf")};
     }
     QStringList lensCandidates{env.configDir + QStringLiteral("/lens.conf")};
     for (const QString& n : lensNames) {
@@ -207,6 +213,9 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
     s.camDeviceFromConf = !cam.isEmpty();
     s.camDevice = s.camDeviceFromConf ? (QFileInfo::exists(cam) ? cam : QString())
                                       : pimaxCameraDevice(env.v4lRoot, env.devRoot);
+    // io_cam_fps (Tracking page): the camera capture rate the broker opens with; only 50 or 60 (the Crystal Super
+    // offers both). The firmware interleaves tracking/LED frames, so each type runs at half -- 60 -> 30 Hz optics.
+    s.camFps = conf.value("io_cam_fps", QStringLiteral("60")).trimmed().toInt() >= 55 ? 60 : 50;
     const QString dir = conf.value(reckey::kDir, QString()).trimmed();
     s.recordingsDir = dir.isEmpty() ? env.dataHome + QStringLiteral("/pibridge/recordings") : expand(dir, h);
     const QString steps = conf.value(reckey::kSteps, QString()).trimmed();

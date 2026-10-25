@@ -13,6 +13,8 @@
 // floor, the boundary and forward go through the same frames as the map.
 #pragma once
 
+#include "panelpaint.h"
+
 #include "pibridge/room/draw.h"
 #include "pibridge/room/editor.h"
 #include "pibridge/roommap/guide_ipc.h"
@@ -90,11 +92,27 @@ public:
     /// steps the trigger then sets the floor that far below the head (standing still and upright, looking ahead, the
     /// head averaged over 1 s); A = the grid is on the floor; a controller on the floor + trigger = a touch.
     void setEyeHeight(std::optional<double> eye) { eye_ = eye; }
+    /// Let the floor step follow the Pimax engine's own floor (pibridge-headtrack room-state.json). The real app turns
+    /// this on; it stays off in tests so a live session never perturbs them.
+    void setPimaxFloorSource(bool on) { pimaxFloor_ = on; }
+    /// Draw the panel as a QPainter-painted texture (xrapp owns the painting + TexPass) instead of the vector card.
+    /// When on, build() skips the vector card/text/chips; the laser, floor grid, ribbon and controller still draw.
+    void setTexturedPanel(bool on) { texturedPanel_ = on; }
+    /// Whether a painted panel should be drawn this frame (there is text or a chip and the flow has not ended).
+    bool panelShown() const;
+    /// The panel content for panelpaint: the header (first line), the body (the rest) and the chips in panel UV
+    /// (0..1, y down) matching the hit-test, with hover and the primary (advancing) action marked.
+    panel::Content panelContent() const;
+    /// The four panel corners in the stage, matching UV (0,0) top-left, (1,0), (1,1), (0,1) bottom-left.
+    std::array<room::Vec3, 4> panelCorners() const;
     /// The floor in the stage from the head of the last second: still (2 cm up and down, 4 cm sideways), looking
     /// ahead (pitch within 15 deg); nullopt otherwise.
     std::optional<double> standingFloor(double now) const;
     /// A line about the passthrough under the steps (empty: none), e.g. that there is no camera picture.
     void setNote(std::string note) { note_ = std::move(note); }
+    /// The live scan cloud (room frame, from pibridge-roommap's guide `points` file) for the map-step "scanning"
+    /// overlay; xrapp reads the file and hands it in each frame (empty clears it). build() draws it on the map step.
+    void setScanPoints(std::vector<guide::P3f> pts) { scan_ = std::move(pts); }
 
     /// The scene over the passthrough: the panel, the coverage ring, the floor grid, the boundary, the ray, forward.
     void build(room::Batch& b, double now) const;
@@ -170,6 +188,21 @@ private:
     bool headValid_ = false;
     room::Mat34 head_;
     Coverage cov_;
+    std::vector<guide::P3f> scan_; // (unused now) a scan cloud from pibridge-roommap; kept so the plumbing compiles
+    // The spatial-scan grid of the look-around step: floor tiles laid around where the user stood when the step began
+    // (kScanTiles x kScanTiles cells of kScanTile metres). A tile is "scanned" once the head's gaze ray has crossed it;
+    // the wall panels around the user are the Coverage sectors (level / up bands). build() draws them filling in.
+    static constexpr int kScanTiles = 7;
+    static constexpr double kScanTile = 0.75;
+    std::optional<room::Vec3> scanOrigin_;
+    std::array<bool, kScanTiles * kScanTiles> tileSeen_{};
+    // wall panels lit by REAL map points (sector x band), on top of the gaze-driven Coverage
+    std::array<std::array<bool, Coverage::kSectors>, 3> pointSectorSeen_{};
+    double tileFraction() const;
+    // the full-setup HEIGHT step ("рост"): the standing eye height measured from the head, fine-tuned with the stick
+    std::optional<double> heightMeas_;
+    std::optional<double> heightHeadY_; // the head's stage y the stature was measured from (frozen with the first nudge)
+    bool heightNudged_ = false;
     // the boundary drawing
     int drawHand_ = -1;
     double drawStart_ = 0;
@@ -200,6 +233,15 @@ private:
     // the custom/full standing floor step: the head-relative drop (metres below the face) the user fine-tunes with the
     // stick; set once on the floor step, clamped to [FLOOR_DROP_MIN_M, FLOOR_DROP_MAX_M]
     std::optional<double> floorDrop_;
+    bool floorNudged_ = false; // the user moved the stick: stop following the Pimax floor, keep the manual drop
+    bool pimaxFloor_ = false;   // read the Pimax engine's floor (room-state.json); off by default so tests are not
+                                // affected by a live session -- the real app turns it on (setPimaxFloorSource)
+    bool texturedPanel_ = false; // draw the QPainter-painted panel (xrapp) instead of the vector card
+    // The Pimax engine's own floor from pibridge-headtrack's room-state.json (GetGroundState -> head-relative drop),
+    // when the Pimax SLAM engine runs: the floor-below-the-head it currently estimates. nullopt when the file is
+    // missing / stale / the floor is not valid (ground_ret != 1 or the head is not tracked). Read live on the floor
+    // step so the drop follows the real floor as the user looks at it and stands upright.
+    std::optional<double> pimaxFloorDrop() const;
     // the controller lasers and box proxies (so the user can see where they point): each hand's grip pose and the
     // panel-hit world point, kept from frame() for build() to draw every frame
     std::array<room::Mat34, 2> handGrip_;
