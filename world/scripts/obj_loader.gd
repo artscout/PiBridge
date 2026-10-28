@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
 # A Wavefront OBJ (+ MTL, its diffuse texture) as a mesh at run time: the controller render models of the user's
 # Windows data kit (docs/world.md). Positions, texture coordinates, normals, polygon faces (fanned into triangles).
-class_name ObjLoader
 extends RefCounted
+
+const Paths = preload("res://scripts/paths.gd")
 
 
 static func load_mesh(path: String) -> ArrayMesh:

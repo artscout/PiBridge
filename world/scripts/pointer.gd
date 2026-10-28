@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MIT
 # A controller's laser: a ray from the aim pose; on a VrPanel it moves the panel's mouse, the trigger clicks, the
 # thumbstick scrolls. The beam ends at what it hits.
-class_name Pointer
 extends Node3D
 
 var controller: XRController3D

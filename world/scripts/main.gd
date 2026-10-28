@@ -5,6 +5,16 @@
 # `-- --selftest` runs the self test without a headset (the settings' files, the apps, the parsers, a click) and quits.
 extends Node3D
 
+const AppsModel = preload("res://scripts/apps_model.gd")
+const ControllerModel = preload("res://scripts/controller_model.gd")
+const Dashboard = preload("res://scripts/dashboard.gd")
+const KeyConf = preload("res://scripts/keyconf.gd")
+const ObjLoader = preload("res://scripts/obj_loader.gd")
+const Paths = preload("res://scripts/paths.gd")
+const Pointer = preload("res://scripts/pointer.gd")
+const VrPanel = preload("res://scripts/vr_panel.gd")
+const WorldEnvironmentBuilder = preload("res://scripts/environment.gd")
+
 var xr: XRInterface
 var origin := XROrigin3D.new()
 var camera := XRCamera3D.new()

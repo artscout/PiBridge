@@ -89,3 +89,7 @@ textures at start, and puts the model on the OpenXR grip pose the way SteamVR do
 every setting's receiver), `vr_panel.gd` (a SubViewport on a quad, its mouse driven by the lasers), `pointer.gd`,
 `keyboard.gd`, `apps_model.gd`, `controller_model.gd`, `obj_loader.gd`, `keyconf.gd` (key=value files, comments and
 sections kept), `paths.gd`.
+
+The scripts reach each other with `const Name = preload("res://scripts/<file>.gd")`, never `class_name`: a global
+class only exists in Godot's `.godot/` cache, which the editor writes and the install leaves out, so the installed
+project (and a read-only one under `/usr`) runs without any import step.

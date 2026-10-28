@@ -3,8 +3,9 @@
 # Conf (core/conf.h) and of pibridge-home's confSet: the first uncommented line of the key is replaced, else the line
 # goes at the end of the global part (before the first [section], so per-app sections keep their own values);
 # comments, other keys and sections are kept as written.
-class_name KeyConf
 extends RefCounted
+
+const Paths = preload("res://scripts/paths.gd")
 
 var path: String
 var text := ""

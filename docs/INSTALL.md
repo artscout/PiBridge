@@ -542,6 +542,9 @@ finds it:
 No import step is needed: the project has no imported assets. Without Godot the app falls back to the classic home
 (`pibridge-home`), which you can also choose on purpose with `vr_home=classic`.
 
+The app runs the installed copy (`~/.local/share/pibridge/world/`) and uses the source tree's `world/` only when there
+is none, so after changing anything in `world/` run `cmake --install build` again.
+
 Never start the world by hand while SteamVR is the system's OpenXR runtime: Godot would start SteamVR. The app starts
 it inside the Monado session with the right runtime. For a check without a headset:
 ```
@@ -558,13 +561,19 @@ Optional, for your controllers to look like Pimax's in the world: copy the Pimax
 2. Games started from the app's Apps page or from the world's Apps page run on Monado (`XR_RUNTIME_JSON`). Games
    started elsewhere (Steam) use the system's active OpenXR runtime: the Dashboard's **OpenXR runtime** switch points
    `~/.config/openxr/1/active_runtime.json` at SteamVR or at the Monado build (a symlink; a foreign regular file is
-   kept once as `active_runtime.json.pibridge-backup`). OpenVR-only games always need SteamVR.
+   kept once as `active_runtime.json.pibridge-backup`). OpenVR-only games always need SteamVR. Windows games that
+   Steam runs through Proton do not find Monado yet, even with OpenXR: Proton sets up its OpenXR bridge only through
+   an OpenVR runtime. Run them on the SteamVR backend.
 3. While a game runs, PiBridge World closes itself to leave the game its memory and comes back when the game ends.
    The menu button opens the dashboard over the game: settings, and in its bottom bar **Record video** / **Stop
    recording**, **Quick room setup**, **Recenter** and **Close app**.
 4. **Recenter** (the dashboard, or holding the Pimax button) turns forward to where you look and puts the centre where
    you stand, for every app, also seated ones.
 5. **Room setup** for Monado runs from the world's or the overlay's dashboard and saves into the Monado rooms only.
+6. **The headset goes dark but the tracking goes on** (the app's view still follows your head): a game hung the GPU,
+   and Monado gave the display back so that the hang cannot lock it for good. `journalctl -k` shows an NVIDIA `Xid`
+   naming the game, and the session's `monado.log` says `Released the NVIDIA modeset permission`. The headset stays
+   dark until the session restarts: press **STOP VR**, then **START VR**.
 
 ## 8. Check that it works
 

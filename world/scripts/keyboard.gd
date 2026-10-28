@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MIT
 # A keyboard on the panel, typed with the lasers: letters, digits, the characters of paths and names, Shift, space,
 # backspace, Done. It types into `target` (a LineEdit); its keys never take the focus away from it.
-class_name VrKeyboard
 extends PanelContainer
 
 signal done

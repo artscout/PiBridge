@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
 # The world around you: a sky with a low sun, a wide plain with a faint grid fading into haze, a ring of distant
 # mountains, and the disc you stand on (its edge glows softly). Built in code, no asset files.
-class_name WorldEnvironmentBuilder
 extends RefCounted
+
+const Paths = preload("res://scripts/paths.gd")
 
 const GROUND_SHADER := """
 shader_type spatial;

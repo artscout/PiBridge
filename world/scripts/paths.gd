@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: MIT
 # Where PiBridge keeps its files (the same ones the app and the C++ tools use).
-class_name Paths
 extends RefCounted
 
 

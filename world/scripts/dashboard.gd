@@ -11,8 +11,13 @@
 #   Vibrate            $XDG_RUNTIME_DIR/pimax-haptic-request "SLOT AMP MS"
 #   Room setup     pibridge-roomsetup --backend monado: --map (inside-out) or --lh-stage (Lighthouse)
 #   Quad views     ~/.config/qv-vulkan/settings.conf (the layer re-reads it while a game runs; densities: next game)
-class_name Dashboard
 extends PanelContainer
+
+const AppsModel = preload("res://scripts/apps_model.gd")
+const KeyConf = preload("res://scripts/keyconf.gd")
+const Paths = preload("res://scripts/paths.gd")
+const VrKeyboard = preload("res://scripts/keyboard.gd")
+const WorldEnvironmentBuilder = preload("res://scripts/environment.gd")
 
 signal hide_requested
 signal passthrough_toggled(on: bool)

@@ -3,8 +3,10 @@
 # (<windata>/steamvr/rendermodels/crystal_controller_<side>/: <name>.json lists the parts and the pose frames, the parts
 # are OBJ files with their textures). Placed on the controller's OpenXR grip pose through the model's "openxr_grip"
 # frame, so it sits in the hand as in SteamVR. Without the kit: a plain stand-in.
-class_name ControllerModel
 extends Node3D
+
+const ObjLoader = preload("res://scripts/obj_loader.gd")
+const Paths = preload("res://scripts/paths.gd")
 
 var side := "left"
 var found := false

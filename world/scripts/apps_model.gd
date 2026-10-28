@@ -2,8 +2,9 @@
 # The apps the Monado backend can start: the user's own apps (PiBridge's ~/.config/pibridge/apps.toml, the app's
 # Apps page list - the same file, so both show the same) and the installed Steam games that use OpenXR. A game that
 # only has the SteamVR API (OpenVR) cannot run on Monado and is left out; so are non-VR games and Steam's own tools.
-class_name AppsModel
 extends RefCounted
+
+const Paths = preload("res://scripts/paths.gd")
 
 const STEAM_SKIP := [250820, 228980, 1070560, 1391110, 1628350, 1493710, 2180100, 2348590] # SteamVR, runtimes, Proton
 

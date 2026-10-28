@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MIT
 # A 2D user interface on a quad in the world: a SubViewport with a transparent background (so rounded corners and gaps
 # are see-through), drawn unshaded with its alpha; the lasers (Pointer) drive its mouse.
-class_name VrPanel
 extends Node3D
 
 var viewport := SubViewport.new()
