@@ -2,6 +2,7 @@
 // Ported from omarchyvr omarchyvr-roommap/src/floor.rs (MIT OR Apache-2.0). See floor.h.
 #include "pibridge/roommap/floor.h"
 
+#include "pibridge/anchor/backend.h"
 #include "pibridge/anchor/rustx.h"
 #include "pibridge/cam/io.h"
 #include "pibridge/cam/rustfmt.h"
@@ -589,12 +590,12 @@ bool is_headtrack(std::uint32_t pid) {
 }
 
 std::optional<SteamVrStage> steamvr_stage(std::uint32_t pid) {
-    // the ring's writer: SteamVR's vrserver (driver_monado), or pibridge-headtrack feeding SteamVR through
-    // CustomHeadsetOpenVR (then the stage file names the running vrserver)
-    const bool headtrack = is_headtrack(pid);
-    if (!is_vrserver(pid) && !headtrack) {
+    // only the SteamVR backend has a SteamVR stage (anchor/backend.h); the ring's writer is vrserver (driver_monado) or
+    // pibridge-headtrack feeding SteamVR through CustomHeadsetOpenVR (then the stage file names the running vrserver)
+    if (anchor::backend_from_env() != anchor::Backend::SteamVr) {
         return std::nullopt;
     }
+    const bool headtrack = is_headtrack(pid);
     auto b = cam::read_file(steamvr_stage_path());
     if (!b) {
         return std::nullopt;
@@ -607,7 +608,7 @@ std::optional<SteamVrStage> steamvr_stage(std::uint32_t pid) {
 }
 
 double origin_height(std::uint32_t monado_pid) {
-    if (is_vrserver(monado_pid) || is_headtrack(monado_pid)) {
+    if (anchor::backend_from_env() == anchor::Backend::SteamVr) {
         // driver_monado: tracking origin offset 0; the STAGE floor is SteamVR's standing frame
         if (const auto st = steamvr_stage(monado_pid)) {
             return -st->t[1];

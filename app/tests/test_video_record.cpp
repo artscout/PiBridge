@@ -74,7 +74,7 @@ TEST(the_source_follows_the_session) {
     in.steamvrRunning = true;
     m = recordCardModel(in);
     CHECK(m.canStart && m.headline == QStringLiteral("Ready to record (SteamVR)"));
-    CHECK(m.detail.contains(QStringLiteral("SteamVR's mirror image")));
+    CHECK(m.detail.contains(QStringLiteral("Vulkan capture layer"))); // the SteamVR default since the mirror crashed vrserver
     m = recordCardModel(RecordInputs{});
     CHECK(!m.canStart && m.headline == QStringLiteral("No VR session"));
     // a mirror recording says where it comes from; an unsupported mirror is the last error in plain words

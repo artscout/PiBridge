@@ -49,20 +49,40 @@ TEST(zone_args) {
 }
 
 TEST(map_options) {
+    ::unsetenv("PIBRIDGE_BACKEND");
     auto o = parseArgs({"--map", "--room", "office", "--roommap", "/t/pibridge-roommap", "--camera", "/t/a.pxcam", "--ring", "/t/r.head",
-                        "--map-seconds", "40"});
+                        "--map-seconds", "40", "--backend", "steamvr"});
     CHECK(o && o->run == Run::Map && o->room == "office" && o->roommapTool == "/t/pibridge-roommap" && o->camera == "/t/a.pxcam" &&
-          o->ringFile == "/t/r.head" && o->mapSeconds == "40");
-    auto d = parseArgs({"--map"});
-    CHECK(d && d->room == "home" && d->camera == "broker" && d->roommapTool.empty());
-    CHECK(!parseArgs({"--map", "--room", "../x"}));
-    CHECK(!parseArgs({"--map", "--map-seconds", "5"}));
-    CHECK(!parseArgs({"--map", "--room"}));
-    auto f = parseArgs({"--floor-height", "--eye-height", "1.68", "--room", "home"});
+          o->ringFile == "/t/r.head" && o->mapSeconds == "40" && o->backend == "steamvr");
+    auto d = parseArgs({"--map", "--backend", "monado"});
+    CHECK(d && d->room == "home" && d->camera == "broker" && d->roommapTool.empty() && d->backend == "monado");
+    CHECK(!parseArgs({"--map", "--backend", "steamvr", "--room", "../x"}));
+    CHECK(!parseArgs({"--map", "--backend", "steamvr", "--map-seconds", "5"}));
+    CHECK(!parseArgs({"--map", "--backend", "steamvr", "--room"}));
+    auto f = parseArgs({"--floor-height", "--eye-height", "1.68", "--room", "home", "--backend", "steamvr"});
     CHECK(f && f->run == Run::FloorHeight && f->eyeHeight && *f->eyeHeight == 1.68);
-    CHECK(!parseArgs({"--floor-height"}));
-    CHECK(!parseArgs({"--map", "--eye-height", "3"}));
-    CHECK(parseArgs({"--map", "--eye-height", "1.6"}).value_or(Options{}).eyeHeight == 1.6);
+    CHECK(!parseArgs({"--floor-height", "--backend", "steamvr"}));
+    CHECK(!parseArgs({"--map", "--backend", "steamvr", "--eye-height", "3"}));
+    CHECK(parseArgs({"--map", "--backend", "steamvr", "--eye-height", "1.6"}).value_or(Options{}).eyeHeight == 1.6);
+}
+
+TEST(backend_is_explicit) {
+    ::unsetenv("PIBRIDGE_BACKEND");
+    // no guessing: the room tools need the backend
+    CHECK(!parseArgs({"--map"}));
+    CHECK(!parseArgs({"--recenter", "--recenter-out", "/t/o"}));
+    CHECK(!parseArgs({"--map", "--backend", "both"}));
+    // the environment counts, the flag wins
+    ::setenv("PIBRIDGE_BACKEND", "monado", 1);
+    CHECK(parseArgs({"--map"}).value_or(Options{}).backend == "monado");
+    CHECK(parseArgs({"--map", "--backend", "steamvr"}).value_or(Options{}).backend == "steamvr");
+    // the SteamVR helpers are SteamVR's; the chaperone commit is not the Monado one
+    CHECK(!parseArgs({"--vr-standing", "--keep-floor"}));
+    CHECK(!parseArgs({"--map", "--chaperone"}));
+    ::setenv("PIBRIDGE_BACKEND", "nope", 1);
+    CHECK(!parseArgs({"--map"}));
+    ::unsetenv("PIBRIDGE_BACKEND");
+    CHECK(parseArgs({"--vr-standing", "--keep-floor"}).value_or(Options{}).backend == "steamvr");
 }
 
 PIBRIDGE_TEST_MAIN()

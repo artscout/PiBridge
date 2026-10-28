@@ -624,7 +624,7 @@ TEST(command_lines_and_environment) {
     const QStringList e = monadoEnv(s, QStringLiteral("/r/x"));
     // the recorder uses the inside-out settings (core/inside_out.h): camera auto exposure on with the Crystal model
     for (const char* want : {"PIMAX_FPS=90", "PIMAX_CAM_SOURCE=broker", "PIMAX_SLAM=1", "PIMAX_CAM_AE=1",
-                             "PIMAX_CAM_AE_MODEL=crystal-super", "PIMAX_CTRL_ANGLE=30",
+                             "PIMAX_CAM_AE_MODEL=crystal-super", "PIMAX_CTRL_ANGLE=52",
                              "PIMAX_CTRL_TRACK=1", "XRT_COMPOSITOR_FORCE_WAYLAND_DIRECT=1",
                              "XRT_COMPOSITOR_WAYLAND_CONNECTOR=DP-6", "XRT_COMPOSITOR_FORCE_NVIDIA=0", "XRT_NO_STDIN=1",
                              "IPC_IGNORE_VERSION=1", "PIMAX_SLAM_RECORD=/r/x"}) {

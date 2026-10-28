@@ -20,12 +20,16 @@ struct AppState {
     KeepaliveStatus keepalive;
     EyedStatus eyed;
     bool steamvrRunning = false;
+    bool monadoRunning = false; // monado-service ("Monado directly", PiBridge World)
     SteamVrStatus steamvr; // the devices SteamVR reports (empty unless connected)
 };
 
 // The fixed states of fake mode: "active" (SteamVR on, screen on, eyes streaming, fakeVrDevices() read through a
 // FakeSteamVrSource) and "idle" (nothing running).
 AppState fakeState(bool active);
+// The status bar's runtime line: "SteamVR running", "Monado running", "SteamVR and Monado running" or
+// "VR not running".
+QString vrRuntimeWords(const AppState& s);
 // A fixed fake gaze (a little right and up of straight ahead).
 GazeSnapshot fakeGaze();
 

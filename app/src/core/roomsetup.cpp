@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "roomsetup.h"
+#include "vr_backend.h"
 
 #include <QDateTime>
 #include <QLocale>
@@ -74,7 +75,7 @@ Gate headsetGate(bool steamvrRunning, const QString& toolPath) {
         return {false, QStringLiteral("pibridge-roomsetup is not installed (it comes with PiBridge; install PiBridge again).")};
     }
     if (!steamvrRunning) {
-        return {false, QStringLiteral("Start SteamVR first: the room setup runs inside it, in the headset.")};
+        return {false, QStringLiteral("Press START VR on the Dashboard first: the room setup runs in the headset, in the VR session.")};
     }
     return {true, {}};
 }
@@ -219,7 +220,8 @@ Gate recenterGate(bool insideOut, bool steamvrRunning, bool anchorOn, const QStr
 }
 
 QStringList recenterArgs(const QString& out, const QString& ring) {
-    return {QStringLiteral("--recenter"), QStringLiteral("--recenter-out"), out, QStringLiteral("--ring"), ring};
+    return QStringList{QStringLiteral("--recenter"), QStringLiteral("--recenter-out"), out, QStringLiteral("--ring"), ring}
+           << vrBackendArgs(currentVrBackend());
 }
 
 QString recenterReminder() {

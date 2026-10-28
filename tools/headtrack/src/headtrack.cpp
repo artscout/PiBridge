@@ -698,9 +698,17 @@ void Daemon::on_controller(const hmd::ControllerReport& r) {
         a[k] = static_cast<float>(r.raw_accel[k] / 1024.0 * G);
         g[k] = static_cast<float>(r.raw_gyro[k] * CTRL_GYRO_SCALE);
     }
+    bool buttonsChanged = false;
+    if (side == 1) {
+        right_menu_.store((r.buttons & hmd::BTN_APP_MENU) != 0);
+    }
     {
         std::lock_guard l(hands_[side].mu);
         Hand& hd = hands_[side];
+        if (r.buttons != hd.logged_buttons) {
+            hd.logged_buttons = r.buttons;
+            buttonsChanged = true;
+        }
         hd.report = r;
         hd.report_ns = now;
         hd.imu.update(now, v3(a), v3(g));
@@ -771,6 +779,12 @@ void Daemon::on_controller(const hmd::ControllerReport& r) {
         std::lock_guard l(ht_mu_);
         fuser_[side]->report(static_cast<std::uint64_t>(now), r.raw.data());
     }
+    if (buttonsChanged) {
+        // which bits each physical button sets, per hand (A 0x2, B 0x1, menu 0x4, stick 0x8, Pimax 0x10)
+        char line[96];
+        std::snprintf(line, sizeof line, "controller %s buttons 0x%02x", side == 0 ? "left" : "right", r.buttons);
+        say_(line);
+    }
 }
 
 std::optional<Daemon::HeadAt> Daemon::head_at(std::int64_t ts) const {
@@ -819,6 +833,9 @@ ps::Device Daemon::controller(int side, std::int64_t now_ns) {
     pressed |= (rep->buttons & hmd::BTN_A) != 0 ? 0x01u : 0u;      // A / X
     pressed |= (rep->buttons & hmd::BTN_B) != 0 ? 0x02u : 0u;      // B / Y
     pressed |= (rep->buttons & hmd::BTN_APP_MENU) != 0 ? 0x04u : 0u;
+    if (side == 0 && right_menu_.load()) {
+        pressed |= 0x04u; // the right Menu button opens SteamVR's dashboard too (right_menu_ in headtrack.h)
+    }
     pressed |= (rep->buttons & hmd::BTN_STICK) != 0 ? 0x08u : 0u;
     // the Pimax button is not passed on: a long press recenters (on_controller)
     const auto tb = rep->touch_bits();

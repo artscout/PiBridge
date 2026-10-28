@@ -14,6 +14,9 @@ endif()
 option(PIBRIDGE_BUILD_APP "Build the Qt 6 app" ON)
 option(PIBRIDGE_BUILD_TESTS "Build the tests" ON)
 set(PIBRIDGE_SKIP_PARTS "" CACHE STRING "Parts (directories) to leave out of this build, e.g. libpibridge-lens")
+# PiBridge's Monado fork (the Monado backend, docs/monado.md): its sources in third_party/monado. Read only here: the
+# tests compile the driver's shared-file headers against ours; the fork is built on its own (docs/INSTALL.md).
+set(PIBRIDGE_MONADO_SRC_DIR "${PROJECT_SOURCE_DIR}/third_party/monado" CACHE PATH "PiBridge's Monado fork (sources)")
 
 include(GNUInstallDirs)
 add_compile_options(-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-sign-conversion)
@@ -39,7 +42,7 @@ target_include_directories(pibridge_common INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}
 # (the janky controller interactions) is not used from fast mode.
 foreach(part libpibridge-hmd libpibridge-eyemath libpibridge-eye libpibridge-room libpibridge-cam libpibridge-lens libpibridge-ctrl libpibridge-anchor libpibridge-roommap monado-abi
         tools/keepalived tools/record tools/eyed tools/eye-tool tools/eyecal tools/cam tools/slam tools/ctrltrack tools/roommap tools/xrkit tools/roomsetup
-        tools/home tools/overlay tools/record-layer tools/headtrack tools/posetap tools/lens app)
+        quadviews tools/home tools/overlay tools/xroverlay tools/record-layer tools/headtrack tools/posetap tools/lens app)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${part}/CMakeLists.txt)
         if(part STREQUAL "app" AND NOT PIBRIDGE_BUILD_APP)
             continue()
@@ -55,6 +58,8 @@ endforeach()
 # docs and the udev rule (to copy to /etc/udev/rules.d by hand, see docs/INSTALL.md). The libraries are static and
 # internal: no headers or archives are installed.
 install(DIRECTORY devices/ DESTINATION ${CMAKE_INSTALL_DATADIR}/pibridge/devices FILES_MATCHING PATTERN "*.toml")
+# PiBridge World (world/, a Godot 4 project run by Godot as the Monado backend's home; docs/world.md)
+install(DIRECTORY world/ DESTINATION ${CMAKE_INSTALL_DATADIR}/pibridge/world PATTERN ".godot" EXCLUDE PATTERN ".gitignore" EXCLUDE)
 install(FILES udev/70-pibridge.rules DESTINATION ${CMAKE_INSTALL_DATADIR}/pibridge/udev)
 # The NVIDIA EDID override scripts (run by hand with sudo, docs/INSTALL.md 5.2) and the Pimax EDIDs they merge.
 install(PROGRAMS tools/headset-edid/pibridge-headset-edid tools/headset-edid/make_crystal_edid.py

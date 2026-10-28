@@ -30,7 +30,7 @@
 
 | Что | Где | Заметки |
 |---|---|---|
-| Наш форк Monado (рабочее дерево) | `~/gamedev/pibridge-monado` | **Без `.git`** (перенесён каталогом выше). История — в `~/gamedev/pibridge-monado-src.old-20261022` (git, HEAD `c3ef4670d`, ветка `facet-abi`, origin = сабмодуль omarchyvr `forks/monado`). Деревья идентичны по исходникам (diff: только `build.gradle`/`__pycache__` и каталог `pibridge/` с `monado`, `monado-abi`). **Первый шаг — вернуть git**: перенести `.git` из старой копии (или `git init` + `git fetch` из неё), закоммитить состояние, дальше работать в нём. |
+| Наш форк Monado (рабочее дерево) | **сейчас `third_party/monado` этого репозитория** (2026-10-26, история — `~/gamedev/pibridge-monado.git`, см. docs/monado.md); раньше `~/gamedev/pibridge-monado` | Ниже — состояние на момент написания плана: **без `.git`** (перенесён каталогом выше). История — в `~/gamedev/pibridge-monado-src.old-20261022` (git, HEAD `c3ef4670d`, ветка `facet-abi`, origin = сабмодуль omarchyvr `forks/monado`). Деревья идентичны по исходникам (diff: только `build.gradle`/`__pycache__` и каталог `pibridge/` с `monado`, `monado-abi`). **Первый шаг — вернуть git**: перенести `.git` из старой копии (или `git init` + `git fetch` из неё), закоммитить состояние, дальше работать в нём. |
 | Сборка форка | `~/gamedev/pibridge-monado-build` | `monado-service` от 2026-10-22 19:34, `CMAKE_INSTALL_PREFIX=/usr/local`. |
 | Драйвер `pimax` | `~/gamedev/pibridge-monado/src/xrt/drivers/pimax/` | `pimax_hmd.c` (голова: 3DoF/6DoF `PIMAX_SLAM`, якорь `PIMAX_ANCHOR` через `pimax_anchor.h`, рецентр), `pimax_ctrl.c`, `pimax_camera.c`, `pimax_ht.c` (Mercury), `pimax_eyeglue.c` (**eye gaze уже есть**: `PIMAX_EYE=1` → `XRT_INPUT_GENERIC_EYE_GAZE_POSE`, профиль `XRT_DEVICE_EYE_GAZE_INTERACTION`), `pimax_lens.c` (lens.conf + LUT через `pimax_lens_rs.h`), `pimax_winbridge*.h`. |
 | `steamvr_lh` в форке | `src/xrt/drivers/steamvr_lh/` | свежий (коммит `d/steamvr_lh: expose IVRDriverInput_005`, 2026-10-02). Грузит `$STEAMVR_PATH/drivers/lighthouse/bin/linux64/driver_lighthouse.so`; HMD создаёт только при наличии `IVRDisplayComponent` (`VERIFY(display, "IVRDisplayComponent is null")`, `steamvr_lh.cpp` ~266), FOV берёт из `GetProjectionRaw`. |
@@ -88,9 +88,9 @@
 1. Добавить в `libpibridge-lens` (и в драйвер `pimax`) штатный профиль `devices/crystal-super/lens.conf` + LUT
    (`PIMAXLUT v1`, из `crystal-pimax-native-lut.bin`, с CRC). Выбор по модели шлема (USB PID/EDID: Crystal Super vs
    Dream Air), `PIMAX_LENS_CONF` остаётся переопределением.
-2. Положить рядом воспроизводимый генератор: `pvr2lut.py`/`chovr2lut.py` и шаг «проективный поворот на 4.68°» как код,
-   не как бинарь без происхождения (исходный дамп `crystal-pimax-dist-129.txt` — личный набор данных пользователя,
-   в репозиторий не кладётся; LUT — производный, кладётся).
+2. Положить рядом воспроизводимый генератор: шаг «проективный поворот на 4.68°» как код, не как бинарь без
+   происхождения. Исходные данные (дамп и like-Pimax LUT) — из личной установки Pimax пользователя: ни они, ни
+   производный LUT в репозиторий не кладутся.
 3. Проверка только в шлеме, методом A/B (так был найден h4): собрать варианты, пользователь сравнивает. Критерии те же:
    масштаб мира и отсутствие сдвига геометрии при поворотах головы в BMS.
 4. Открытое: физическая причина 4.68° — не блокирует.
@@ -161,3 +161,37 @@
   само по себе, но мотивирует иметь второй бэкенд.
 - Разделение runtime-файлов якоря ломает любой скрипт/инструмент, который ждал `pimax-anchor.offset` в
   `$XDG_RUNTIME_DIR` — найти все читатели (`grep -rn "pimax-anchor"`), включая `tools/posetap`.
+
+## 6. Статус реализации (2026-10-26)
+
+Сделано машиной (сборка + тесты), в шлеме не проверено, кроме пункта 1:
+
+1. **Фаза 1 — проверено на живом шлеме** (`monado-cli probe`): `driver_lighthouse` поднимает LH faceplate Crystal Super
+   как HMD `LHR-7A68714C` с display component; базовая станция `LHB-CCFA0568` видна. Вариант B работает без правок
+   `steamvr_lh`: билдер `pibridge_lh` выбран, Pimax HMD создан, поза головы — от faceplate.
+2. **Форк** `~/gamedev/pibridge-monado` (git восстановлен, ветка `pibridge`): билдер `pibridge_lh` (`PIBRIDGE_LH=1`),
+   `pimax_hmd_set_head_source`, `steamvr_lh` `LH_STAGE_FILE` (живой стейдж, чаперон SteamVR не читается),
+   `pimax_anchor.h` пути по `PIBRIDGE_BACKEND`, `PIMAX_EYE_SHM` (взгляд из shm pibridge-eyed).
+3. **Фаза 2** — `PIBRIDGE_BACKEND` везде; `libpibridge-anchor` backend.h; приложение: `vr_backend` (Tracking page),
+   главная сессия переключается `IoSessionControl::setVariant`, Monado-LH = только `monado-service`
+   (`buildMonadoLighthouseEnv`), монадо-абстракция `monado-abi/` возвращена в репозиторий.
+   Не сделано: системный `active_runtime.json` не переключается (правило приложения); OpenVR-игры под Monado
+   (xrizer/OpenComposite) не установлены; пакетирование форка в .deb.
+4. **Фаза 3** — `Lut::rotated_yaw` + `pibridge-lens crystal-profile` (бит-в-бит воспроизводит проверенный LUT),
+   `native` — профиль по умолчанию.
+5. **Фаза 4** — см. п. 1–2; стейдж Monado-LH пишет `pibridge-roomsetup --lh-stage` (и VR-дашборд pibridge-home).
+6. **Фаза 5** — комнаты `~/.local/share/pibridge/rooms/<backend>`, `--backend` обязателен у roommap/roomsetup,
+   эвристики `is_vrserver`/`is_headtrack` в решениях удалены, коммит Monado = мировой оффсет (`finish`).
+7. Дополнительно (по просьбе пользователя): VR-дашборд Monado в pibridge-home (настройки шлема, room setup);
+   оверлей SteamVR — три кнопки в панели дашборда (Room Setup / Quick Room Setup / Record Video с индикатором).
+8. 2026-10-26 (позже): кольцо рецентра поверх игр под Monado (`pibridge-xroverlay`, `XR_EXTX_overlay`; драйвер пишет
+   `recenter-progress`), сглаженное кольцо в SteamVR; дом Monado — **PiBridge World на Godot 4.7.2** (`world/`,
+   docs/world.md: мир, дашборд, Apps из apps.toml и Steam-игры с OpenXR, клавиатура, Passthrough через
+   `pibridge-home --passthrough-overlay`, модели контроллеров из набора данных, настройки quad views); слой quad views
+   перенесён в репозиторий (`quadviews/`) с нативным режимом для Monado (фокус по взгляду, сборку делает Monado).
+9. 2026-10-26 (позже): форк перенесён в `third_party/monado` (простые файлы в репозитории PiBridge; история git —
+   отдельный каталог `~/gamedev/pibridge-monado.git` с `core.worktree`), имя рантайма «Monado PiBridge fork from
+   OmarchyVR», тег `v25.1.0-pibridge`. Рецентр двигает и LOCAL-пространства приложений (`u_recenter_announce`,
+   тест `tests_space_recenter`). libmonado 1.9: `mnd_root_get_client_pid` (Close app). Правая кнопка меню —
+   `system/click` в профиле Touch. Мир уступает память игре (код выхода 75) и возвращается по запросу оверлея меню,
+   с точками загрузки в `pibridge-xroverlay`. Документация: docs/monado.md, docs/xroverlay.md, INSTALL.md 7.2.

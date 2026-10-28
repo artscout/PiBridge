@@ -1,7 +1,13 @@
 # Installing PiBridge
 
 PiBridge is a VR hub for Pimax headsets on Linux: one app (`pibridge`) and two small user services (`pibridge-keepalived`
-keeps the headset awake while SteamVR runs, `pibridge-eyed` runs the eye tracker). Not affiliated with Pimax.
+keeps the headset awake while VR runs, `pibridge-eyed` runs the eye tracker). Not affiliated with Pimax.
+
+It runs VR on one of two backends, chosen on the Dashboard:
+
+- **SteamVR** (the default): SteamVR with CustomHeadsetOpenVR as the headset driver (section 5).
+- **Monado**: PiBridge's own Monado fork as the OpenXR runtime (section 7.2), with PiBridge World as the home in the
+  headset (a Godot 4 project; Godot is needed for it).
 
 This guide installs PiBridge for your user only (into `~/.local`). Root is needed for three things only, each said where
 it comes: the udev rule, the NVIDIA module (Crystal Super) and the package installs.
@@ -18,23 +24,27 @@ minutes, read only towards the headset) and send us the bundle privately: [HEADS
 ## 1. Build dependencies
 
 You need CMake 3.22 or newer, Ninja, a C++23 compiler with `std::expected` (GCC 13 or newer, or Clang 17 or newer),
-the Qt 6 Widgets development files and the OpenXR headers. zlib (for reading the headset's calibration blob) and the
-IBM Plex fonts (the app's look; it falls back to Noto/DejaVu) are optional.
+the Qt 6 Widgets development files, the OpenXR headers, and the Vulkan headers with `glslangValidator` (the quad views
+layer, section 7, is built with PiBridge). zlib (for reading the headset's calibration blob) and the IBM Plex fonts
+(the app's look; it falls back to Noto/DejaVu) are optional.
 
 Ubuntu / Debian:
 ```
-sudo apt install cmake ninja-build g++ qt6-base-dev libopenxr-dev zlib1g-dev libjpeg-dev fonts-ibm-plex
+sudo apt install cmake ninja-build g++ qt6-base-dev libopenxr-dev libvulkan-dev glslang-tools zlib1g-dev libjpeg-dev fonts-ibm-plex
 ```
 
 Arch:
 ```
-sudo pacman -S --needed cmake ninja gcc qt6-base openxr zlib libjpeg-turbo ttf-ibm-plex
+sudo pacman -S --needed cmake ninja gcc qt6-base openxr vulkan-headers vulkan-icd-loader glslang zlib libjpeg-turbo ttf-ibm-plex
 ```
 
 Fedora:
 ```
-sudo dnf install cmake ninja-build gcc-c++ qt6-qtbase-devel openxr-devel zlib-devel libjpeg-turbo-devel ibm-plex-sans-fonts ibm-plex-mono-fonts
+sudo dnf install cmake ninja-build gcc-c++ qt6-qtbase-devel openxr-devel vulkan-headers vulkan-loader-devel glslang zlib-devel libjpeg-turbo-devel ibm-plex-sans-fonts ibm-plex-mono-fonts
 ```
+
+The Monado backend (section 7.2, optional) needs Monado's own build dependencies and Godot 4; that section lists
+them.
 
 Check the compiler: `g++ --version` must say 13 or newer (Ubuntu 22.04 ships 11: install `g++-13` and add
 `-DCMAKE_CXX_COMPILER=g++-13` to the configure command below).
@@ -66,7 +76,9 @@ What `cmake --install` puts where (prefix `~/.local`):
 
 | What | Where |
 |---|---|
-| The app and the tools: `pibridge`, `pibridge-keepalived`, `pibridge-eyed`, `pibridge-eye` | `~/.local/bin/` |
+| The app and the tools: `pibridge`, `pibridge-keepalived`, `pibridge-eyed`, `pibridge-eye`, and the rest of the `pibridge-*` tools (room setup, recorder, the in-headset dashboard `pibridge-home`, the recenter ring `pibridge-xroverlay`, ...) | `~/.local/bin/` |
+| The quad views layer and its OpenXR manifest (section 7) | `~/.local/lib/qv-vulkan/`, `~/.local/share/openxr/1/api_layers/implicit.d/` |
+| PiBridge World, the Monado backend's home in the headset (a Godot project, section 7.2) | `~/.local/share/pibridge/world/` |
 | The systemd user units `pibridge-keepalived.service`, `pibridge-eyed.service` (their `ExecStart` names `~/.local/bin`) | `~/.local/share/systemd/user/` (systemd reads it: it is `$XDG_DATA_HOME/systemd/user`) |
 | The device descriptions (the allowlist of HID commands) | `~/.local/share/pibridge/devices/` |
 | The udev rule, to copy by hand (step 3) | `~/.local/share/pibridge/udev/70-pibridge.rules` |
@@ -114,9 +126,10 @@ cp -n ~/.config/pimax-linux/* ~/.config/pibridge/ 2>/dev/null
 [ -f ~/.config/pibridge/pimax-linux.conf ] && mv -n ~/.config/pibridge/pimax-linux.conf ~/.config/pibridge/pibridge.conf
 ```
 
-Then start **PiBridge** from the application menu (or `pibridge`). With the defaults the services wait for SteamVR: when
-SteamVR starts they wake the headset, switch its panel on at 90 Hz, make it the default sound device and start the
-eye tracker; when SteamVR closes they give everything back and the headset goes to standby (green LED).
+Then start **PiBridge** from the application menu (or `pibridge`). With the defaults the services wait for a VR runtime,
+SteamVR or PiBridge's Monado (`follow=vrserver,monado-service` in `pibridge.conf`). When one starts they wake the
+headset, switch its panel on at 90 Hz, make it the default sound device and start the eye tracker. When it closes they
+give everything back and the headset goes to standby (green LED).
 
 ### 4.1 The SteamVR dashboard panel (installed with the app)
 
@@ -151,6 +164,10 @@ manifest to `~/.local/share/vulkan/implicit_layer.d/`.
 `~/.local/share/vulkan/implicit_layer.d`, so the manifest must also sit in a system path
 (`/usr/share/vulkan/implicit_layer.d/VK_LAYER_PIBRIDGE_record.json`) — a root step, done through the app's pkexec
 prompt. Full detail (capture sources, encoders, options) is in [record.md](record.md).
+
+Under the Monado backend no layer is involved: PiBridge's Monado has a capture tap in its compositor, and the same
+`pibridge-record` encodes from it. In the headset, recording starts and stops from PiBridge World's **Record** button
+or the dashboard over a game (Headset page, **Record video**).
 
 ## 5. Pimax Crystal Super (Lighthouse faceplate) and the original Crystal
 
@@ -389,29 +406,19 @@ list for the Crystal Super, so that a new headset needs no Windows session at al
 Foveated rendering ("quad views") draws the middle of your view at full detail and the edges at lower detail, which
 saves a lot of GPU work; with eye tracking running the sharp area follows your eyes. PiBridge's **Performance** page is
 the control panel for it: the on/off switch, the presets, the resolutions, the gaze area and the per-game profiles
-(written to `~/.config/qv-vulkan/settings.conf`). The rendering itself is done by an OpenXR layer,
-[linux-vulkan-quadviews-openxr-layer](https://github.com/artscout/linux-vulkan-quadviews-openxr-layer) (`qv-vulkan`).
+(written to `~/.config/qv-vulkan/settings.conf`).
 
-Install the layer into the **same prefix** as PiBridge so everything lands together under `~/.local`:
-```
-git clone https://github.com/artscout/linux-vulkan-quadviews-openxr-layer.git
-cd linux-vulkan-quadviews-openxr-layer
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/.local
-cmake --build build
-cmake --install build
-```
-That installs the layer to `~/.local/lib/qv-vulkan/` and its OpenXR manifest to
-`~/.local/share/openxr/1/api_layers/implicit.d/` — the same manifest PiBridge's Performance page renames to switch the
-layer on and off. It needs the Vulkan and OpenXR headers, `glslangValidator`, and (for the layer's own stand-alone
-settings app, which PiBridge replaces) Qt 6 Widgets.
+The rendering is done by PiBridge's OpenXR API layer in `quadviews/` (formerly the separate
+`linux-vulkan-quadviews-openxr-layer` project, now part of PiBridge). It is built, tested and installed with the rest
+(section 2): the layer goes to `~/.local/lib/qv-vulkan/`, its manifest to
+`~/.local/share/openxr/1/api_layers/implicit.d/`, the same manifest the Performance page renames to switch the layer on
+and off. There is nothing else to install.
 
-Once the layer is installed, you do **not** use its own settings app: the PiBridge **Performance** page drives it.
-The on/off switch there is disabled until the layer is installed.
+- **Under SteamVR** the layer renders the four views and composes them into stereo itself.
+- **Under Monado**, which has quad views (`XR_VARJO_quad_views`), the layer moves the focus views with your gaze and
+  Monado's compositor puts them in. PiBridge World has a **Quad views** page with the same settings.
 
-> **Planned: one install for the whole stack.** The layer is built from its own repository today; PiBridge only
-> configures it. Bundling the layer into PiBridge's own build and install (so a single `cmake --install` lays down the
-> app, the services, the dashboard panel *and* the foveated-rendering layer together) is **not wired up yet** — this
-> is a TODO. For now, follow the two installs above.
+If you had the old stand-alone layer installed into the same prefix, PiBridge's install replaces it (same paths).
 
 ### 7.1 Inside-out tracking (Crystal Super / Dream Air, optional)
 
@@ -471,6 +478,94 @@ finds it — `~/.local/lib/pibridge/`, `/usr/local/lib/`,
 the tunables (detection grid, camera count, accel/gyro bias, drift hold) are on the Tracking page, documented in
 [TRACKING.md](TRACKING.md). Choose **Head tracking engine: Basalt**.
 
+## 7.2 The Monado backend (optional)
+
+PiBridge has two VR backends (the **VR backend** choice on the Dashboard; `vr_backend=steamvr|monado` in
+`pibridge.conf`). SteamVR is the default. **Monado** is PiBridge's own Monado fork with the Pimax driver as the OpenXR
+runtime ("Monado PiBridge fork from OmarchyVR", in `third_party/monado`; what it changes: [monado.md](monado.md)).
+
+Under Monado:
+
+- The headset renders through PiBridge's lens profile (`pibridge-lens crystal-profile`).
+- It serves eye tracking (`XR_EXT_eye_gaze_interaction`, the gaze of pibridge-eyed) and quad views
+  (`XR_VARJO_quad_views`).
+- The head is tracked inside-out (Tracking mode Inside-out) or by the Lighthouse faceplate (Tracking mode Lighthouse:
+  Valve's `driver_lighthouse` from your SteamVR install tracks the faceplate and the Lighthouse controllers; SteamVR
+  itself does not run).
+- Each backend keeps its own rooms (`~/.local/share/pibridge/rooms/<backend>`; rooms saved before the split are copied
+  to the SteamVR ones once) and runtime files (`$XDG_RUNTIME_DIR/pibridge/<backend>/`).
+- In the headset, **PiBridge World** is the home: a world around you, the dashboard on a panel, Apps, Passthrough, the
+  settings ([world.md](world.md)). Over a game, the menu button opens PiBridge's dashboard as an overlay
+  ([home.md](home.md)).
+
+### 7.2.1 Build the Monado fork
+
+The fork is in this repository (`third_party/monado`) and is built on its own, out of tree. Its Pimax driver links
+PiBridge's `libpibridge_pimax.a` (monado-abi, [monado-abi.md](monado-abi.md)), so build PiBridge first (section 2).
+
+Monado's own build dependencies (Ubuntu / Debian; the same list as Monado's README):
+```
+sudo apt install build-essential pkg-config python3 libeigen3-dev libusb-1.0-0-dev libudev-dev libhidapi-dev \
+    libx11-dev libx11-xcb-dev libxxf86vm-dev libxrandr-dev libxcb-randr0-dev libvulkan-dev glslang-tools \
+    libglvnd-dev libgl1-mesa-dev libegl1-mesa-dev libwayland-dev wayland-protocols libuvc-dev libv4l-dev \
+    libcjson-dev libsdl2-dev libbsd-dev
+```
+
+Configure and build, from the PiBridge source folder. The app looks for the build in `~/gamedev/pibridge-monado-build`;
+another folder works when you name its `monado-service` as `rec_monado_service=` in `pibridge.conf` (or choose it on
+the Development page):
+```
+cmake --build build --target pibridge_pimax_archive
+cmake -S third_party/monado -B ~/gamedev/pibridge-monado-build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DXRT_BUILD_DRIVER_PIMAX=ON -DXRT_BUILD_DRIVER_STEAMVR_LIGHTHOUSE=ON \
+    -DPIMAX_USE_PIBRIDGE=ON -DPIMAX_PIBRIDGE_LIB=$PWD/build/monado-abi/libpibridge_pimax.a \
+    -DPIMAX_PIBRIDGE_INCLUDE=$PWD/monado-abi/include
+nice -n 19 ninja -C ~/gamedev/pibridge-monado-build
+ctest --test-dir ~/gamedev/pibridge-monado-build
+```
+
+**Realtime priority (once after every build, root).** Monado's compositor wants `cap_sys_nice`, and every relink of
+`monado-service` drops it. The Dashboard shows **Fix permissions** while the Monado backend is chosen and the
+capability is missing: it sets it through a pkexec prompt.
+
+### 7.2.2 Godot, for PiBridge World
+
+PiBridge World (`world/` in the source tree, installed to `~/.local/share/pibridge/world/`) is a Godot 4 project, run
+by Godot. PiBridge does not ship Godot. Download the official Linux build of **Godot 4.7** (standard, not .NET) from
+<https://godotengine.org/download/linux/> and verify it against the published checksums, then put it where the app
+finds it:
+
+- `~/gamedev/godot/Godot_v4.7.2-stable_linux.x86_64` (any `Godot_v4*_linux.x86_64` in that folder; the newest wins), or
+- `godot4` or `godot` on your `PATH`, or
+- any path, named as `rec_godot=` in `pibridge.conf`.
+
+No import step is needed: the project has no imported assets. Without Godot the app falls back to the classic home
+(`pibridge-home`), which you can also choose on purpose with `vr_home=classic`.
+
+Never start the world by hand while SteamVR is the system's OpenXR runtime: Godot would start SteamVR. The app starts
+it inside the Monado session with the right runtime. For a check without a headset:
+```
+~/gamedev/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --xr-mode off --path ~/.local/share/pibridge/world -- --selftest
+```
+
+Optional, for your controllers to look like Pimax's in the world: copy the Pimax controller models as described in
+[world.md](world.md#controller-models).
+
+### 7.2.3 Use
+
+1. Choose **Monado** under **VR backend** on the Dashboard and press **START VR**. Monado starts, then PiBridge World
+   in the headset.
+2. Games started from the app's Apps page or from the world's Apps page run on Monado (`XR_RUNTIME_JSON`). Games
+   started elsewhere (Steam) use the system's active OpenXR runtime: the Dashboard's **OpenXR runtime** switch points
+   `~/.config/openxr/1/active_runtime.json` at SteamVR or at the Monado build (a symlink; a foreign regular file is
+   kept once as `active_runtime.json.pibridge-backup`). OpenVR-only games always need SteamVR.
+3. While a game runs, PiBridge World closes itself to leave the game its memory and comes back when the game ends.
+   The menu button opens the dashboard over the game: settings, and in its bottom bar **Record video** / **Stop
+   recording**, **Quick room setup**, **Recenter** and **Close app**.
+4. **Recenter** (the dashboard, or holding the Pimax button) turns forward to where you look and puts the centre where
+   you stand, for every app, also seated ones.
+5. **Room setup** for Monado runs from the world's or the overlay's dashboard and saves into the Monado rooms only.
+
 ## 8. Check that it works
 
 - [ ] `ctest --test-dir build` passed, and `ls ~/.local/share/systemd/user/` lists `pibridge-keepalived.service` and
@@ -485,6 +580,8 @@ the tunables (detection grid, camera count, accel/gyro bias, drift hold) are on 
 - [ ] Eye tracking: the Dashboard shows **Streaming** with 2 eyes and the gaze dot follows your eyes.
 - [ ] Close SteamVR: about 5 s later the sound goes back to your speakers and the headset goes to standby (green LED).
 - [ ] Logs page: the service lines show no errors.
+- [ ] Monado backend (if you use it): with **Monado** chosen, START VR brings up PiBridge World in the headset; a game
+      started from Apps shows the controllers, and the menu button over it opens the dashboard.
 
 If the Dashboard says "Service not running": `journalctl --user -u pibridge-keepalived -u pibridge-eyed -n 50` (the Logs
 page shows the same). "Permission denied" on a hidraw or USB device means the udev rule (step 3) is missing.
@@ -521,9 +618,12 @@ They read their own files (`~/.config/pimax-linux/`, `~/.config/omarchyvr/`), wh
 | `libopenvr_api.so` | loaded at run time with `dlopen` | your SteamVR install (the app finds it through `~/.config/openvr/openvrpaths.vrpath`); not linked, not shipped |
 | Headset and eye chip protocols, gaze math, the two daemons, device descriptions | our code, ported | from omarchyvr (laughtt and contributors, MIT OR Apache-2.0, used as MIT; see NOTICE), Rust to C++ |
 | Quad views settings code | our code, copied | from artscout-qv-vulkan-linux (MIT) |
+| Quad views layer | our code, built with PiBridge | `quadviews/` (formerly linux-vulkan-quadviews-openxr-layer, MIT) |
+| Vulkan headers, `glslangValidator` | build time, system package | your distribution; for the quad views layer |
+| Monado | optional, in this tree, built separately | `third_party/monado`: PiBridge's fork of Monado (Collabora and contributors, BSL-1.0) with the Pimax driver from omarchyvr's fork; [monado.md](monado.md) |
+| Godot 4.7 | optional, run time, downloaded by you | godotengine.org (MIT); runs PiBridge World (`world/`, our code) |
 | `pimax-eyecal` | optional fallback, run time | omarchyvr; PiBridge ships its own `pibridge-eyecal` |
 | CustomHeadsetOpenVR | separate SteamVR driver | sboys3 (GPL-2.0), with our patches from `patches/chovr/` |
 | NVIDIA open kernel modules | separate, root | NVIDIA's open-gpu-kernel-modules (MIT/GPL-2.0), with our patch from `patches/nvidia/blackwell/` (RTX 50) or `patches/nvidia/pre-blackwell/` (RTX 20/30/40) |
-| Quad views layer | separate OpenXR layer | linux-vulkan-quadviews-openxr-layer |
 
 PiBridge builds without network access: nothing is downloaded at build time.

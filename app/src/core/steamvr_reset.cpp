@@ -524,7 +524,7 @@ void SteamRestarter::begin(qint64 nowMs) {
 void SteamRestarter::start() {
     if (runner_.startDetached(QStringLiteral("steam"), {})) {
         state_ = State::Started;
-        message_ = QStringLiteral("Steam is starting again. Start SteamVR once its window is back.");
+        message_ = QStringLiteral("Steam is starting again. Press START VR once its window is back.");
     } else {
         state_ = State::Failed;
         message_ = QStringLiteral("Could not start Steam. Is it installed?");

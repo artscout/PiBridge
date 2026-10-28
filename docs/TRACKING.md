@@ -89,6 +89,7 @@ on, so only the off value is passed (as omarchyvr's launcher passes only the fla
 | Controllers | (no switch) | — | always (driver default) | `PIMAX_CTRL_INHAND` not passed: `auto` marked held controllers as put down and the tracker stopped looking for them (live 2026-10-19) | `pimax_ctrl.c` |
 | Controllers | Out-of-view hold | `io_ctrl_lost_s` | 1..10, **4** s | `PIMAX_CTRL_TRACK_LOST_S` when not 4 | `fuse.rs:758`, `:691` |
 | Controllers | Steadier controllers | `io_ctrl_steady` | **on**, off | off only: `PIMAX_CTRL_TRACK_HYST=0` | `fuse.rs:743`; omarchyvr `trackset.rs` "Steadier controllers" |
+| Controllers | Hands from the controllers | `io_ctrl_hands` | on, **off** | `PIMAX_CTRL_HANDS=1` / `=0` (Monado) | `pimax_ctrl.c`: XR_EXT_hand_tracking from the controllers; off so games that enable hand tracking (Falcon BMS) show the controllers |
 | Advanced | Extra environment | `rec_env` (shared) | `KEY=value` words | appended last (overrides) to pibridge-headtrack's environment | |
 | Advanced | Programs and files | see "Programs and files" below | "Choose..." / "Auto" | | |
 
@@ -231,6 +232,13 @@ only, SIGKILL after 3 s). Without a saved room nothing is started. The session l
 Searching for the room / Room not found** from `$XDG_RUNTIME_DIR/omarchyvr-room.status` (only this session's). A long
 press (0.8 s) of the Pimax button recenters on top of the room offset; recenter after "Room recognised" (ROOM-SETUP.md,
 "The order of the room offset and the recenter").
+
+On the Monado backend the same long press (or Recenter on a dashboard in the headset) recenters in PiBridge's Monado:
+the driver turns the tracking origin so forward is where you look, then the space overseer moves the LOCAL spaces
+onto the head as well, each app's own included, so seated games that use LOCAL face forward too
+([monado.md](monado.md)). The right controller's Menu button is Touch's `/input/system/click` there (Touch has no
+right `menu/click`). Under SteamVR, `pibridge-headtrack` also sends the right Menu button as the left controller's
+system click, since SteamVR's Touch bindings open the dashboard from the left one only.
 
 ## Fake mode
 

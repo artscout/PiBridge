@@ -11,6 +11,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcessEnvironment>
+#include <cstdio>
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QThread>
@@ -247,12 +248,26 @@ IoSessionControl::Deps IoSessionControl::realDeps(IoVariant v, Conf& conf, IoLin
         return findHomeProgram(QCoreApplication::applicationDirPath(),
                                [](const QString& n) { return QStandardPaths::findExecutable(n); });
     };
+    d.xrOverlayProgram = [] {
+        const QString dir = QCoreApplication::applicationDirPath();
+        for (const QString& p : {dir + QStringLiteral("/pibridge-xroverlay"), dir + QStringLiteral("/../tools/xroverlay/pibridge-xroverlay")}) {
+            if (QFileInfo(p).isExecutable()) {
+                return QDir::cleanPath(p);
+            }
+        }
+        return QStandardPaths::findExecutable(QStringLiteral("pibridge-xroverlay"));
+    };
+    d.dashOverlayProgram = [] {
+        return findHomeProgram(QCoreApplication::applicationDirPath(),
+                               [](const QString& n) { return QStandardPaths::findExecutable(n); });
+    };
     d.runtimeJson = [](const QString& monado) { return monadoRuntimeJsonFor(monado); };
     d.monadoSocket = [] { return QFileInfo::exists(monadoSocketPath(RecEnv::defaults().runtimeDir)); };
     d.homeStatus = [](qint64 pid) {
         QFile f(statusDir() + QStringLiteral("/home.json"));
         return f.open(QIODevice::ReadOnly) ? homeStateOf(f.readAll(), pid) : QString();
     };
+    d.takeWorldReturn = [] { return QFile::remove(worldReturnPath()); };
     d.vrserverRunning = [links] {
         return links.steamvrRunning ? links.steamvrRunning() : processRunning(QStringLiteral("vrserver"));
     };
@@ -262,7 +277,10 @@ IoSessionControl::Deps IoSessionControl::realDeps(IoVariant v, Conf& conf, IoLin
     };
     d.unixNow = [] { return QDateTime::currentSecsSinceEpoch(); };
     const auto alive = [](qint64 pid) { return pid > 0 && (::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM); };
-    d.marker = [v, alive](bool on) {
+    auto markerVar = std::make_shared<IoVariant>(v);
+    d.markerVariant = [markerVar](IoVariant nv) { *markerVar = nv; };
+    d.marker = [markerVar, alive](bool on) {
+        const IoVariant v = *markerVar;
         const QString path = insideOutMarkerPath();
         if (on) {
             QDir().mkpath(QFileInfo(path).absolutePath());
@@ -485,9 +503,23 @@ bool IoSessionControl::active() const {
 }
 
 void IoSessionControl::endMarker() {
-    if (d_.marker) {
-        (void)d_.marker(false);
+    if (!d_.marker) {
+        return;
     }
+    if (!markerOwned_) {
+        // Not ours: only a broken or stale marker goes. A live one of THIS PiBridge belongs to the other session
+        // control (the Monado backend's session and "Monado directly" write the same variant): removing it let the
+        // headset service never pause, and the start fell back silently (2026-10-26).
+        QFile f(insideOutMarkerPath());
+        if (f.open(QIODevice::ReadOnly)) {
+            const auto m = parseInsideOutMarker(f.readAll());
+            if (m && m->first == QCoreApplication::applicationPid()) {
+                return;
+            }
+        }
+    }
+    (void)d_.marker(false);
+    markerOwned_ = false;
 }
 
 RecState IoSessionControl::state() const {
@@ -533,14 +565,23 @@ std::expected<QStringList, QString> IoSessionControl::driverPreview() const {
 bool IoSessionControl::start() {
     refresh();
     if (active() || !readiness_.ready()) {
+        // into the app's log (the journal) too: a refused start is otherwise only a tooltip / a status line
+        std::fprintf(stderr, "pibridge: %s start refused: %s\n",
+                     d_.variant == IoVariant::SteamVr ? "SteamVR session" : "Monado session",
+                     active() ? "a session runs" : qPrintable(readiness_.blocking.join(QStringLiteral(" | "))));
         emit changed();
         return false;
     }
+    std::fprintf(stderr, "pibridge: %s starting\n", d_.variant == IoVariant::SteamVr ? "SteamVR session" : "Monado session");
     startError_.clear();
     driverNote_.clear();
     homeTried_ = false;
     homePid_ = 0;
     homeExited_ = false;
+    homeYielded_ = false;
+    if (d_.takeWorldReturn) {
+        d_.takeWorldReturn(); // a request left from an earlier session
+    }
     homeTermMs_ = -1;
     homeKilled_ = false;
     homeError_.clear();
@@ -566,6 +607,7 @@ bool IoSessionControl::start() {
         emit changed();
         return false;
     }
+    markerOwned_ = d_.marker != nullptr;
     if (d_.daemonsHolding && !d_.daemonsHolding(setup_.eyeTracking).isEmpty()) {
         waitingRelease_ = true;
         releaseDeadline_ = d_.nowMs() + kDaemonReleaseMs;
@@ -578,6 +620,22 @@ bool IoSessionControl::start() {
     const bool ok = continueStart();
     emit changed();
     return ok;
+}
+
+bool IoSessionControl::setVariant(IoVariant v) {
+    if (v == d_.variant) {
+        return true;
+    }
+    if (active() || waitingRelease_) {
+        return false;
+    }
+    d_.variant = v;
+    if (d_.markerVariant) {
+        d_.markerVariant(v);
+    }
+    refresh();
+    emit changed();
+    return true;
 }
 
 bool IoSessionControl::continueStart() {
@@ -674,6 +732,7 @@ void IoSessionControl::stop() {
         return;
     }
     stopHome(false); // the home first: it is Monado's client
+    stopXrOverlay();
     session_->stop(d_.nowMs());
     tick();
 }
@@ -741,10 +800,21 @@ void IoSessionControl::tick() {
         return;
     }
     if (session_->state() == RecState::Recording && !homeTried_) {
+        startXrOverlay();
+        startHome();
+    }
+    if (session_->active() && session_->state() == RecState::Recording && homeYielded_ && homePid_ == 0 &&
+        d_.takeWorldReturn && d_.takeWorldReturn()) {
+        // the game ended: the world comes back (it closed itself to give the game its memory)
+        homeYielded_ = false;
+        homeExited_ = false;
+        homeTermMs_ = -1;
+        homeKilled_ = false;
         startHome();
     }
     if (!session_->active()) {
         stopHome(false); // Monado ended by itself: the home goes too
+        stopXrOverlay();
     }
     if (homePid_ > 0 && homeTermMs_ >= 0 && !homeKilled_ && now - homeTermMs_ >= kRecOtherTermMs) {
         d_.procs->signal(homePid_, SIGKILL); // that PID only
@@ -758,18 +828,86 @@ void IoSessionControl::tick() {
     emit changed();
 }
 
+void IoSessionControl::startXrOverlay() {
+    // pibridge-xroverlay (tools/xroverlay): Monado's overlay over every app - the recenter ring (found by the deps:
+    // next to the app, the build tree, PATH). Best effort: the session runs without it.
+    if (d_.variant != IoVariant::MonadoDirect || runtimeJson_.isEmpty()) {
+        return;
+    }
+    const auto alive = alive_;
+    const QString program = d_.xrOverlayProgram ? d_.xrOverlayProgram() : QString();
+    if (!program.isEmpty() && xrOverlayPid_ <= 0) {
+        RecProcSpec spec;
+        spec.name = QStringLiteral("xroverlay");
+        spec.program = program;
+        spec.env << QStringLiteral("XR_RUNTIME_JSON=") + runtimeJson_ << QStringLiteral("PIBRIDGE_BACKEND=monado");
+        spec.logPath = session_->logDir() + QStringLiteral("/xroverlay.log");
+        QString err;
+        const qint64 pid = d_.procs->start(
+            spec,
+            [this, alive](int, bool) {
+                if (*alive) {
+                    xrOverlayPid_ = 0;
+                }
+            },
+            &err);
+        xrOverlayPid_ = pid > 0 ? pid : 0;
+    }
+    // the dashboard over games (the menu button), pibridge-home in its overlay mode
+    const QString dash = d_.dashOverlayProgram ? d_.dashOverlayProgram() : QString();
+    if (!dash.isEmpty() && dashOverlayPid_ <= 0) {
+        RecProcSpec ds;
+        ds.name = QStringLiteral("dashboard-overlay");
+        ds.program = dash;
+        ds.args = {QStringLiteral("--dashboard-overlay")};
+        ds.env << QStringLiteral("XR_RUNTIME_JSON=") + runtimeJson_ << QStringLiteral("PIBRIDGE_BACKEND=monado");
+        ds.logPath = session_->logDir() + QStringLiteral("/dashboard-overlay.log");
+        QString derr;
+        const qint64 dpid = d_.procs->start(
+            ds,
+            [this, alive](int, bool) {
+                if (*alive) {
+                    dashOverlayPid_ = 0;
+                }
+            },
+            &derr);
+        dashOverlayPid_ = dpid > 0 ? dpid : 0;
+    }
+}
+
+void IoSessionControl::stopXrOverlay() {
+    if (xrOverlayPid_ > 0) {
+        d_.procs->signal(xrOverlayPid_, SIGTERM); // that PID only; it ends its overlay session and exits
+        xrOverlayPid_ = 0;
+    }
+    if (dashOverlayPid_ > 0) {
+        d_.procs->signal(dashOverlayPid_, SIGTERM); // it releases the game's inputs before it exits
+        dashOverlayPid_ = 0;
+    }
+}
+
+QString worldReturnPath() {
+    return RecEnv::defaults().runtimeDir + QStringLiteral("/pibridge/world-return");
+}
+
 void IoSessionControl::startHome() {
     homeTried_ = true;
     if (!setup_.io.homeScene || d_.variant != IoVariant::MonadoDirect) {
         return;
     }
-    if (homeProgram_.isEmpty() || runtimeJson_.isEmpty()) {
+    if ((homeProgram_.isEmpty() && setup_.worldGodot.isEmpty()) || runtimeJson_.isEmpty()) {
         return; // home() says why
     }
     RecProcSpec spec;
     spec.name = QStringLiteral("home");
     spec.program = homeProgram_;
+    if (!setup_.worldGodot.isEmpty()) {
+        // PiBridge World (Godot): the world, the dashboard, apps; pibridge-home stays for vr_home=classic
+        spec.program = setup_.worldGodot;
+        spec.args = {QStringLiteral("--path"), setup_.worldDir};
+    }
     spec.env << QStringLiteral("XR_RUNTIME_JSON=") + runtimeJson_;
+    spec.env << QStringLiteral("PIBRIDGE_BACKEND=monado"); // the home is the Monado backend's dashboard
     spec.logPath = session_->logDir() + QStringLiteral("/home.log");
     QString err;
     const auto alive = alive_;
@@ -784,6 +922,7 @@ void IoSessionControl::startHome() {
             homeExited_ = true;
             homeCode_ = code;
             homeCrashed_ = crashed;
+            homeYielded_ = !crashed && code == kHomeYieldCode;
             emit changed();
         },
         &err);
@@ -832,6 +971,9 @@ void IoSessionControl::startRoom() {
     roomTried_ = true;
     if (!setup_.roomSaved || setup_.roommap.isEmpty()) {
         return; // no saved room (or no tool): nothing changes; room() says so
+    }
+    if (setup_.monadoLighthouse) {
+        return; // Monado + Lighthouse: no camera map; the room is the Lighthouse stage, put in place at the start
     }
     RecProcSpec spec;
     spec.name = QStringLiteral("roommap");
@@ -926,6 +1068,11 @@ HomeState IoSessionControl::home() const {
         h.words = QStringLiteral("In the headset (PID %1). A game you start is shown instead.").arg(homePid_);
         return h;
     }
+    if (homeExited_ && homeYielded_) {
+        h.run = HomeRun::Exited;
+        h.words = QStringLiteral("Closed while a game runs, to leave it the memory; back when the game ends.");
+        return h;
+    }
     if (homeExited_) {
         h.run = HomeRun::Exited;
         h.words = !homeError_.isEmpty() ? homeError_
@@ -967,6 +1114,7 @@ void IoSessionControl::demoRun() {
 void IoSessionControl::shutdown() {
     stopRoom(true);
     stopHome(true);
+    stopXrOverlay();
     if (d_.variant == IoVariant::SteamVr && session_ && session_->active()) {
         // PiBridge closes: SteamVR of this start first (TERM, KILL after 5 s), waiting here as the recorder does
         QElapsedTimer t;

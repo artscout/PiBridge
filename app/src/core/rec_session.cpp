@@ -224,6 +224,7 @@ RecProcSpec headtrackSpec(const RecSetup& s, const QString& logDir) {
             args << QStringLiteral("--slam-config") << cfg;
         }
     }
+    env << QStringLiteral("PIBRIDGE_BACKEND=steamvr"); // pibridge-headtrack is the SteamVR backend's tracker
     return {QStringLiteral("headtrack"), s.headtrack.path, args, env, logDir + QStringLiteral("/headtrack.log")};
 }
 
@@ -332,7 +333,8 @@ QString steamvrDriverEnvText(const RecSetup& s) {
 }
 
 RecProcSpec steamvrSpec(const RecSetup& s, const QString& logDir) {
-    return {QStringLiteral("steamvr"), s.steamVrStartup, {}, steamvrEnv(s), logDir + QStringLiteral("/steamvr.log")};
+    return {QStringLiteral("steamvr"), s.steamVrStartup, {}, steamvrEnv(s) << QStringLiteral("PIBRIDGE_BACKEND=steamvr"),
+            logDir + QStringLiteral("/steamvr.log")};
 }
 
 RecProcSpec monadoSpec(const RecSetup& s, const QString& recordDir, const QString& logPath) {
@@ -509,6 +511,21 @@ bool RecSession::start(Mode mode, std::vector<RecStep> steps, qint64 nowMs, cons
         : mode == Mode::LiveSteamVr ? QStringLiteral("inside-out session (SteamVR + Monado), logs in %1").arg(folder_)
                                     : QStringLiteral("recording into %1 (%2)").arg(folder_, record_.mode));
     state_ = RecState::Starting;
+    if (mode == Mode::Live && setup_.monadoLighthouse) {
+        // Monado + the Lighthouse faceplate: no cameras; monado-service alone, on the room's own Lighthouse stage
+        // (the saved one into the live file steamvr_lh reads; none = the Lighthouse origin)
+        QDir().mkpath(QFileInfo(setup_.lhStageFile).absolutePath());
+        QFile::remove(setup_.lhStageFile);
+        if (!setup_.lhStageSaved.isEmpty() && QFile::copy(setup_.lhStageSaved, setup_.lhStageFile)) {
+            log(QStringLiteral("Lighthouse stage of the room: %1").arg(setup_.lhStageSaved));
+        } else {
+            log(QStringLiteral("no Lighthouse stage saved for this room (Monado): the Lighthouse origin"));
+        }
+        phase_ = Phase::Monado;
+        phaseStartMs_ = nowMs;
+        message_ = QStringLiteral("Starting Monado (Lighthouse)...");
+        return startProc(monadoSpec(setup_, QString(), logDir() + QStringLiteral("/monado.log")), nowMs);
+    }
     phase_ = Phase::Broker;
     phaseStartMs_ = nowMs;
     message_ = QStringLiteral("Starting the camera broker...");
@@ -689,9 +706,13 @@ bool RecSession::tick(qint64 nowMs) {
                 dataSeen_ = true;
                 state_ = RecState::Recording;
                 record_.recordStartMs = nowMs;
-                log(QStringLiteral("Monado is up: the inside-out session runs"));
-                message_ = QStringLiteral("Tracking runs. Start an app on the Apps page; Stop ends Monado, the "
-                                          "controller tracker and the camera broker.");
+                log(setup_.monadoLighthouse ? QStringLiteral("Monado is up: the Lighthouse session runs")
+                                            : QStringLiteral("Monado is up: the inside-out session runs"));
+                message_ = setup_.monadoLighthouse
+                               ? QStringLiteral("Tracking runs (Monado, Lighthouse). Start an app on the Apps page; "
+                                                "Stop ends Monado.")
+                               : QStringLiteral("Tracking runs. Start an app on the Apps page; Stop ends Monado, the "
+                                                "controller tracker and the camera broker.");
             }
         } else if (phase_ == Phase::Monado) {
             endFailedMonado();

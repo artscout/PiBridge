@@ -7,6 +7,9 @@
 #ifdef PIBRIDGE_HOME_XR
 #include "xrhome.h"
 #endif
+#ifdef PIBRIDGE_HOME_DASH
+#include "dash_paint.h"
+#endif
 
 #include "pibridge/room/files.h"
 
@@ -20,7 +23,7 @@ namespace {
 
 std::atomic<bool> g_stop{false};
 
-extern "C" void onSignal(int) { g_stop.store(true); }
+void onHomeSignal(int) { g_stop.store(true); }
 
 } // namespace
 
@@ -37,22 +40,34 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (o->selfTest) {
-        return runSelfTest(o->snapshotDir, o->panelPpm);
+        DashPaint paint;
+#ifdef PIBRIDGE_HOME_DASH
+        // the painter only for the pictures: the checks run without Qt
+        if (!o->snapshotDir.empty()) {
+            paint = [](const dash::View& v) {
+                static dash::Painter painter;
+                return painter.picture(v);
+            };
+        }
+#endif
+        return runSelfTest(o->snapshotDir, o->panelPpm, paint);
     }
 #ifdef PIBRIDGE_HOME_XR
-    std::signal(SIGINT, onSignal);
-    std::signal(SIGTERM, onSignal);
+    std::signal(SIGINT, onHomeSignal);
+    std::signal(SIGTERM, onHomeSignal);
     RunOpts r;
     r.roomsDir = o->roomsDir.empty() ? pibridge::room::roomsDir(pibridge::room::Env::fromProcess()) : o->roomsDir;
     r.resDiv = o->resDiv;
     r.camera = o->camera;
+    r.passthroughOverlay = o->passthroughOverlay;
+    r.dashboardOverlay = o->dashboardOverlay;
     if (auto res = runHome(r, g_stop); !res) {
         std::fprintf(stderr, "pibridge-home: %s\n", res.error().c_str());
         return 1;
     }
     return 0;
 #else
-    (void)onSignal;
+    (void)onHomeSignal;
     std::fprintf(stderr, "pibridge-home: built without OpenXR / Vulkan: only --selftest works\n");
     return 2;
 #endif

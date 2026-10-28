@@ -1,0 +1,21 @@
+{
+    "file_format_version": "1.0.0",
+    "api_layer": {
+        "name": "@QV_LAYER_NAME@",
+        "library_path": "@QV_LAYER_LIBRARY_PATH@",
+        "api_version": "1.0",
+        "implementation_version": "@PROJECT_VERSION_MAJOR@",
+        "description": "Quad views and eye-tracked foveated rendering for Vulkan apps (qv-vulkan)",
+        "instance_extensions": [
+            {
+                "name": "XR_VARJO_quad_views",
+                "extension_version": 1
+            },
+            {
+                "name": "XR_VARJO_foveated_rendering",
+                "extension_version": 3
+            }
+        ],
+        "disable_environment": "DISABLE_XR_APILAYER_ARTSCOUT_QUAD_VIEWS_VULKAN"
+    }
+}

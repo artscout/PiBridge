@@ -5,6 +5,8 @@
 // errors start with "pibridge-roommap <cmd>:".
 #include "roommap_cli.h"
 
+#include "pibridge/anchor/backend.h"
+
 #include "pibridge/anchor/rustx.h"
 #include "pibridge/cam/io.h"
 #include "pibridge/cam/rustfmt.h"
@@ -800,9 +802,9 @@ R<void> write_offset(const std::string& dir, const store::RelocResult& res, std:
         std::printf("floor: none stored for this map (omarchyvr-roommap floor detect --save): height left as mapped\n");
     }
     const auto room_setup = setup::RoomSetup::load(dir);
-    // the ring's writer under SteamVR: vrserver itself (driver_monado) or pibridge-headtrack feeding it through
-    // CustomHeadsetOpenVR. Testing vrserver alone sent the PiBridge path down the Monado branch below (seen 2026-10-25).
-    const bool steamvr = floor::is_vrserver(pid) || floor::is_headtrack(pid);
+    // The backend says how the room is committed (anchor/backend.h), never which process writes the ring: guessing it
+    // from the ring's writer sent the SteamVR path down the Monado branch (the zone turned ~90 deg, 2026-10-25).
+    const bool steamvr = pibridge::anchor::backend_from_env() == pibridge::anchor::Backend::SteamVr;
     if (steamvr) {
         // Under SteamVR the offset is ONLY room_from_slam (yaw + horizontal), so the tracker's output is the ROOM frame
         // in every session. The setup's centre / forward / floor live in SteamVR's chaperone (universe 30, written in
@@ -823,13 +825,7 @@ R<void> write_offset(const std::string& dir, const store::RelocResult& res, std:
                         rf::fixed(rf::to_degrees(room_setup->yaw), 1).c_str(), room_setup->describe().c_str());
             al = store::compose(room_setup->setup_from_room(), al);
         }
-        if (const auto sv = floor::steamvr_stage(pid)) {
-            std::printf("SteamVR stage (universe %llu): yaw %s deg, origin (%s, %s, %s) m in raw space\n",
-                        static_cast<unsigned long long>(sv->universe), rf::fixed(rf::to_degrees(sv->yaw), 1).c_str(),
-                        rf::fixed(sv->t[0], 3, true).c_str(), rf::fixed(sv->t[1], 3, true).c_str(),
-                        rf::fixed(sv->t[2], 3, true).c_str());
-            al = store::compose(Alignment{sv->yaw, {sv->t[0], 0.0, sv->t[2]}}, al);
-        }
+        // Monado backend: the offset carries everything (floor, centre, forward); SteamVR's stage is never read.
     }
     std::printf("offset (app_from_slam): %s\n", fmt_align(al).c_str());
     if (g::norm(al.t) > 20.0) {
@@ -1175,7 +1171,8 @@ const char* HELP =
     "pibridge-roommap light      [--source broker|FILE.pxcam] [--seconds 5] [--every N] [--no-stretch] [--darken F [--noise G]]\n"
     "pibridge-roommap cycle      RESULT.toml RESULT.toml [RESULT.toml ...]\n"
     "pibridge-roommap eval       --map-a A --rec-a DIR --map-b B --rec-b DIR [--every N] [--window S]\n"
-    "common: --calib XML (default: the headset calibration)";
+    "common: --calib XML (default: the headset calibration); --backend steamvr|monado (required, or PIBRIDGE_BACKEND):\n"
+    "        each backend has its own rooms (~/.local/share/pibridge/rooms/<backend>) and runtime files";
 
 } // namespace
 
@@ -1185,10 +1182,32 @@ int main(int argc, char** argv) {
     using namespace pibridge::roommap::cli;
     std::setvbuf(stdout, nullptr, _IOLBF, 0); // line by line, as Rust's stdout
     Args v(argv + 1, argv + argc);
+    // --backend steamvr|monado anywhere on the line (else PIBRIDGE_BACKEND): whose rooms, runtime files and commit
+    // this run uses (anchor/backend.h). It goes into the environment, so the library and every child see the same one.
+    for (std::size_t i = 0; i < v.size(); i++) {
+        if (v[i] == "--backend") {
+            if (i + 1 >= v.size() || !pibridge::anchor::parse_backend(v[i + 1])) {
+                std::fprintf(stderr, "pibridge-roommap: --backend takes steamvr or monado\n");
+                return 2;
+            }
+            ::setenv(pibridge::anchor::BACKEND_ENV, v[i + 1].c_str(), 1);
+            v.erase(v.begin() + static_cast<std::ptrdiff_t>(i), v.begin() + static_cast<std::ptrdiff_t>(i) + 2);
+            break;
+        }
+    }
     if (v.empty() || v[0] == "-h" || v[0] == "--help") {
         std::fprintf(stderr, "%s\n", HELP);
         std::fprintf(stderr, "map directory: %s\n", pibridge::roommap::store::base_dir().c_str());
         return 2;
+    }
+    {
+        std::string bad;
+        if (!pibridge::anchor::backend_from_env(&bad)) {
+            std::fprintf(stderr, "pibridge-roommap: %s\n",
+                         bad.empty() ? "which backend? --backend steamvr|monado (or PIBRIDGE_BACKEND): each keeps its own rooms"
+                                     : ("PIBRIDGE_BACKEND=" + bad + " is neither steamvr nor monado").c_str());
+            return 2;
+        }
     }
     const std::string cmd = v[0];
     v.erase(v.begin());

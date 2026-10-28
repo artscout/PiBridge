@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// pibridge-overlay: the PiBridge window as a SteamVR dashboard tab (docs/OVERLAY.md). SteamVR auto-launches it once it
-// is registered; it mirrors the app's window from the shared frame and sends the controller laser back as mouse input.
+// pibridge-overlay: the PiBridge buttons in the SteamVR dashboard bar -- Room Setup, Quick Room Setup, Record Video
+// (docs/OVERLAY.md) -- and the in-game recenter ring. The app starts it; a click writes a request the app acts on.
 #include "options.h"
 #include "overlay.h"
 #include "overlay_core.h"
@@ -35,41 +35,37 @@ int runSelfTest() {
         std::fprintf(stderr, "pibridge-overlay --selftest: %s\n", what);
         bad++;
     };
-    using overlay::Hit;
-    // the panel draws at its fixed size (a few hundred px, not 2048)
-    if (overlay::drawPanel(false, Hit{}).size() != static_cast<std::size_t>(overlay::kPanelW) * overlay::kPanelH * 4U) {
-        fail("drawPanel size wrong");
+    using overlay::Tab;
+    using overlay::TabState;
+    const TabState idle{};
+    // a page draws at its fixed size (a few hundred px, not 2048), an icon at its own
+    if (overlay::drawPage(Tab::Room, idle, false).size() != static_cast<std::size_t>(overlay::kPanelW) * overlay::kPanelH * 4U ||
+        overlay::drawIcon(Tab::Record, idle).size() != static_cast<std::size_t>(overlay::kIconSize) * overlay::kIconSize * 4U) {
+        fail("drawPage / drawIcon size wrong");
     }
     if (!(overlay::kPanelW <= 1024 && overlay::kPanelH <= 1024)) {
         fail("panel is too big (must be small, not a full window)");
     }
-    // hover lights a target; the recording state (START vs STOP) changes the pixels
-    if (overlay::drawPanel(false, Hit{Hit::Kind::Room}) == overlay::drawPanel(false, Hit{})) {
-        fail("hover does not change the panel");
+    // hover lights the button; the recording state changes the record page and its bar icon
+    if (overlay::drawPage(Tab::Room, idle, true) == overlay::drawPage(Tab::Room, idle, false)) {
+        fail("hover does not change the page");
     }
-    if (overlay::drawPanel(true, Hit{}) == overlay::drawPanel(false, Hit{})) {
-        fail("recording label does not change the panel");
+    TabState rec;
+    rec.recording = true;
+    if (overlay::drawPage(Tab::Record, rec, false) == overlay::drawPage(Tab::Record, idle, false) ||
+        overlay::drawIcon(Tab::Record, rec) == overlay::drawIcon(Tab::Record, idle)) {
+        fail("recording state does not change the record page / icon");
     }
-    // the laser hit test: GL space is bottom-left, so a point high on the screen (large y) hits the top row. Centres of
-    // the three wide buttons.
+    // the laser hit test: GL space is bottom-left; the big button's centre, and a corner off it
     const float ph = static_cast<float>(overlay::kPanelH);
-    if (!(overlay::hitTest(260.0F, ph - 92.0F) == Hit{Hit::Kind::Record})) {
-        fail("hitTest RECORD wrong");
+    if (!overlay::hitButton(260.0F, ph - 102.0F) || overlay::hitButton(5.0F, 5.0F)) {
+        fail("hitButton wrong");
     }
-    if (!(overlay::hitTest(260.0F, ph - 226.0F) == Hit{Hit::Kind::Room})) {
-        fail("hitTest ROOM SETUP wrong");
-    }
-    if (!(overlay::hitTest(260.0F, ph - 304.0F) == Hit{Hit::Kind::QuickRoom})) {
-        fail("hitTest QUICK ROOM SETUP wrong");
-    }
-    if (!(overlay::hitTest(5.0F, 5.0F) == Hit{})) {
-        fail("hitTest off a target wrong");
-    }
-    if (overlay::requestFor(Hit{Hit::Kind::Room}, false) != "room-setup" ||
-        overlay::requestFor(Hit{Hit::Kind::QuickRoom}, false) != "quick-room-setup" ||
-        overlay::requestFor(Hit{Hit::Kind::Record}, false) != "record-start" ||
-        overlay::requestFor(Hit{Hit::Kind::Record}, true) != "record-stop" ||
-        !overlay::requestFor(Hit{}, false).empty()) {
+    TabState busy;
+    busy.roomSetupRunning = true;
+    if (overlay::requestFor(Tab::Room, idle) != "room-setup" || overlay::requestFor(Tab::QuickRoom, idle) != "quick-room-setup" ||
+        overlay::requestFor(Tab::Record, idle) != "record-start" || overlay::requestFor(Tab::Record, rec) != "record-stop" ||
+        !overlay::requestFor(Tab::Room, busy).empty() || !overlay::requestFor(Tab::QuickRoom, busy).empty()) {
         fail("requestFor wrong");
     }
     const std::string m = overlay::manifestJson("pibridge.dashboard", "/bin/x", "/ico.png", "PiBridge");

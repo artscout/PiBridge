@@ -19,6 +19,7 @@
 // only these, so a PIBRIDGE_ name could point the tools at another file than the one Monado reads.
 #pragma once
 
+#include "pibridge/anchor/backend.h"
 #include "pibridge/cam/geom.h"
 #include "pibridge/cam/io.h"
 
@@ -46,9 +47,11 @@ inline constexpr std::size_t RING_SIZE = RING_HDR + RING_SLOTS * RING_SLOT;
 
 /// $XDG_RUNTIME_DIR (set, even when empty: Rust's `var_os`), else /tmp.
 std::string runtime_dir();
-/// The head ring: PIMAX_ANCHOR_HEAD_FILE (when not empty), else <runtime>/pimax-anchor.head.
+/// The head ring: PIMAX_ANCHOR_HEAD_FILE (when not empty), else <runtime>/pibridge/<PIBRIDGE_BACKEND>/anchor.head
+/// (backend.h), else (no backend: old tools and tests) <runtime>/pimax-anchor.head.
 std::string ring_path();
-/// The offset file: PIMAX_ANCHOR_FILE (when not empty), else <runtime>/pimax-anchor.offset.
+/// The offset file: PIMAX_ANCHOR_FILE (when not empty), else <runtime>/pibridge/<PIBRIDGE_BACKEND>/anchor.offset,
+/// else <runtime>/pimax-anchor.offset.
 std::string offset_path();
 
 /// (t, quaternion x y z w) of a pose (`geom::quat_from_mat`).

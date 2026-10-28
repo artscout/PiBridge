@@ -18,7 +18,7 @@ add_library(pibridge_app_core STATIC
     src/core/rec_setup.cpp src/core/rec_setup.h src/core/rec_steps.cpp src/core/rec_steps.h
     src/core/rec_check.cpp src/core/rec_check.h src/core/rec_session.cpp src/core/rec_session.h
     src/core/roomsetup.cpp src/core/roomsetup.h src/core/inside_out.cpp src/core/inside_out.h src/core/io_session.cpp src/core/io_session.h
-    src/core/monado_build.cpp src/core/monado_build.h src/core/anchor_offset.cpp src/core/anchor_offset.h src/core/roommap_link.cpp src/core/roommap_link.h src/core/steamvr_drivers.cpp src/core/steamvr_drivers.h
+    src/core/monado_build.cpp src/core/monado_build.h src/core/anchor_offset.cpp src/core/anchor_offset.h src/core/roommap_link.cpp src/core/roommap_link.h src/core/vr_backend.cpp src/core/vr_backend.h src/core/openxr_runtime.cpp src/core/openxr_runtime.h src/core/steamvr_drivers.cpp src/core/steamvr_drivers.h
     src/core/device_info.cpp src/core/device_info.h src/core/sound_test.cpp src/core/sound_test.h
     src/core/vr_backgrounds.cpp src/core/vr_backgrounds.h src/core/vr_panel.cpp src/core/vr_panel.h
     src/core/overlay_control.cpp src/core/overlay_control.h
@@ -43,6 +43,7 @@ add_executable(pibridge-app
     src/pages/logs.cpp src/pages/logs.h src/pages/about.cpp src/pages/about.h
     src/pages/apps.cpp src/pages/apps.h src/pages/tracking.cpp src/pages/tracking.h
     src/pages/room.cpp src/pages/room.h src/pages/help_window.cpp src/pages/help_window.h
+    src/pages/vrhome.cpp src/pages/vrhome.h
     src/pages/sound_tests.cpp src/pages/sound_tests.h
     src/pages/display.cpp src/pages/display.h src/pages/recording.cpp src/pages/recording.h
     src/pages/record_card.cpp src/pages/record_card.h

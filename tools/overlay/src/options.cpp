@@ -53,11 +53,12 @@ std::expected<Options, std::string> parseArgs(const std::vector<std::string>& ar
 }
 
 std::string usage() {
-    return "pibridge-overlay: a small SteamVR dashboard launcher. It draws a little panel with two buttons (ROOM SETUP\n"
-           "and QUICK ROOM SETUP); the controller laser clicks them, and on a click it writes a request the PiBridge app\n"
-           "reads and launches the setup from. A leaf: minimal OpenVR, no app-window embed, never takes a VR session down.\n"
+    return "pibridge-overlay: three buttons in the SteamVR dashboard bar -- Room Setup, Quick Room Setup, Record Video\n"
+           "(three small dashboard overlays, each opening one big button). The controller laser clicks it, and on a click\n"
+           "it writes a request the PiBridge app reads and acts on. The record icon and button follow the real recording\n"
+           "state. A leaf: minimal OpenVR, no app-window embed, never takes a VR session down.\n"
            "\n"
-           "  pibridge-overlay [--width M] [--icon PATH]      run the dashboard launcher (needs SteamVR)\n"
+           "  pibridge-overlay [--width M]                    run the dashboard buttons (needs SteamVR)\n"
            "  pibridge-overlay --register [--manifest PATH] [--binary PATH] [--icon PATH]\n"
            "                                                  register with SteamVR and turn on auto-launch (SteamVR must run)\n"
            "  pibridge-overlay --unregister [--manifest PATH] remove the registration and auto-launch\n"

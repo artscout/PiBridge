@@ -1,7 +1,13 @@
 # Roadmap
 
 Features planned after the first release (the first version in git, once inside-out tracking works). Not ordered
-by priority yet. Where omarchyvr already has a version, look at it first (it may be ported to C++ like the rest).
+by priority yet.
+
+Done since (2026-10-26): passthrough (1), video recording under SteamVR and Monado (2), the VR home as PiBridge World
+(3), the display settings, quad views, IPD and refresh rate (4), pairing and the vibration test (5), the sound and
+microphone tests (6), backgrounds (7), serial numbers (8). Also the Monado backend (docs/monado.md). Next for the
+Monado backend: packaging the fork, OpenVR games on Monado (an OpenVR-to-OpenXR layer), and a live check of every
+part that is tested with fakes only. Where omarchyvr already has a version, look at it first (it may be ported to C++ like the rest).
 
 1. **Passthrough**: the headset cameras' view in the headset.
 2. **Video recording of the OpenXR scene**: record what the headset shows, to a video file.

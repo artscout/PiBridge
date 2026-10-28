@@ -2,6 +2,11 @@
 // Ported from omarchyvr omarchyvr-roommap/src/store.rs (MIT OR Apache-2.0). See store.h.
 #include "pibridge/roommap/store.h"
 
+#include "pibridge/anchor/backend.h"
+
+#include <cstdio>
+#include <filesystem>
+
 #include "pibridge/anchor/rustx.h"
 #include "pibridge/anchor/world.h"
 #include "pibridge/cam/io.h"
@@ -18,6 +23,11 @@ namespace g = cam::geom;
 namespace rf = cam::rfmt;
 namespace rs = anchor::rs;
 
+std::string backend_rooms_dir(anchor::Backend b) {
+    const std::string home = cam::env_os("HOME").value_or(".");
+    return cam::path_join(cam::path_join(home, ".local/share/pibridge/rooms"), std::string(anchor::backend_name(b)));
+}
+
 std::string base_dir() {
     for (const char* n : {"PIBRIDGE_ROOMMAP_DIR", "PIMAX_ROOMMAP_DIR"}) {
         if (auto v = cam::env_os(n); v && !v->empty()) {
@@ -25,6 +35,20 @@ std::string base_dir() {
         }
     }
     const std::string home = cam::env_os("HOME").value_or(".");
+    if (const auto b = anchor::backend_from_env()) {
+        // Each backend has its own rooms. The rooms saved before the split were all SteamVR's (2.0.1): they are copied
+        // there once, the old folder stays as it was (a backup).
+        const std::string dir = backend_rooms_dir(*b);
+        const std::string old = cam::path_join(home, ".local/share/pibridge/roommap");
+        if (*b == anchor::Backend::SteamVr && !cam::is_dir(dir) && cam::is_dir(old)) {
+            std::error_code ec;
+            std::filesystem::create_directories(dir, ec);
+            std::filesystem::copy(old, dir, std::filesystem::copy_options::recursive, ec);
+            std::fprintf(stderr, "rooms: the rooms of %s copied to %s (SteamVR backend)%s\n", old.c_str(), dir.c_str(),
+                         ec ? (": " + ec.message()).c_str() : "");
+        }
+        return dir;
+    }
     const std::string pibridge = cam::path_join(home, ".local/share/pibridge/roommap");
     const std::string omarchyvr = cam::path_join(home, ".local/share/omarchyvr/roommap");
     if (!cam::is_dir(pibridge) && cam::is_dir(omarchyvr)) {

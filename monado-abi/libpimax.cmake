@@ -93,7 +93,7 @@ set_tests_properties(monado_abi_pimax_capi PROPERTIES
 
 # The Monado Pimax driver's objects (read only): every ABI function they import is in the archive.
 set(PIBRIDGE_MONADO_DRIVER_BUILD_DIR "${PROJECT_SOURCE_DIR}/../pibridge-monado-build" CACHE PATH
-    "A built Monado tree (third_party/monado) with the Pimax driver (read only; the import check is skipped without it)")
+    "A built Monado tree (PIBRIDGE_MONADO_SRC_DIR) with the Pimax driver (read only; the import check is skipped without it)")
 add_test(NAME monado_abi_driver_imports COMMAND ${lp_d}/check_driver_imports.sh ${PIBRIDGE_MONADO_DRIVER_BUILD_DIR}
          ${CMAKE_CURRENT_BINARY_DIR}/libpibridge_pimax.a ${lp_inc})
 set_tests_properties(monado_abi_driver_imports PROPERTIES SKIP_RETURN_CODE 77)

@@ -222,7 +222,7 @@ TEST(status_headset_chip) {
     k.state = QStringLiteral("idle");
     k.headsetPresent = true;
     CHECK(headsetChip(k).text == QStringLiteral("SCREEN OFF") && headsetChip(k).kind == ChipKind::Warn);
-    CHECK(headsetHint(k, false) == QStringLiteral("Start SteamVR to wake the headset."));
+    CHECK(headsetHint(k, false) == QStringLiteral("Press START VR on the Dashboard to wake the headset."));
     k.state = QStringLiteral("active");
     k.panelOn = true;
     CHECK(headsetChip(k).text == QStringLiteral("SCREEN ON") && headsetChip(k).kind == ChipKind::Info);
@@ -596,6 +596,18 @@ TEST(steamvr_fake_devices_map_to_the_dashboard) {
     CHECK(fakeState(false).steamvr.state == VrLinkState::NotRunning && fakeState(false).steamvr.devices.empty());
 }
 
+TEST(status_bar_names_the_running_vr_runtime) {
+    AppState s;
+    CHECK(vrRuntimeWords(s) == QStringLiteral("VR not running"));
+    s.monadoRunning = true;
+    CHECK(vrRuntimeWords(s) == QStringLiteral("Monado running"));
+    s.steamvrRunning = true;
+    CHECK(vrRuntimeWords(s) == QStringLiteral("SteamVR and Monado running"));
+    s.monadoRunning = false;
+    CHECK(vrRuntimeWords(s) == QStringLiteral("SteamVR running"));
+    CHECK(vrRuntimeWords(fakeState(false)) == QStringLiteral("VR not running"));
+}
+
 TEST(steamvr_roles_chips_battery_and_stations) {
     VrDevice left = device(1, VrClass::Controller, VrRole::Left, false, vrtrack::Uninitialized);
     left.model = QStringLiteral("Custom Ctrl");
@@ -637,7 +649,7 @@ TEST(steamvr_roles_chips_battery_and_stations) {
 
     // without SteamVR: plain words, nothing listed
     const ControllersView off = controllersView(s, false);
-    CHECK(off.header.text == QStringLiteral("STEAMVR OFF") && off.message == QStringLiteral("Start SteamVR to see the controllers."));
+    CHECK(off.header.text == QStringLiteral("STEAMVR OFF") && off.message == QStringLiteral("The controllers show while VR runs (START VR on the Dashboard)."));
     CHECK(!off.left.present && off.extra.isEmpty());
     CHECK(trackingView(s, false).stations.empty() && trackingView(s, false).summary.isEmpty());
     SteamVrStatus ni;

@@ -228,6 +228,38 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
     }
     s.headsetPresent = pimaxHeadsetPresent(env.usbRoot);
     s.io = ioSettings(conf);
+    s.backend = vrBackend(conf);
+    if (conf.value("vr_home", QString()).trimmed() != QLatin1String("classic")) {
+        QString godot = conf.value("rec_godot", QString()).trimmed();
+        if (godot.isEmpty()) {
+            const QDir gd(h + QStringLiteral("/gamedev/godot"));
+            const QStringList found =
+                gd.entryList({QStringLiteral("Godot_v4*_linux.x86_64")}, QDir::Files | QDir::Executable, QDir::Name);
+            if (!found.isEmpty()) {
+                godot = gd.filePath(found.last());
+            } else if (env.which) {
+                godot = env.which(QStringLiteral("godot4"));
+                if (godot.isEmpty()) {
+                    godot = env.which(QStringLiteral("godot"));
+                }
+            }
+        }
+        for (const QString& d : {data + QStringLiteral("/world"), h + QStringLiteral("/gamedev/pibridge/world")}) {
+            if (QFileInfo::exists(d + QStringLiteral("/project.godot"))) {
+                s.worldDir = d;
+                break;
+            }
+        }
+        if (!godot.isEmpty() && QFileInfo(godot).isExecutable() && !s.worldDir.isEmpty()) {
+            s.worldGodot = godot;
+        } else {
+            s.worldDir.clear();
+        }
+    }
+    s.monadoLighthouse = s.backend == VrBackend::Monado && s.io.mode == TrackingMode::Lighthouse;
+    s.lhStageFile = vrBackendRuntimeDir(VrBackend::Monado) + QStringLiteral("/lh-stage");
+    s.lhStageSaved = vrBackendRoomsDir(VrBackend::Monado, h) + QLatin1Char('/') +
+                     roomName(conf) + QStringLiteral("/lh-stage");
     s.refreshHz = conf.refreshHz();
     {
         bool ok = false;
@@ -435,7 +467,9 @@ RecReadiness recReadiness(const RecSetup& s, const RecSystem& sys, RecUse use) {
     if (!s.headsetPresent) {
         r.blocking << QStringLiteral("No headset found. Connect the headset and switch it on.");
     }
-    if (s.camDevice.isEmpty()) {
+    // Monado + the Lighthouse faceplate uses no tracking cameras (and so no calibration or camera tools)
+    const bool cams = !(use == RecUse::Monado && s.monadoLighthouse);
+    if (cams && s.camDevice.isEmpty()) {
         r.blocking << (s.camDeviceFromConf
                            ? QStringLiteral("The camera device in rec_cam_device= (pibridge.conf) does not exist.")
                            : QStringLiteral("The headset's tracking cameras were not found (no PimaxSensor video "
@@ -454,6 +488,9 @@ RecReadiness recReadiness(const RecSetup& s, const RecSystem& sys, RecUse use) {
                                          : QStringLiteral("%1 not found. Set %2= in pibridge.conf.").arg(p->label, p->key);
         if (p == &s.monado && use == RecUse::SteamVr && s.io.headtrack) {
             continue; // pibridge-headtrack: no Monado
+        }
+        if (!cams && p != &s.monado && p != &s.lens) {
+            continue; // Monado + Lighthouse: monado-service and the lens profile only
         }
         if (p == &s.winbridge || p == &s.vitBridge) {
             // only the Pimax engine needs them

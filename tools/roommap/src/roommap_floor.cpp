@@ -3,6 +3,7 @@
 // drift, touch, set, show, follow, preview) and the floor of a new map.
 #include "roommap_cli.h"
 
+#include "pibridge/anchor/backend.h"
 #include "pibridge/anchor/rustx.h"
 #include "pibridge/cam/io.h"
 #include "pibridge/cam/rustfmt.h"
@@ -672,8 +673,9 @@ R<std::pair<Alignment, std::optional<double>>> reloc_offset_hook(const std::stri
     // setup). The anchor offset must not move the world vertically from floor.toml's (raw room-frame) floor_y: that
     // shift (tens of metres) is double-counted with SteamVR's standing frame and throws the floor into the ceiling, or
     // blows the offset past the 20 m guard. Keep only the relocalisation's own alignment here; write_offset zeroes the
-    // vertical for vrserver.
-    if (floor::is_vrserver(pid) || floor::is_headtrack(pid)) {
+    // vertical for the SteamVR backend (anchor/backend.h: the backend decides, not the ring's writer).
+    (void)pid;
+    if (anchor::backend_from_env() == anchor::Backend::SteamVr) {
         return std::pair{a, std::optional<double>{}};
     }
     if (auto f = floor::StoredFloor::load(dir)) {

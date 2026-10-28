@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Which OpenXR runtime the Apps page starts own apps on, and when that runtime is ready.
 //   SteamVR (Lighthouse mode, and the inside-out mode's SteamVR + Monado): the system's active runtime
-//            (~/.config/openxr/1/active_runtime.json points at SteamVR and is never changed by PiBridge); the launcher
+//            (~/.config/openxr/1/active_runtime.json; the Dashboard's Runtime switch, core/openxr_runtime.h); the launcher
 //            waits for "SteamVR fully ready" (core/steamvr_ready.h), as before.
 //   Monado   (while "Monado directly" runs, Development page): that session's monado-service is the runtime.
 //            An own app gets XR_RUNTIME_JSON=<that Monado build's openxr_monado-dev.json> (only in its own
-//            environment; the system's active runtime stays SteamVR) and starts once the session runs (Monado stayed
+//            environment, whatever the system's active runtime is) and starts once the session runs (Monado stayed
 //            up, its IPC socket $XDG_RUNTIME_DIR/monado_comp_ipc exists) and the home scene has its session. SteamVR
 //            is never started in this mode. Steam games cannot run here: they need an OpenVR-to-OpenXR layer
 //            (xrizer / OpenComposite), which is not installed, so their Play is off with the reason.

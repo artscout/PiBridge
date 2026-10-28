@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <csignal>
 
+#include "core/openxr_runtime.h"
+#include "core/vr_backend.h"
 #include "core/apps_runtime.h"
 #include "core/conf.h"
 #include "core/inside_out.h"
@@ -96,7 +98,7 @@ TEST(defaults_are_the_recommendations) {
     CHECK(s.stillHold && s.headTilt && s.fuseAuto && s.smooth);
     CHECK(!s.anchor && s.anchorGlide);
     CHECK(s.camAe == CamAe::On && s.camAeCrystal && s.camAeNewLaw);
-    CHECK(s.ctrlTrack && s.ctrlAngle == 30 && s.ctrlLostS == 4 && s.ctrlSteady);
+    CHECK(s.ctrlTrack && s.ctrlAngle == 52 && s.ctrlLostS == 4 && s.ctrlSteady);
     // "Reset to recommended" writes every io_* key but not the mode or how apps run
     const auto lines = ioRecommendedLines();
     CHECK(lines.size() == ioConfLines(s).size() - 3); // not the mode, apps or the home scene
@@ -158,7 +160,7 @@ TEST(env_of_the_recommended_settings) {
                                              QStringLiteral("PIMAX_BIAS_TIMEOUT_MS=200")}));
     for (const char* want : {"PIMAX_LENS_CONF=/fake/lens/crystal.conf", "PIMAX_CAM_SOURCE=broker", "PIMAX_SLAM=1",
                              "PIMAX_CAM_AE=1", "PIMAX_CAM_AE_MODEL=crystal-super", "PIMAX_CTRL_TRACK=1",
-                             "PIMAX_CTRL_ANGLE=30", "VIT_SYSTEM_LIBRARY_PATH=/fake/basalt/libbasalt.so",
+                             "PIMAX_CTRL_ANGLE=52", "PIMAX_CTRL_HANDS=0", "VIT_SYSTEM_LIBRARY_PATH=/fake/basalt/libbasalt.so",
                              "SLAM_CONFIG=/c/slam/pimax-basalt.toml", "PIMAX_SLAM_DRIFT_HOLD=0"}) {
         CHECK(has(e.driver, want));
     }
@@ -208,11 +210,12 @@ TEST(env_follows_every_switch) {
     io.ctrlAngle = -20;
     io.ctrlLostS = 8;
     io.ctrlSteady = false;
+    io.ctrlHands = true;
     const IoSessionEnv e = buildIoEnv(io, s, 72, QString(), QStringLiteral("/rec"));
     for (const char* want : {"PIMAX_FPS=72", "PIMAX_SLAM_STILL=0", "PIMAX_HEAD_TILT=0", "PIMAX_FUSE_AUTO=0",
                              "PIMAX_SLAM_SMOOTH=0", "PIMAX_ANCHOR=1", "PIMAX_ANCHOR_GLIDE=0", "PIMAX_CAM_AE=dry",
                              "PIMAX_CAM_AE_LAW=old", "PIMAX_CTRL_ANGLE=-20", "PIMAX_CTRL_TRACK_LOST_S=8",
-                             "PIMAX_CTRL_TRACK_HYST=0", "PIMAX_SLAM_RECORD=/rec"}) {
+                             "PIMAX_CTRL_TRACK_HYST=0", "PIMAX_CTRL_HANDS=1", "PIMAX_SLAM_RECORD=/rec"}) {
         CHECK(has(e.monado, want));
     }
     CHECK(!hasPrefix(e.monado, "PIMAX_SLAM_DRIFT_HOLD") && !hasPrefix(e.monado, "PIMAX_CAM_AE_MODEL"));
@@ -568,6 +571,7 @@ struct LiveRig {
     QString runtimeJson = QStringLiteral("/m/openxr_monado-dev.json");
     bool socket = true;
     QString homeStatus;
+    bool worldReturn = false; // the dashboard overlay's request (consumed when taken)
     QByteArray roomStatus; // pibridge-roommap's status file
 
     explicit LiveRig(bool insideOut = true, bool monado = true, bool withHome = false) {
@@ -599,6 +603,11 @@ struct LiveRig {
         d.runtimeJson = [this](const QString&) { return runtimeJson; };
         d.monadoSocket = [this] { return socket; };
         d.homeStatus = [this](qint64) { return homeStatus; };
+        d.takeWorldReturn = [this] {
+            const bool was = worldReturn;
+            worldReturn = false;
+            return was;
+        };
         d.roomStatus = [this] { return roomStatus; };
         d.unixNow = [this] { return 1000000 + now / 1000; };
         c = std::make_unique<IoSessionControl>(std::move(d));
@@ -746,7 +755,8 @@ TEST(home_scene_starts_once_monado_runs_and_is_stopped_first) {
     CHECK(r.names().back() == QStringLiteral("home"));
     const RecProcSpec& h = r.procs->started.back();
     CHECK(h.program == QStringLiteral("/x/pibridge-home"));
-    CHECK(h.env == QStringList{QStringLiteral("XR_RUNTIME_JSON=/m/openxr_monado-dev.json")});
+    CHECK((h.env == QStringList{QStringLiteral("XR_RUNTIME_JSON=/m/openxr_monado-dev.json"),
+                                QStringLiteral("PIBRIDGE_BACKEND=monado")}));
     CHECK(h.logPath == r.c->session()->logDir() + QStringLiteral("/home.log"));
     const qint64 home = r.procs->pidOf(QStringLiteral("home"));
     CHECK(r.c->home().run == HomeRun::Running && r.c->home().pid == home);
@@ -771,6 +781,34 @@ TEST(home_scene_starts_once_monado_runs_and_is_stopped_first) {
     CHECK(r.procs->signalled[1].pid == monado);
     CHECK(r.c->home().run == HomeRun::Exited);
     CHECK(r.c->monadoReadiness().step == MonadoStep::Failed);
+}
+
+TEST(world_closed_for_a_game_comes_back_when_the_overlay_asks) {
+    // PiBridge World gives a game its memory (exit kHomeYieldCode); the dashboard overlay asks for it back once no
+    // app is left, and only then is it started again (a crash or a plain exit never restarts it)
+    LiveRig r(true, true, true);
+    r.worldReturn = true; // a stale request from an earlier session is dropped at the start
+    CHECK(r.c->start());
+    CHECK(!r.worldReturn);
+    r.at(600);
+    r.at(600 + kIoSettleMs);
+    const qint64 home = r.procs->pidOf(QStringLiteral("home"));
+    CHECK(home > 0);
+    r.procs->exit(home, kHomeYieldCode);
+    r.at(10000);
+    CHECK(r.names().count(QStringLiteral("home")) == 1);
+    CHECK(r.c->home().run == HomeRun::Exited);
+    CHECK(r.c->home().words.startsWith(QStringLiteral("Closed while a game runs")));
+    r.worldReturn = true;
+    r.at(11000);
+    CHECK(r.names().count(QStringLiteral("home")) == 2);
+    CHECK(r.c->home().run == HomeRun::Running);
+    CHECK(!r.worldReturn);
+    // a plain exit: a request does not bring it back
+    r.procs->exit(r.procs->pidOf(QStringLiteral("home")), 0);
+    r.worldReturn = true;
+    r.at(12000);
+    CHECK(r.names().count(QStringLiteral("home")) == 2);
 }
 
 TEST(home_scene_is_never_started_twice_in_a_session) {
@@ -856,7 +894,8 @@ TEST(room_map_auto_starts_with_a_saved_room_and_stops_by_pid) {
     const RecProcSpec& m = r.procs->started.back();
     CHECK(m.program == QStringLiteral("/fake/bin/pibridge-roommap"));
     CHECK((m.args == QStringList{QStringLiteral("auto"), QStringLiteral("--name"), QStringLiteral("home"),
-                                 QStringLiteral("--wait"), QStringLiteral("120")}));
+                                 QStringLiteral("--wait"), QStringLiteral("120"), QStringLiteral("--backend"),
+                                 vrBackendName(currentVrBackend())}));
     CHECK(m.logPath == r.c->session()->logDir() + QStringLiteral("/roommap.log"));
     // the monado env has the anchor hook
     CHECK(has(r.procs->started[2].env, "PIMAX_ANCHOR=1"));
@@ -978,9 +1017,9 @@ TEST(room_map_words_files_and_gates) {
     qunsetenv("PIBRIDGE_ROOMMAP_DIR");
     CHECK((roomSetupFastArgs(QStringLiteral("home")) ==
            QStringList{QStringLiteral("setup"), QStringLiteral("fast"), QStringLiteral("--name"), QStringLiteral("home"),
-                       QStringLiteral("--no-hud")}));
+                       QStringLiteral("--no-hud"), QStringLiteral("--backend"), vrBackendName(currentVrBackend())}));
     // SETUP PLAYSPACE with a body height: the eye height is passed so the floor comes from the head, not the points
-    CHECK((roomSetupFastArgs(QStringLiteral("home"), 1.68).mid(5) ==
+    CHECK((roomSetupFastArgs(QStringLiteral("home"), 1.68).mid(7) ==
            QStringList{QStringLiteral("--eye-height"), QStringLiteral("1.680")}));
     // Map the room: inside-out, the tool, a live session with fresh head poses, not running already
     RingFeed live{4242, true, 0.1};
@@ -994,7 +1033,8 @@ TEST(room_map_words_files_and_gates) {
     // ... in the headset: pibridge-roomsetup --map runs pibridge-roommap itself
     CHECK((roomMapHeadsetArgs(QStringLiteral("home"), QStringLiteral("/t/pibridge-roommap"), QStringLiteral("/run/r.head")) ==
            QStringList{QStringLiteral("--map"), QStringLiteral("--room"), QStringLiteral("home"), QStringLiteral("--roommap"),
-                       QStringLiteral("/t/pibridge-roommap"), QStringLiteral("--ring"), QStringLiteral("/run/r.head")}));
+                       QStringLiteral("/t/pibridge-roommap"), QStringLiteral("--ring"), QStringLiteral("/run/r.head"),
+                       QStringLiteral("--backend"), vrBackendName(currentVrBackend())}));
     CHECK(mapRoomHeadsetGate(true, QStringLiteral("/t/pibridge-roommap"), QStringLiteral("/t/pibridge-roomsetup"), live, false).ok);
     CHECK(mapRoomHeadsetGate(true, QStringLiteral("/t/pibridge-roommap"), QString(), live, false).why.contains(QStringLiteral("pibridge-roomsetup")));
     CHECK(mapRoomHeadsetGate(true, QString(), QStringLiteral("/t/pibridge-roomsetup"), live, false).why.contains(QStringLiteral("pibridge-roommap")));
@@ -1005,11 +1045,12 @@ TEST(room_map_words_files_and_gates) {
     CHECK(*eyeHeightOf(QStringLiteral("1.78"), QStringLiteral("1,68 m")) == 1.68);
     CHECK(!eyeHeightOf(QStringLiteral("178"), QString()));            // centimetres: not taken
     CHECK(*eyeHeightOf(QStringLiteral("1.78"), QStringLiteral("x")) == *derivedEyeHeight(QStringLiteral("1.78")));
-    CHECK((roomMapHeadsetArgs(QStringLiteral("home"), QStringLiteral("/t/rm"), QStringLiteral("/r"), 1.68).mid(7) ==
+    CHECK((roomMapHeadsetArgs(QStringLiteral("home"), QStringLiteral("/t/rm"), QStringLiteral("/r"), 1.68).mid(9) ==
            QStringList{QStringLiteral("--eye-height"), QStringLiteral("1.680")}));
     CHECK((floorHeightArgs(QStringLiteral("home"), 1.68, QStringLiteral("/t/rm"), QStringLiteral("/r")) ==
            QStringList{QStringLiteral("--floor-height"), QStringLiteral("--room"), QStringLiteral("home"), QStringLiteral("--eye-height"),
-                       QStringLiteral("1.680"), QStringLiteral("--roommap"), QStringLiteral("/t/rm"), QStringLiteral("--ring"), QStringLiteral("/r")}));
+                       QStringLiteral("1.680"), QStringLiteral("--roommap"), QStringLiteral("/t/rm"), QStringLiteral("--ring"), QStringLiteral("/r"),
+                       QStringLiteral("--backend"), vrBackendName(currentVrBackend())}));
     const QString rm = QStringLiteral("/t/pibridge-roommap"), rs = QStringLiteral("/t/pibridge-roomsetup");
     CHECK(floorHeightGate(true, rm, rs, live, 1.68, true, false).ok);
     CHECK(floorHeightGate(true, rm, rs, live, std::nullopt, true, false).why.contains(QStringLiteral("body height")));
@@ -1097,6 +1138,40 @@ TEST(recording_keeps_the_trackers_calibration) {
     CHECK(readAll(f + QStringLiteral("/pimax-basalt-calib.json")).contains("0.34"));
     CHECK(readAll(f + QStringLiteral("/pimax-basalt-calib.driver.json")) == "driver calibration");
     CHECK(QFileInfo::exists(f + QStringLiteral("/pimax-basalt-config.json")));
+}
+
+TEST(active_openxr_runtime_switch) {
+    QTemporaryDir d;
+    const QString dir = d.path();
+    const auto write = [](const QString& p, const QByteArray& b) {
+        QDir().mkpath(QFileInfo(p).absolutePath());
+        QFile f(p);
+        f.open(QIODevice::WriteOnly);
+        f.write(b);
+    };
+    const QString svr = dir + QStringLiteral("/SteamVR/steamxr_linux64.json");
+    write(svr, R"({"file_format_version":"1.0.0","runtime":{"name":"SteamVR","VALVE_runtime_is_steamvr":true,"library_path":"bin/linux64/vrclient.so"}})");
+    write(dir + QStringLiteral("/SteamVR/bin/vrstartup.sh"), "#!/bin/sh\n");
+    const QString mnd = dir + QStringLiteral("/build/openxr_monado-dev.json");
+    write(mnd, R"({"file_format_version":"1.0.0","runtime":{"name":"Monado","library_path":"/b/libopenxr_monado.so"}})");
+    const QString active = dir + QStringLiteral("/cfg/openxr/1/active_runtime.json");
+    CHECK(activeRuntimeOf(active) == OpenXrRuntime::None);
+    CHECK(steamVrRuntimeJsonFor(dir + QStringLiteral("/SteamVR/bin/vrstartup.sh")) == svr);
+    CHECK(steamVrRuntimeJsonFor(QString()).isEmpty());
+    CHECK(setActiveRuntime(active, mnd).has_value());
+    CHECK(QFileInfo(active).isSymLink() && QFileInfo(active).symLinkTarget() == mnd);
+    CHECK(activeRuntimeOf(active) == OpenXrRuntime::Monado);
+    CHECK(setActiveRuntime(active, svr).has_value());
+    CHECK(activeRuntimeOf(active) == OpenXrRuntime::SteamVr);
+    CHECK(!setActiveRuntime(active, dir + QStringLiteral("/nope.json")).has_value());
+    CHECK(activeRuntimeOf(active) == OpenXrRuntime::SteamVr); // a failed switch leaves it
+    // a regular file set by another tool is kept once
+    QFile::remove(active);
+    write(active, R"({"runtime":{"name":"WiVRn","library_path":"/w/libopenxr_wivrn.so"}})");
+    CHECK(activeRuntimeOf(active) == OpenXrRuntime::Other);
+    CHECK(setActiveRuntime(active, mnd).has_value());
+    CHECK(activeRuntimeOf(active + QStringLiteral(".pibridge-backup")) == OpenXrRuntime::Other);
+    CHECK(openXrRuntimeWord(OpenXrRuntime::Monado) == QStringLiteral("Monado"));
 }
 
 PIBRIDGE_TEST_MAIN()

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
-// The SteamVR dashboard launcher: pibridge-overlay (tools/overlay, docs/OVERLAY.md) draws a small dashboard panel with
-// two buttons (ROOM SETUP, QUICK ROOM SETUP), clickable with the controller laser. On a click it writes a one-line
-// request to $XDG_RUNTIME_DIR/pibridge/overlay-request, which this class watches and turns into roomSetupRequested(),
-// so the app launches the setup with its own machinery (the overlay never spawns pibridge-roomsetup itself). A persisted
+// The SteamVR dashboard buttons: pibridge-overlay (tools/overlay, docs/OVERLAY.md) puts three buttons in the SteamVR
+// dashboard bar (Room Setup, Quick Room Setup, Record Video: three small dashboard overlays, each one big button),
+// clickable with the controller laser. On a click it writes a one-line request to
+// $XDG_RUNTIME_DIR/pibridge/overlay-request, which this class watches and turns into roomSetupRequested() /
+// recordRequested(), so the app launches the setup or the recording with its own machinery (the overlay never spawns
+// pibridge-roomsetup or pibridge-record itself). A persisted
 // on/off switch (the Development page) starts and stops the overlay; it is a leaf (a background process that waits for
 // SteamVR and re-connects on its own), so if it fails VR and the app go on. The choice lives in pibridge.conf
 // (steamvr_dashboard), so a restart keeps it.
@@ -71,6 +73,10 @@ public:
     bool setWanted(bool on);
     // Start / stop to match the saved choice (the constructor calls it, so a restart keeps the panel on).
     void follow();
+    // The Monado backend is chosen: the SteamVR panel is not run (stopped if it runs) and the switch is off in the
+    // app; the saved choice is kept for the SteamVR backend. The constructor sets it from vr_backend.
+    void setBlocked(bool blocked);
+    bool blocked() const { return blocked_; }
 
 signals:
     void changed();
@@ -94,6 +100,7 @@ private:
     std::unique_ptr<QProcess> proc_;
     QTimer requestTimer_;
     bool fakeRunning_ = false;
+    bool blocked_ = false;
     bool stopping_ = false;
     QString lastError_;
 };

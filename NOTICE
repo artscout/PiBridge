@@ -22,6 +22,16 @@ Other third-party material in this tree:
   (https://github.com/killdano/ZoneTweak, Go, by killdano), MIT; its licence is reproduced at the end of this file.
   Each ported file says which ZoneTweak file it comes from.
 
+- third_party/monado/: PiBridge's fork of Monado (https://gitlab.freedesktop.org/monado/monado, Collabora, Ltd. and
+  the Monado contributors), BSL-1.0 (third_party/monado/LICENSES/BSL-1.0.txt; other files there carry their own SPDX
+  lines). It includes the Pimax driver of omarchyvr's Monado fork (MIT OR Apache-2.0, as above) and PiBridge's changes
+  (docs/monado.md). It reports itself as "Monado PiBridge fork from OmarchyVR"; Monado's copyright notices are kept in
+  every file. It is built separately and is not linked into the PiBridge app.
+- quadviews/: the quad views OpenXR layer, formerly the separate linux-vulkan-quadviews-openxr-layer (MIT,
+  quadviews/LICENSE); its design follows mbucchia's Quad-Views-Foveated (no code taken).
+- world/: PiBridge World, a Godot 4 project (our code, MIT). Godot itself (MIT, https://godotengine.org) is not part of
+  this tree; the user downloads it.
+
 Pimax, Crystal Super and Dream Air are trademarks of their owners. PiBridge is an independent project and is not made,
 endorsed or supported by Pimax.
 

@@ -2,6 +2,8 @@
 #include "selftest.h"
 
 #include "backgrounds.h"
+#include "dash_settings.h"
+#include "dash_view.h"
 #include "loop.h"
 #include "panel.h"
 #include "plan.h"
@@ -14,11 +16,14 @@
 #include "pibridge/room/raster.h"
 #include "pibridge/room/rooms.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <numbers>
 #include <string>
 #include <unistd.h>
@@ -58,7 +63,7 @@ room::Mat34 headAt(Vec3 p, double yaw) {
 
 } // namespace
 
-int runSelfTest(const std::string& snapshotDir, const std::string& panelPpm) {
+int runSelfTest(const std::string& snapshotDir, const std::string& panelPpm, const DashPaint& paint) {
     g_failed = 0;
     std::error_code ec;
     const fs::path tmp = fs::temp_directory_path(ec) / ("pibridge-home-selftest-" + std::to_string(::getpid()));
@@ -264,6 +269,91 @@ int runSelfTest(const std::string& snapshotDir, const std::string& panelPpm) {
                                                                        vrpanel::monoNs() + vrpanel::kBeatTimeoutNs + 1));
     }
 
+    // ---- the dashboard: its receivers (files in the temporary folder, a fake volume and process start)
+    dash::View dashView;
+    {
+        dash::Paths dp;
+        dp.conf = tmp / "pibridge.conf";
+        dp.runtimeDir = tmp / "run";
+        dp.statusDir = tmp / "run" / "pibridge";
+        dp.roomsetup = "/opt/pibridge/pibridge-roomsetup";
+        fs::create_directories(dp.statusDir, ec);
+        int vol = 40;
+        std::vector<std::string> started;
+        std::vector<std::string> startedEnv;
+        dash::Sinks sk;
+        sk.read = [](const fs::path& file) -> std::optional<std::string> {
+            std::ifstream in(file);
+            if (!in) {
+                return std::nullopt;
+            }
+            return std::string(std::istreambuf_iterator<char>(in), {});
+        };
+        sk.write = [](const fs::path& file, const std::string& t) {
+            std::ofstream o(file);
+            return static_cast<bool>(o << t);
+        };
+        sk.volume = [&vol] { return std::optional<int>(vol); };
+        sk.setVolume = [&vol](int v) {
+            vol = v;
+            return true;
+        };
+        sk.spawn = [&](const std::vector<std::string>& a, const std::vector<std::string>& en) -> std::optional<long> {
+            started = a;
+            startedEnv = en;
+            return 4321L;
+        };
+        sk.usage = [](const std::string&) { return std::optional<std::string>("  --map ... --backend steamvr|monado\n"); };
+        {
+            std::ofstream o(dp.conf);
+            o << "# test\nrefresh_hz=90\nipd_mm=63.5 # mine\ntracking_mode=inside-out\nio_room=Office\nroom_body_height_m=1.80\n";
+        }
+        dash::Settings st(dash::Backend::Monado, dp, sk);
+        st.refresh();
+        const auto read = [&](const fs::path& file) { return sk.read(file).value_or(""); };
+        st.act("ipd:+");
+        step("dashboard: IPD + moves the lenses now and saves ipd_mm",
+             read(dp.statusDir / "ipd-request") == "64.0\n" && read(dp.conf).find("ipd_mm=64.0 # mine\n") != std::string::npos);
+        st.act("refresh:0");
+        const auto rows = st.items(dash::Page::Headset);
+        step("dashboard: refresh 72 Hz is saved and marked for the restart",
+             read(dp.conf).find("refresh_hz=72\n") != std::string::npos && rows.size() == 3 && rows[2].chosen == 0 && rows[2].pending);
+        st.act("volume:-");
+        step("dashboard: volume - sets the headset output", vol == 35);
+        st.act("angle:-");
+        step("dashboard: controller angle live and saved",
+             read(dp.runtimeDir / "pimax-ctrl-angle") == "47\n" && read(dp.conf).find("io_ctrl_angle=47\n") != std::string::npos);
+        st.act("inhand:1");
+        step("dashboard: controllers shown when held (the driver's request file)", read(dp.runtimeDir / "pimax-ctrl-inhand-mode") == "auto\n");
+        st.act("vibrate:1");
+        step("dashboard: right controller vibration request", read(dp.runtimeDir / "pimax-haptic-request") == "3 60 200\n");
+        st.act("roomsetup");
+        const bool args = started.size() >= 4 && started[1] == "--map" && started[3] == "Office" &&
+                          std::ranges::find(started, "--backend") != started.end() && std::ranges::find(started, "--eye-height") != started.end();
+        step("dashboard: room setup started for Monado", args && st.roomsetupPid() == 4321L && startedEnv.size() == 1 &&
+                                                              startedEnv[0] == "PIBRIDGE_BACKEND=monado");
+        dash::Header hd;
+        hd.backend = "Monado";
+        hd.runtime = "Monado";
+        hd.room = "Office";
+        hd.clock = "21:07";
+        hd.message = "IPD 64.0 mm: the lenses move now, the picture uses it after the Tracking session restarts.";
+        hd.windowAvailable = true;
+        dashView = dash::layout(dash::Page::Headset, st.items(dash::Page::Headset), hd);
+        const auto box = [&](const std::string& id) {
+            return std::ranges::find_if(dashView.boxes, [&](const dash::Box& bx) { return bx.id == id; });
+        };
+        const auto plus = box("ipd:+");
+        step("dashboard: the IPD + box is hit at its centre",
+             plus != dashView.boxes.end() && dash::hit(dashView, plus->r.x + plus->r.w / 2, plus->r.y + plus->r.h / 2) == "ipd:+");
+        bool inside = true;
+        for (const auto& bx : dashView.boxes) {
+            inside = inside && bx.r.x >= 0 && bx.r.y >= 0 && bx.r.x + bx.r.w <= dash::kW && bx.r.y + bx.r.h <= dash::kH;
+        }
+        step("dashboard: every box inside the picture", inside);
+        dashView.hover = "ipd:+";
+    }
+
     // ---- the pictures (software renderer)
     if (!snapshotDir.empty()) {
         fs::create_directories(snapshotDir, ec);
@@ -327,6 +417,32 @@ int runSelfTest(const std::string& snapshotDir, const std::string& panelPpm) {
             const std::string p2 = snapshotDir + "/" + name + ".ppm";
             step(("snapshot " + name).c_str(), room::writePpm(bgImg, p2), p2);
         };
+        // the dashboard: flat, then on its panel in the home over the dusk sky
+        if (paint) {
+            const std::vector<std::uint8_t> dpx = paint(dashView);
+            room::Image dflat;
+            dflat.w = dash::kW;
+            dflat.h = dash::kH;
+            dflat.rgb.resize(static_cast<std::size_t>(dflat.w) * dflat.h * 3);
+            std::size_t opaque = 0;
+            for (std::size_t i = 0; i < static_cast<std::size_t>(dflat.w) * dflat.h; i++) {
+                const double a = dpx[i * 4 + 3] / 255.0;
+                for (int k = 0; k < 3; k++) {
+                    dflat.rgb[i * 3 + static_cast<std::size_t>(k)] = static_cast<std::uint8_t>(std::lround(dpx[i * 4 + 2 - k] * a + 20 * (1 - a)));
+                }
+                opaque += dpx[i * 4 + 3] > 200 ? 1 : 0;
+            }
+            step("dashboard picture is painted", opaque > static_cast<std::size_t>(dflat.w) * dflat.h / 2);
+            const std::string p7 = snapshotDir + "/home-7-dashboard.ppm";
+            step("snapshot home-7-dashboard", room::writePpm(dflat, p7), p7);
+            win::Geometry dg = win::place(eh0, 0.0, dash::kW, dash::kH);
+            dg.width = dash::kWidthM;
+            win::fitAspect(dg, dash::kW, dash::kH);
+            room::Image dimg = sky::render(sky::dusk(2048, 1024), eye, std::tan(tl), std::tan(tr), std::tan(tu), std::tan(td), ew, eh);
+            win::drawOnto(dimg, eye, std::tan(tl), std::tan(tr), std::tan(tu), std::tan(td), dg, dpx, dash::kW, dash::kH);
+            const std::string p8 = snapshotDir + "/home-8-dashboard-in-home.ppm";
+            step("snapshot home-8-dashboard-in-home", room::writePpm(dimg, p8), p8);
+        }
         World wd;
         wd.grid = false;
         shot(sky::render(sky::dusk(2048, 1024), eye, std::tan(tl), std::tan(tr), std::tan(tu), std::tan(td), ew, eh), wd, "home-2-dusk-window");

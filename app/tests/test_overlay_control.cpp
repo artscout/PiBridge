@@ -105,4 +105,22 @@ TEST(overlay_control_persists) {
     CHECK(!again.wanted() && !again.running());
 }
 
+TEST(overlay_control_blocked_on_the_monado_backend) {
+    QTemporaryDir dir;
+    CHECK(dir.isValid());
+    const QString conf = dir.path() + QStringLiteral("/pibridge.conf");
+    Conf c(conf);
+    CHECK(c.set("vr_backend", "monado"));
+    OverlayControl ctl(c, /*fake=*/true);
+    CHECK(ctl.blocked() && ctl.wanted() && !ctl.running()); // the saved choice stays, nothing runs
+    CHECK(ctl.status(true).words.startsWith(QStringLiteral("SteamVR backend only")));
+    ctl.setWanted(true);
+    CHECK(!ctl.running());
+    // back to SteamVR: the panel follows the saved choice again
+    ctl.setBlocked(false);
+    CHECK(!ctl.blocked() && ctl.running());
+    ctl.setBlocked(true);
+    CHECK(!ctl.running());
+}
+
 PIBRIDGE_TEST_MAIN();

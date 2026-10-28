@@ -2,6 +2,7 @@
 // The Room page's logic (core/roomsetup.h). Every file lives in a temporary directory; nothing is started (FakeRunner).
 #include <QTemporaryDir>
 
+#include "core/vr_backend.h"
 #include "core/roomsetup.h"
 #include "pibridge/room/files.h"
 #include "pibridge/room/geom.h"
@@ -22,7 +23,7 @@ room::Env tempEnv(const QTemporaryDir& d) {
 
 TEST(gates) {
     CHECK(!headsetGate(false, QStringLiteral("/x/pibridge-roomsetup")).ok);
-    CHECK(headsetGate(false, QStringLiteral("/x/pibridge-roomsetup")).why.contains(QStringLiteral("Start SteamVR")));
+    CHECK(headsetGate(false, QStringLiteral("/x/pibridge-roomsetup")).why.contains(QStringLiteral("START VR")));
     CHECK(headsetGate(true, QStringLiteral("/x/pibridge-roomsetup")).ok);
     CHECK(!headsetGate(true, QString()).ok);
     CHECK(applyGate(false, true).ok);
@@ -124,7 +125,8 @@ TEST(recenter_gate_and_arguments) {
     CHECK(recenterGate(true, true, true, tool).ok);
     CHECK((recenterArgs(QStringLiteral("/s/recenter.txt"), QStringLiteral("/r/pimax-anchor.head")) ==
            QStringList{QStringLiteral("--recenter"), QStringLiteral("--recenter-out"), QStringLiteral("/s/recenter.txt"),
-                       QStringLiteral("--ring"), QStringLiteral("/r/pimax-anchor.head")}));
+                       QStringLiteral("--ring"), QStringLiteral("/r/pimax-anchor.head"), QStringLiteral("--backend"),
+                       vrBackendName(currentVrBackend())}));
     CHECK(recenterReminder().contains(QStringLiteral("after every start")) && recenterReminder().contains(QStringLiteral("1.5 s")));
 }
 

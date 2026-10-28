@@ -33,6 +33,18 @@ Environment (unchanged names): `PIMAX_LENS_CONF`, `XDG_CONFIG_HOME`/`HOME` (`oma
 `PIMAX_NO_REFERENCE`, `PIMAX_LENS_OFF`, `PIMAX_CANT_DEG`, `PIMAX_LENS_DEBUG_GRID=<dir>`, `PIMAX_LENS_DEBUG_GRID_DIV`
 (1..64, default 4). Log texts are the Rust ones ("pimax lens: ...").
 
+## The Crystal Super profile
+
+`crystal-pimax-native.conf` + `crystal-pimax-native-lut.bin` is PiBridge's lens profile of the Crystal Super under
+Monado (the Display page's "native", the default): the like-Pimax LUT (made from the user's own Pimax install, never in
+this repository) with each eye's axis turned by a true, projective rotation of atan(0.0819) = 4.68 deg, mirrored per eye
+(`Lut::rotated_yaw`, left +, right -), the FOV port the old port's edges turned the same way. Verified in the headset
+(2026-10-22): correct world scale, straight lines on head turns; a linear tangent shift instead sheared shapes
+off-axis. Build it with `pibridge-lens crystal-profile <crystal-pimax-lut.bin> <dir>` (writes both files);
+`pibridge-lens turn IN OUT LEFT_DEG RIGHT_DEG` makes A/B variants, `pibridge-lens info FILE` prints a LUT's port. The
+test `the_crystal_super_profile_is_the_like_pimax_lut_turned` checks the turn reproduces the verified file bit for bit
+when `$PIBRIDGE_LENS_EXT_DIR` (default `~/gamedev/ext/lens`) has the two private files.
+
 ## Tests (`ctest -R lens`)
 
 | Test | What |

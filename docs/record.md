@@ -26,8 +26,9 @@ source (`--source auto`, the Dashboard card does the same):
 - **SteamVR** (Lighthouse, inside-out, SteamVR's OpenXR runtime): the **Vulkan capture layer** (`--source layer`, the
   default under SteamVR), described below. The old GL mirror (`--source mirror`) is kept but is no longer the default
   (it crashes vrserver on NVIDIA/Vulkan).
-- **A Monado compositor** (`--source tap`): the tap below. PiBridge no longer runs Monado, so the app never uses it;
-  it stays in the tool from the port.
+- **A Monado compositor** (`--source tap`, chosen by `auto` while monado-service runs): the tap below, the Monado
+  backend's path (docs/plans/MONADO-BACKEND.md). In the headset it starts and stops from PiBridge World's **Record**
+  button and from the dashboard overlay over games (Headset page, **Record video**); the app's card works as well.
 
 ### The Vulkan capture layer (`--source layer`, the SteamVR default)
 

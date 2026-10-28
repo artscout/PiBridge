@@ -35,8 +35,18 @@ Plan plan(const bg::HomeSettings& s, const Have& h) {
         break;
     }
     p.grid = p.back == Back::Grid;
-    p.window = s.panel && h.appLinked;
-    p.textPanel = !p.window;
+    const bool window = s.panel && h.appLinked;
+    if (h.hidden) {
+        p.window = p.dashboard = p.textPanel = false;
+    } else if (h.dashboard) {
+        // the dashboard unless the window was picked there and can be shown
+        p.window = h.wantWindow && window;
+        p.dashboard = !p.window;
+        p.textPanel = false;
+    } else {
+        p.window = window;
+        p.textPanel = !p.window;
+    }
     return p;
 }
 

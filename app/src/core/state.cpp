@@ -8,6 +8,19 @@
 
 namespace pibridge::app {
 
+QString vrRuntimeWords(const AppState& s) {
+    if (s.steamvrRunning && s.monadoRunning) {
+        return QStringLiteral("SteamVR and Monado running");
+    }
+    if (s.steamvrRunning) {
+        return QStringLiteral("SteamVR running");
+    }
+    if (s.monadoRunning) {
+        return QStringLiteral("Monado running");
+    }
+    return QStringLiteral("VR not running");
+}
+
 AppState fakeState(bool active) {
     AppState s;
     s.steamvrRunning = active;
@@ -95,6 +108,7 @@ void StateSource::refresh() {
     state_.keepalive = readKeepalive(dir + QStringLiteral("/keepalived.json"), now);
     state_.eyed = readEyed(dir + QStringLiteral("/eyed.json"), now);
     state_.steamvrRunning = processRunning(QStringLiteral("vrserver"));
+    state_.monadoRunning = processRunning(QStringLiteral("monado-service"));
     vrserver_ = state_.steamvrRunning;
     if (!state_.steamvrRunning) {
         state_.steamvr = {}; // shown at once; the worker drops the connection on its next tick

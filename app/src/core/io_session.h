@@ -103,6 +103,12 @@ struct IoLinks {
     std::function<bool()> steamvrHmd;     // SteamVR's link is connected and reports the headset
 };
 
+// PiBridge World's exit code when it closes itself because a game took the headset (world/scripts/main.gd): its
+// memory goes back to the game, and the dashboard overlay asks for it again once no app is left (worldReturnPath()).
+inline constexpr int kHomeYieldCode = 75;
+/// $XDG_RUNTIME_DIR/pibridge/world-return: the dashboard overlay's request to start the world again.
+QString worldReturnPath();
+
 class IoSessionControl : public QObject {
     Q_OBJECT
 public:
@@ -117,9 +123,14 @@ public:
         std::function<void(qint64)> advance; // fake mode: move the clock on (screenshots); empty otherwise
         // Monado directly
         std::function<QString()> homeProgram;               // pibridge-home ("" = not found)
+        std::function<QString()> xrOverlayProgram;          // pibridge-xroverlay ("" = not found: no recenter ring)
+        std::function<QString()> dashOverlayProgram;        // pibridge-home for --dashboard-overlay ("" = none)
         std::function<QString(const QString&)> runtimeJson; // the runtime file of a monado-service (apps_runtime.h)
         std::function<bool()> monadoSocket;                 // Monado's IPC socket exists
         std::function<QString(qint64 pid)> homeStatus;      // homeStateOf() the status file, "" unknown
+        // the dashboard overlay asks for the world back (no app left in the headset after the world gave way to
+        // one): true once per request, the request is consumed; false = none
+        std::function<bool()> takeWorldReturn;
         // SteamVR + Monado
         std::function<bool()> vrserverRunning;              // the process check while the session runs
         std::function<std::expected<QStringList, QString>(const DriverPlan&)> applyDrivers;
@@ -135,6 +146,8 @@ public:
         std::function<qint64()> unixNow;
         // both variants: the pause marker (on: write ours; off: remove ours or a stale one) and the daemons' state
         std::function<bool(bool on)> marker;
+        // the marker's variant follows setVariant()
+        std::function<void(IoVariant)> markerVariant;
         std::function<QStringList(bool eyeTrackerKeepsChip)> daemonsHolding;
     };
     explicit IoSessionControl(Deps d, QObject* parent = nullptr);
@@ -157,6 +170,9 @@ public:
     void setOtherSession(const QString& why);
 
     bool start();
+    // The VR backend's session (core/vr_backend.h): SteamVR (headtrack + CustomHeadsetOpenVR) or Monado directly. Only
+    // while nothing runs; false (and unchanged) otherwise.
+    bool setVariant(IoVariant v);
     void stop();
     void tick();
     bool active() const;
@@ -196,6 +212,7 @@ private:
     bool continueStart();
     void endMarker();
     bool waitingRelease_ = false;
+    bool markerOwned_ = false; // this control wrote the pause marker (endMarker removes only its own)
     qint64 releaseDeadline_ = 0;
     void tickSteamVr(qint64 now);
     void beginCloseSteamVr(qint64 now);
@@ -234,6 +251,8 @@ private:
 
     // Monado directly
     void startHome();
+    void startXrOverlay();
+    void stopXrOverlay();
     void stopHome(bool wait);
     QString homeProgram_;     // looked up at refresh(), kept while the session runs
     QString runtimeJson_;
@@ -241,10 +260,13 @@ private:
     qint64 homeTermMs_ = -1;  // when it got SIGTERM
     bool homeKilled_ = false;
     qint64 homePid_ = 0;      // running pibridge-home
+    qint64 xrOverlayPid_ = 0; // running pibridge-xroverlay (Monado's overlay: the recenter ring)
+    qint64 dashOverlayPid_ = 0; // running pibridge-home --dashboard-overlay (the dashboard over games)
     qint64 homeStartMs_ = 0;
     bool homeExited_ = false;
     int homeCode_ = 0;
     bool homeCrashed_ = false;
+    bool homeYielded_ = false; // the world closed itself for a game (kHomeYieldCode); back on takeWorldReturn
     QString homeError_;
     std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
 };

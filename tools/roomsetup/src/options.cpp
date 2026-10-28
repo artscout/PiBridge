@@ -2,6 +2,8 @@
 #include "options.h"
 
 #include <charconv>
+#include <cstdlib>
+#include <string_view>
 #include <format>
 
 namespace pibridge::roomsetup {
@@ -27,6 +29,11 @@ std::string usage() {
            "        [--log-dir DIR]   (default: the logs folder of the newest inside-out session)\n"
            "                        map the room in the headset over the passthrough (pibridge-roommap setup fast does the\n"
            "                        work; SPEC: broker (default), a .pxcam, or off)\n"
+           "  --lh-stage --backend monado [--room NAME] [--eye-height M]\n"
+           "                        Monado + Lighthouse: centre, forward and the floor in the headset; the room's stage\n"
+           "                        written and applied at once (steamvr_lh LH_STAGE_FILE)\n"
+           "  --backend steamvr|monado  whose rooms and runtime files (else PIBRIDGE_BACKEND); needed by --map,\n"
+           "                        --floor-height and --recenter\n"
            "  --no-openvr           never ask SteamVR (universe, reload, zone settings) through OpenVR\n"
            "  --res-div N           render at 1/N of the recommended resolution\n"
            "helpers (run by the tool itself, one OpenVR background client each, never start SteamVR):\n"
@@ -70,12 +77,23 @@ std::expected<Options, std::string> parseArgs(const std::vector<std::string>& ar
             o.keepFloor = true;
         } else if (a == "--floor-only") {
             o.floorOnly = true;
+        } else if (a == "--backend") {
+            v = value(i);
+            if (!v) {
+                return std::unexpected(v.error());
+            }
+            if (*v != "steamvr" && *v != "monado") {
+                return std::unexpected(std::string("--backend takes steamvr or monado"));
+            }
+            o.backend = *v;
         } else if (a == "--seated") {
             o.seated = true;
         } else if (a == "--recenter") {
             o.run = Run::Recenter;
         } else if (a == "--map") {
             o.run = Run::Map;
+        } else if (a == "--lh-stage") {
+            o.run = Run::LhStage;
         } else if (a == "--floor-height") {
             o.run = Run::FloorHeight;
         } else if (a == "--eye-height") {
@@ -173,10 +191,38 @@ std::expected<Options, std::string> parseArgs(const std::vector<std::string>& ar
         // --floor-only take the floor from the chaperone / the saved room; a plain standing write needs it.
         return std::unexpected(std::string("--vr-standing needs --eye-height M (the floor goes that far below your eyes)"));
     }
+    if (o.backend.empty()) {
+        if (const char* e = std::getenv("PIBRIDGE_BACKEND"); e != nullptr && *e != '\0') {
+            if (std::string_view(e) != "steamvr" && std::string_view(e) != "monado") {
+                return std::unexpected(std::format("PIBRIDGE_BACKEND={} is neither steamvr nor monado", e));
+            }
+            o.backend = e;
+        }
+    }
+    const bool steamvrHelper = o.run == Run::VrStanding || o.run == Run::VrUniverse || o.run == Run::VrReload ||
+                               o.run == Run::VrZone;
+    if (steamvrHelper) {
+        if (o.backend == "monado") {
+            return std::unexpected(std::string("the --vr-* helpers write SteamVR's chaperone and settings: not for the Monado "
+                                               "backend"));
+        }
+        o.backend = "steamvr";
+    }
+    if ((o.run == Run::Map || o.run == Run::FloorHeight || o.run == Run::Recenter) && o.backend.empty()) {
+        return std::unexpected(std::string("which backend? --backend steamvr|monado (or PIBRIDGE_BACKEND): each keeps its "
+                                           "own rooms"));
+    }
+    if (o.run == Run::LhStage && o.backend != "monado") {
+        return std::unexpected(std::string("--lh-stage is the Monado backend's Lighthouse room (--backend monado)"));
+    }
+    if (o.run == Run::Map && o.chaperone && o.backend == "monado") {
+        return std::unexpected(std::string("--chaperone is the SteamVR commit; the Monado backend's setup writes the world "
+                                           "offset"));
+    }
     if (o.keepFloor && o.floorOnly) {
         return std::unexpected(std::string("--keep-floor and --floor-only exclude each other"));
     }
-    if (o.run == Run::Map || o.run == Run::FloorHeight) {
+    if (o.run == Run::Map || o.run == Run::FloorHeight || o.run == Run::LhStage) {
         if (o.room.empty() || o.room.find('/') != std::string::npos || o.room.starts_with(".")) {
             return std::unexpected(std::string("--room takes a plain name"));
         }

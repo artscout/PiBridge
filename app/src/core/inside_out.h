@@ -53,6 +53,7 @@ inline constexpr char kCtrlTrack[] = "io_ctrl_track";     // on | off           
 inline constexpr char kCtrlAngle[] = "io_ctrl_angle";     // -20..70 (deg)        PIMAX_CTRL_ANGLE
 inline constexpr char kCtrlLost[] = "io_ctrl_lost_s";     // 1..10 (s)            PIMAX_CTRL_TRACK_LOST_S
 inline constexpr char kCtrlSteady[] = "io_ctrl_steady";   // on | off             PIMAX_CTRL_TRACK_HYST
+inline constexpr char kCtrlHands[] = "io_ctrl_hands";     // on | off (off)       PIMAX_CTRL_HANDS
 inline constexpr char kHeadtrack[] = "io_headtrack";      // on | off             pibridge-headtrack instead of Monado
 } // namespace iokey
 
@@ -95,9 +96,12 @@ struct IoSettings {
     bool camAeNewLaw = true;
     int camFps = 60; // io_cam_fps: 50 or 60 (broker --fps)
     bool ctrlTrack = true;
-    int ctrlAngle = 30;
+    int ctrlAngle = 52; // the reader's default since 2.0.1 (the Pimax controllers' grip angle)
     int ctrlLostS = 4;
     bool ctrlSteady = true;
+    // Hands from the controllers (XR_EXT_hand_tracking, data source controller). Off by default: games that enable
+    // hand tracking (Falcon BMS) then draw hands instead of the controllers.
+    bool ctrlHands = false;
     // pibridge-headtrack + CustomHeadsetOpenVR (the default; off = the old driver_monado session, pibridge.conf only)
     bool headtrack = true;
 
@@ -135,6 +139,9 @@ struct IoSessionEnv {
 // reads (PIMAX_STEAMVR_ENV_FILE), `preload`: pimax_rttime_preload.so (both only for the steamvr variant).
 IoSessionEnv buildIoEnv(const IoSettings& io, const RecSetup& s, int refreshHz, const QString& slamConfig,
                         const QString& recordDir, const QString& driverEnvFile = {}, const QString& preload = {});
+// The Monado backend with the Lighthouse faceplate (s.monadoLighthouse): monado-service alone, the pibridge_lh builder
+// (PIBRIDGE_LH=1), PiBridge's lens profile, the backend's Lighthouse stage file; buildIoEnv returns this for it.
+IoSessionEnv buildMonadoLighthouseEnv(const RecSetup& s, int refreshHz);
 // The Pimax SLAM engine can run: winbridge.exe, libpibridge_vit_winbridge.so, Wine and the Pimax kit (core/rec_setup.h
 // RecSetup::win*) are all there. `why`: what is missing, in plain words ("" when ready).
 bool pimaxSlamReady(const RecSetup& s, QString* why = nullptr);

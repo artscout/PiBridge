@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "room.h"
 
+#include "core/vr_backend.h"
+
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
@@ -524,6 +526,37 @@ void RoomPage::launchQuickSetup() { mapRoom(true); }
 
 void RoomPage::mapRoom(bool quick) {
     const RingFeed feed = fake_ ? RingFeed{} : readRingFeed();
+    const VrBackend backend = currentVrBackend();
+    if (backend == VrBackend::Monado && !insideOut()) {
+        // Monado + the Lighthouse faceplate: no room map; the room is the backend's Lighthouse stage (centre, forward,
+        // the floor in the headset), applied at once (pibridge-roomsetup --lh-stage)
+        if (toolPath().isEmpty() || mapRunning_) {
+            say(mapRunning_ ? QStringLiteral("The room setup is already running.")
+                            : QStringLiteral("pibridge-roomsetup was not found next to pibridge."),
+                true);
+            return;
+        }
+        const QString name = conf_ ? roomName(*conf_) : QString::fromLatin1(kDefaultRoom);
+        QStringList args{QStringLiteral("--lh-stage"), QStringLiteral("--room"), name};
+        if (conf_) {
+            if (const auto eh = eyeHeightOf(*conf_)) {
+                args << QStringLiteral("--eye-height") << QString::number(*eh, 'f', 3);
+            }
+        }
+        args << vrBackendArgs(backend);
+        mapRunning_ = true;
+        say(QStringLiteral("Room setup (Monado, Lighthouse) for \"%1\": put the headset on, stand in the middle, look "
+                           "forward and follow the steps.").arg(name));
+        updateView();
+        runner_.run(toolPath(), args, [this](int code, const QString& output) {
+            mapRunning_ = false;
+            say(code == 0 ? QStringLiteral("Room set up: the centre, forward and the floor are in place.")
+                          : QStringLiteral("The room setup ended (code %1). %2").arg(code).arg(output.trimmed().section(QLatin1Char('\n'), -1)),
+                code != 0);
+            updateView();
+        });
+        return;
+    }
     const RoomGate g = mapRoomHeadsetGate(insideOut(), roommapTool(), toolPath(), feed, mapRunning_);
     if (!g.ok) {
         say(g.why, true);
@@ -535,11 +568,9 @@ void RoomPage::mapRoom(bool quick) {
     say(QStringLiteral("Setting up the playspace \"%1\": put the headset on. You see your room through the cameras with "
                        "the steps: stand in the middle, look around, then stand still looking forward.").arg(name));
     updateView();
-    // The inside-out session room setup runs in is always SteamVR + Monado (io_session.h: io_apps no longer chooses the
-    // runtime; "monado" still gets the SteamVR start on the Tracking page). The room setup is SteamVR-chaperone-only, so
-    // always ask pibridge-roomsetup to write the floor/centre/forward into SteamVR's chaperone (--chaperone). Gating this
-    // on io_apps was a leftover of the old runtime choice and silently skipped the chaperone when io_apps=monado.
-    constexpr bool chaperone = true;
+    // The commit is the backend's (core/vr_backend.h): SteamVR -> the chaperone (--chaperone); Monado -> the world offset
+    // (pibridge-roommap's finish), so no --chaperone there (pibridge-roomsetup refuses it under Monado).
+    const bool chaperone = backend == VrBackend::SteamVr;
     // the floor is left to the room setup (the Pimax ground / the ~1.60 m eye default); no body-height entry any more
     runner_.run(toolPath(), roomMapHeadsetArgs(name, roommapTool(), AnchorFiles::defaults().ring,
                                                std::nullopt, chaperone, quick),

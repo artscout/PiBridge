@@ -12,6 +12,7 @@
 #include <sys/types.h>
 
 #include "anchor_offset.h"
+#include "vr_backend.h"
 
 namespace pibridge::app {
 
@@ -29,13 +30,8 @@ QString roommapBaseDir() {
             return v;
         }
     }
-    const QString home = qEnvironmentVariable("HOME", QStringLiteral("."));
-    const QString pibridge = home + QStringLiteral("/.local/share/pibridge/roommap");
-    const QString omarchyvr = home + QStringLiteral("/.local/share/omarchyvr/roommap");
-    if (!QFileInfo(pibridge).isDir() && QFileInfo(omarchyvr).isDir()) {
-        return omarchyvr;
-    }
-    return pibridge;
+    // the backend's own rooms (core/vr_backend.h), as pibridge-roommap finds them with the same PIBRIDGE_BACKEND
+    return vrBackendRoomsDir(currentVrBackend(), qEnvironmentVariable("HOME", QStringLiteral(".")));
 }
 
 bool roomSaved(const QString& baseDir, const QString& name) {
@@ -44,6 +40,7 @@ bool roomSaved(const QString& baseDir, const QString& name) {
 
 QStringList roomSetupFastArgs(const QString& name, std::optional<double> eyeHeight) {
     QStringList a{QStringLiteral("setup"), QStringLiteral("fast"), QStringLiteral("--name"), name, QStringLiteral("--no-hud")};
+    a << vrBackendArgs(currentVrBackend());
     if (eyeHeight) {
         a << QStringLiteral("--eye-height") << QString::number(*eyeHeight, 'f', 3);
     }
@@ -54,6 +51,7 @@ QStringList roomMapHeadsetArgs(const QString& name, const QString& roommapTool, 
                                std::optional<double> eyeHeight, bool chaperone, bool quickDirect) {
     QStringList a{QStringLiteral("--map"), QStringLiteral("--room"), name, QStringLiteral("--roommap"), roommapTool,
                   QStringLiteral("--ring"), ring};
+    a << vrBackendArgs(currentVrBackend());
     if (eyeHeight) {
         a << QStringLiteral("--eye-height") << QString::number(*eyeHeight, 'f', 3);
     }
@@ -101,12 +99,15 @@ std::optional<double> eyeHeightOf(const Conf& conf) {
 }
 
 QStringList floorHeightArgs(const QString& name, double eyeHeight, const QString& roommapTool, const QString& ring) {
-    return {QStringLiteral("--floor-height"), QStringLiteral("--room"), name, QStringLiteral("--eye-height"),
-            QString::number(eyeHeight, 'f', 3), QStringLiteral("--roommap"), roommapTool, QStringLiteral("--ring"), ring};
+    return QStringList{QStringLiteral("--floor-height"), QStringLiteral("--room"), name, QStringLiteral("--eye-height"),
+                       QString::number(eyeHeight, 'f', 3), QStringLiteral("--roommap"), roommapTool, QStringLiteral("--ring"), ring}
+           << vrBackendArgs(currentVrBackend());
 }
 
 QStringList roomAutoArgs(const QString& name) {
-    return {QStringLiteral("auto"), QStringLiteral("--name"), name, QStringLiteral("--wait"), QString::number(kRoomAutoWaitS)};
+    return QStringList{QStringLiteral("auto"), QStringLiteral("--name"), name, QStringLiteral("--wait"),
+                       QString::number(kRoomAutoWaitS)}
+           << vrBackendArgs(currentVrBackend());
 }
 
 QString roomStatusPath() {

@@ -4,10 +4,12 @@
 // Files: the map directory, relocalisation results and the Monado world offset (written through libpibridge-anchor, the
 // PIMAX_ANCHOR=1 hook). Map directory: map.bin, roommap.toml (what it was built from), reloc-<source>.toml and
 // last-reloc.toml (results), correction.csv (the mapping walk's loop-closure correction), floor.toml, room-setup.toml.
-// Base directory: PIBRIDGE_ROOMMAP_DIR, else PIMAX_ROOMMAP_DIR (the Rust name), else ~/.local/share/pibridge/roommap, falling
-// back to ~/.local/share/omarchyvr/roommap when only that one exists (docs/CONVENTIONS.md).
+// Base directory: PIBRIDGE_ROOMMAP_DIR, else PIMAX_ROOMMAP_DIR (the Rust name), else the backend's own
+// ~/.local/share/pibridge/rooms/<steamvr|monado> (PIBRIDGE_BACKEND), else ~/.local/share/pibridge/roommap, falling back
+// to ~/.local/share/omarchyvr/roommap when only that one exists (docs/CONVENTIONS.md).
 #pragma once
 
+#include "pibridge/anchor/backend.h"
 #include "pibridge/cam/io.h"
 #include "pibridge/roommap/loopclose.h"
 #include "pibridge/roommap/session.h"
@@ -23,6 +25,10 @@ namespace pibridge::roommap::store {
 
 using session::Alignment;
 
+/// <HOME>/.local/share/pibridge/rooms/<backend>: one backend's rooms (anchor/backend.h).
+std::string backend_rooms_dir(anchor::Backend b);
+/// The rooms folder: PIBRIDGE_ROOMMAP_DIR / PIMAX_ROOMMAP_DIR, else the backend's (PIBRIDGE_BACKEND: backend_rooms_dir;
+/// the first SteamVR use copies the rooms saved before the split), else (no backend: old tools) the shared folder.
 std::string base_dir();
 /// Directory of the map `name` (a name with a '/' is a path).
 std::string map_dir(const std::string& name);

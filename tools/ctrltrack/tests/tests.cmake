@@ -6,8 +6,8 @@ set(ct_dir ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 set(cam_dir ${PIBRIDGE_LAB_CAM_DIR})
 set(crystal ${PIBRIDGE_LAB_CALIB_DIR}/crystal-calibration.xml)
 
-# Monado's reader of the pose file (third_party/monado's Pimax driver, included, not copied).
-set(ct_monado_shm_dir "${PROJECT_SOURCE_DIR}/third_party/monado/src/xrt/drivers/pimax")
+# Monado's reader of the pose file (the fork's Pimax driver in PIBRIDGE_MONADO_SRC_DIR, included, not copied).
+set(ct_monado_shm_dir "${PIBRIDGE_MONADO_SRC_DIR}/src/xrt/drivers/pimax")
 set(ct_shm_dump "${CMAKE_CURRENT_BINARY_DIR}/no-monado-reader")
 if(EXISTS "${ct_monado_shm_dir}/pimax_ctrltrack_shm.h")
     add_executable(ctrltrack_shm_dump ${ct_dir}/shm_dump.c)

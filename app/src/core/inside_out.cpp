@@ -213,6 +213,7 @@ IoSettings ioSettings(const Conf& c) {
     s.ctrlAngle = intOr(c, iokey::kCtrlAngle, 52, kCtrlAngleMin, kCtrlAngleMax);
     s.ctrlLostS = intOr(c, iokey::kCtrlLost, 4, kCtrlLostMin, kCtrlLostMax);
     s.ctrlSteady = flag(iokey::kCtrlSteady, true);
+    s.ctrlHands = flag(iokey::kCtrlHands, false);
     return s;
 }
 
@@ -245,6 +246,7 @@ std::vector<std::pair<std::string, std::string>> ioConfLines(const IoSettings& s
     l.emplace_back(iokey::kCtrlAngle, std::to_string(s.ctrlAngle));
     l.emplace_back(iokey::kCtrlLost, std::to_string(s.ctrlLostS));
     l.emplace_back(iokey::kCtrlSteady, onOff(s.ctrlSteady));
+    l.emplace_back(iokey::kCtrlHands, onOff(s.ctrlHands));
     return l;
 }
 
@@ -289,6 +291,9 @@ IoSessionEnv buildIoEnv(const IoSettings& io, const RecSetup& s, int refreshHz, 
                         const QString& recordDir, const QString& driverEnvFile, const QString& preload) {
     IoSessionEnv e;
     QStringList& d = e.driver;
+    if (s.monadoLighthouse) {
+        return buildMonadoLighthouseEnv(s, refreshHz);
+    }
     // The Pimax driver's settings of crystal-6dof.sh (SETTINGS=...), in its order.
     d << QStringLiteral("PIMAX_FPS=%1").arg(refreshHz == 72 ? 72 : 90) << QStringLiteral("PIMAX_LOG=info")
       << QStringLiteral("PIMAX_BIAS_TIMEOUT_MS=200");
@@ -332,6 +337,9 @@ IoSessionEnv buildIoEnv(const IoSettings& io, const RecSetup& s, int refreshHz, 
     if (ctrlEngine) {
         d << QStringLiteral("PIMAX_CTRL_ENGINE=1");
     }
+    // hand tracking from the controllers (pimax_ctrl.c, its default on): off unless asked for, so a game that enables
+    // XR_EXT_hand_tracking sees no hand tracker and shows the controllers
+    d << (io.ctrlHands ? QStringLiteral("PIMAX_CTRL_HANDS=1") : QStringLiteral("PIMAX_CTRL_HANDS=0"));
     d << QStringLiteral("PIMAX_CTRL_ANGLE=%1").arg(std::clamp(io.ctrlAngle, kCtrlAngleMin, kCtrlAngleMax));
     // PIMAX_CTRL_INHAND=auto is not passed (live 2026-10-19): it marked both controllers "not in the hand" while held,
     // and pibridge-ctrltrack then stopped looking for them; the tracker's IMU hand check keeps a parked controller's
@@ -408,6 +416,13 @@ IoSessionEnv buildIoEnv(const IoSettings& io, const RecSetup& s, int refreshHz, 
     if (s.eyeTracking && io.mode == TrackingMode::InsideOut) {
         d << QStringLiteral("PIMAX_EYE_STEAMVR=1");
     }
+    // eye tracking for native OpenXR apps on Monado directly: the gaze of pibridge-eyed's shared memory (the daemon
+    // keeps the chip; the driver's PIMAX_EYE_SHM), XR_EXT_eye_gaze_interaction
+    if (s.eyeTracking && s.backend == VrBackend::Monado) {
+        d << QStringLiteral("PIMAX_EYE_SHM=/dev/shm/pibridge-eye-gaze");
+    }
+    // whose runtime files the driver's room anchor uses (libpibridge-anchor backend.h)
+    d << QStringLiteral("PIBRIDGE_BACKEND=") + vrBackendName(s.backend);
     // the room anchor hook (Monado's offset file and head ring): the switch, or the room map (core/roommap_link.h).
     // With the room-map tool there, every inside-out session has the hook, so "Map the room" works in the session that
     // runs and a saved room is put in place at the start; without an offset file the hook changes nothing (Monado
@@ -441,6 +456,49 @@ IoSessionEnv buildIoEnv(const IoSettings& io, const RecSetup& s, int refreshHz, 
     }
     if (!driverEnvFile.isEmpty()) {
         e.steamvr << QStringLiteral("PIMAX_STEAMVR_ENV_FILE=") + driverEnvFile;
+    }
+    return e;
+}
+
+IoSessionEnv buildMonadoLighthouseEnv(const RecSetup& s, int refreshHz) {
+    // The Monado backend with the Lighthouse faceplate (PiBridge's Monado fork, builder pibridge_lh): the Pimax HMD
+    // shows the picture through PiBridge's lens profile and serves the eye gaze; Valve's driver_lighthouse (steamvr_lh)
+    // tracks the faceplate, the controllers and trackers. No cameras, no SLAM, no winbridge, no SteamVR running.
+    IoSessionEnv e;
+    e.ctrltrack = false;
+    e.winbridge = false;
+    QStringList& d = e.driver;
+    d << QStringLiteral("PIMAX_FPS=%1").arg(refreshHz == 72 ? 72 : 90) << QStringLiteral("PIMAX_LOG=info")
+      << QStringLiteral("PIMAX_BIAS_TIMEOUT_MS=200");
+    if (!s.lens.path.isEmpty()) {
+        d << QStringLiteral("PIMAX_LENS_CONF=") + s.lens.path;
+    }
+    d << QStringLiteral("OXR_DEBUG_IPD_MM=%1").arg(s.ipdMm, 0, 'f', 1);
+    d << QStringLiteral("PIMAX_SLAM=0") << QStringLiteral("PIMAX_CTRL_TRACK=0");
+    d << QStringLiteral("PIBRIDGE_LH=1") << QStringLiteral("PIBRIDGE_BACKEND=monado");
+    // the room: the backend's own Lighthouse stage (pibridge-roomsetup --lh-stage writes it, steamvr_lh re-reads it);
+    // the head ring for the room setup (PIMAX_ANCHOR; no offset is ever written in this mode)
+    d << QStringLiteral("LH_STAGE_FILE=") + s.lhStageFile << QStringLiteral("PIMAX_ANCHOR=1");
+    if (!s.steamVrStartup.isEmpty()) {
+        // steamvr_lh loads driver_lighthouse from this SteamVR install (<runtime>/bin/vrstartup.sh -> <runtime>)
+        QDir rt = QFileInfo(s.steamVrStartup).dir();
+        rt.cdUp();
+        d << QStringLiteral("STEAMVR_PATH=") + rt.absolutePath();
+    }
+    if (s.eyeTracking) {
+        d << QStringLiteral("PIMAX_EYE_SHM=/dev/shm/pibridge-eye-gaze");
+    }
+    e.monado = d;
+    e.monado << QStringLiteral("XRT_COMPOSITOR_FORCE_WAYLAND_DIRECT=1")
+             << QStringLiteral("XRT_COMPOSITOR_WAYLAND_CONNECTOR=") + s.connector
+             << QStringLiteral("XRT_COMPOSITOR_FORCE_NVIDIA=0") << QStringLiteral("XRT_COMPOSITOR_LOG=info")
+             << QStringLiteral("XRT_NO_STDIN=1") << QStringLiteral("IPC_IGNORE_VERSION=1");
+    e.monado << QStringLiteral("PIMAX_RECORD=1") << QStringLiteral("PIMAX_RECORD_SHM=") + recordShmPath();
+    e.monado << s.extraEnv;
+    e.driver << s.extraEnv;
+    if (s.lhStageSaved.isEmpty() || !QFileInfo::exists(s.lhStageSaved)) {
+        e.notes << QStringLiteral("No room set up for Monado + Lighthouse yet: the play area starts at the Lighthouse "
+                                  "origin. Run Room setup in the headset.");
     }
     return e;
 }

@@ -128,7 +128,7 @@ struct TexVertex {
 /// the size changes; the copy goes in with the next draw (the GPU is idle between draws: every draw waits for its
 /// fence).
 struct TexPass {
-    enum class Kind { Sky, Mesh };
+    enum class Kind { Sky, Mesh, Hole }; // Hole: a mesh written as fully transparent, no blending (see Extras::hole)
     Kind kind = Kind::Sky;
     VkDevice device = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memProps{};
@@ -198,6 +198,7 @@ struct SceneGpu {
     PassthroughGpu pt; // made by enablePassthrough(); drawn first when on for the eye
     TexPass sky;       // made by enableSky(); drawn first (instead of the passthrough) when on for the eye
     TexPass panel;     // made by enablePanel(); drawn after the scene, before the overlay lists
+    TexPass hole;      // made by enableHole(); drawn last: its mesh becomes see-through (an overlay's window)
     std::uint32_t overlayTris = 0, overlayLines = 0; // the overlay's vertices, after the scene's in the buffer
 
     std::expected<void, std::string> create(VkDevice dev, VkQueue q, std::uint32_t qf, const VkPhysicalDeviceMemoryProperties& mp,
@@ -269,6 +270,10 @@ struct OpenOpts {
     std::string runtimeHint = "is SteamVR running?"; // added to the instance errors
     unsigned resDiv = 1;                             // divide the recommended eye size
     std::uint32_t maxEye = 3200;                     // cap of the longer side (lines and pixel text need no more)
+    // An overlay session (XR_EXTX_overlay, Monado): composited over the main app (a game) instead of replacing it;
+    // `overlayPlacement` orders several overlays (higher on top). openSession fails when the runtime lacks it.
+    bool overlay = false;
+    std::uint32_t overlayPlacement = 1;
 };
 
 /// The instance (XR_KHR_vulkan_enable2), the Vulkan instance and device through the runtime, the session, the STAGE
@@ -286,6 +291,8 @@ std::expected<void, std::string> enableSky(Session& x);
 /// The textured panel pass (after createSwapchains); pictures go in with x.gpu.panel.setPixels (BGRA, sRGB), the
 /// mesh with x.gpu.panel.setMesh.
 std::expected<void, std::string> enablePanel(Session& x);
+/// The hole pass (after createSwapchains): its mesh with x.gpu.hole.setMesh; drawn when Extras::hole is set.
+std::expected<void, std::string> enableHole(Session& x);
 
 /// CLOCK_MONOTONIC ns -> XrTime through XR_KHR_convert_timespec_time (openSession enables it when the runtime offers
 /// it); nullopt without it.
@@ -324,6 +331,12 @@ struct Extras {
     std::function<std::optional<SkyPush>(std::size_t eye, const pt::EyeView& view)> sky;
     bool panel = false;
     float panelOpacity = 1.0F;
+    // the panel picture's own alpha counts (rounded corners, see-through parts): a picture painted with a transparent
+    // background (the dashboard); off for pictures without a meaningful alpha (an app window's frames)
+    bool panelTexAlpha = false;
+    // the hole mesh (x.gpu.hole.setMesh) is cut out of the picture: transparent there, so with an alpha-blended layer
+    // (an overlay) what lies below shows through - the Godot world's panel under the passthrough overlay
+    bool hole = false;
     const room::Batch* overlay = nullptr;
 };
 std::expected<bool, std::string> renderStereo(Session& x, const room::Batch& batch, XrTime t, double nearZ, double farZ,

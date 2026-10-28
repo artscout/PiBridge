@@ -13,6 +13,8 @@ The `debian/` directory in the repo root drives it.
 | Vulkan video-capture record layer | `/usr/lib/<triplet>/pibridge/libpibridge-record-layer.so` |
 | Record-layer implicit-layer manifest | `/usr/share/vulkan/implicit_layer.d/VK_LAYER_PIBRIDGE_record.json` |
 | Desktop entry + icons | `/usr/share/applications/`, `/usr/share/icons/hicolor/` |
+| Quad views OpenXR layer (`quadviews/`) and its implicit-layer manifest | `/usr/lib/<triplet>/qv-vulkan/`, `/usr/share/openxr/1/api_layers/implicit.d/` |
+| PiBridge World (`world/`, the Monado backend's home; a Godot project, run by the user's Godot) | `/usr/share/pibridge/world/` |
 | Docs | `/usr/share/doc/pibridge/` |
 | udev rule (canonical copy) | `/usr/share/pibridge/udev/70-pibridge.rules` (activated into `/lib/udev/rules.d/` by postinst) |
 | winbridge **sources** + build helper | `/usr/share/pibridge/winbridge-src/` (incl. `build-winbridge.sh`; not on `$PATH`) |
@@ -32,7 +34,11 @@ loader *only if actually linked*) plus a few explicit packages:
 
 Nothing is bundled: inside-out tracking runs in `pibridge-headtrack` (our code)
 and SteamVR shows it through CustomHeadsetOpenVR, which the user installs
-(`docs/INSTALL.md` 5.3). No Monado and no ONNX Runtime are built or shipped.
+(`docs/INSTALL.md` 5.3). No ONNX Runtime is built or shipped. PiBridge's Monado
+fork is in the source tree (`third_party/monado`) but is not part of the
+package yet: the Monado backend's user builds it (`docs/INSTALL.md` 7.2.1).
+Godot is not a dependency either: the user downloads it for PiBridge World
+(`docs/INSTALL.md` 7.2.2); without it the classic `pibridge-home` is the home.
 `app/third_party/openvr/openvr.h` is vendored **build-time** headers only;
 SteamVR's own `libopenvr_api.so` is dlopen'd at run time.
 

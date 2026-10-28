@@ -12,7 +12,7 @@ using namespace pibridge::hmd;
 
 TEST(defaults) {
     const Settings s = Settings::parse("");
-    CHECK(s.follow == "vrserver");
+    CHECK(s.follow == "vrserver,monado-service"); // either VR runtime
     CHECK(s.refresh_hz == 90);
     CHECK(s.audio_to_headset);
     CHECK(s.eye_tracking);

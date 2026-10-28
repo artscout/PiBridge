@@ -21,6 +21,7 @@ enum class Run {
     Recenter,  // the inside-out recenter in the headset (recenter.h), the result into --recenter-out
     FloorHeight, // the floor from the head standing upright minus --eye-height, in the running session (mapflow.h)
     Map,       // map the room in the headset over the passthrough (mapflow.h), driving pibridge-roommap setup fast --guide
+    LhStage,   // the Monado backend's Lighthouse stage: centre / forward / floor in the headset (lhstage.h)
 };
 
 struct Options {
@@ -52,6 +53,9 @@ struct Options {
                                          // where you sit) instead of the standing one (centre on the floor)
     bool keepFloor = false;              // --keep-floor (with --vr-standing): keep the chaperone's current floor, set
                                          // centre / forward only (the in-game recenter)
+    std::string backend;                 // --backend steamvr|monado (else PIBRIDGE_BACKEND): whose rooms and runtime
+                                         // files (anchor/backend.h); required by --map, --floor-height, --recenter.
+                                         // The --vr-* helpers are SteamVR's by definition.
     bool floorOnly = false;              // --floor-only (with --vr-standing): keep the chaperone's centre / forward, set
                                          // only the floor from the saved room floor (the room recognised in a new
                                          // session, whose raw space is new)

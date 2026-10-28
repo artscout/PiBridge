@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Ported from omarchyvr omarchyvr-anchor/src/world.rs (MIT OR Apache-2.0).
 #include "anchor_offset.h"
+#include "vr_backend.h"
 
 #include <QDir>
 #include <QFile>
@@ -86,10 +87,12 @@ QString holderWords(const AnchorLease& l) {
 
 AnchorFiles AnchorFiles::defaults() {
     AnchorFiles f;
+    // the backend's files (core/vr_backend.h, libpibridge-anchor backend.h), unless named
+    const QString dir = vrBackendRuntimeDir(currentVrBackend());
     const QString o = qEnvironmentVariable("PIMAX_ANCHOR_FILE");
-    f.offset = o.isEmpty() ? runtimeDir() + QStringLiteral("/pimax-anchor.offset") : o;
+    f.offset = o.isEmpty() ? dir + QStringLiteral("/anchor.offset") : o;
     const QString r = qEnvironmentVariable("PIMAX_ANCHOR_HEAD_FILE");
-    f.ring = r.isEmpty() ? runtimeDir() + QStringLiteral("/pimax-anchor.head") : r;
+    f.ring = r.isEmpty() ? dir + QStringLiteral("/anchor.head") : r;
     return f;
 }
 

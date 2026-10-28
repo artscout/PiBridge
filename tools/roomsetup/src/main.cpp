@@ -4,6 +4,7 @@
 // saved room without VR), --selftest (no headset), and the OpenVR helpers it runs as its own child processes.
 #include "host.h"
 #include "openvr_helper.h"
+#include "lhstage.h"
 #include "options.h"
 #include "selftest.h"
 
@@ -16,6 +17,8 @@
 #include "pibridge/room/files.h"
 #include "pibridge/room/rooms.h"
 
+#include "pibridge/anchor/backend.h"
+#include "pibridge/anchor/world.h"
 #include "pibridge/roommap/floor.h"
 #include "pibridge/roommap/guide_ipc.h"
 #include "pibridge/roommap/setup.h"
@@ -36,6 +39,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <mutex>
@@ -208,12 +212,8 @@ int headset(const Options& o) {
 }
 
 int recenter(const Options& o) {
-    std::string ring = o.ringFile;
-    if (ring.empty()) {
-        const char* rt = std::getenv("XDG_RUNTIME_DIR");
-        const char* env = std::getenv("PIMAX_ANCHOR_HEAD_FILE");
-        ring = env && *env ? env : std::string(rt && *rt ? rt : "/tmp") + "/pimax-anchor.head";
-    }
+    // the backend's head ring (anchor/backend.h), unless --ring names one
+    const std::string ring = o.ringFile.empty() ? anchor::ring_path() : o.ringFile;
     std::error_code ec;
     std::filesystem::remove(o.recenterOut, ec); // an old result never counts
     RecenterFlow flow;
@@ -230,6 +230,47 @@ int recenter(const Options& o) {
         return fail(w.error());
     }
     std::printf("recenter written to %s\n", o.recenterOut.c_str());
+    return 0;
+}
+
+/// --lh-stage (the Monado backend in the Lighthouse mode): the recenter steps in the headset (centre, forward, the floor
+/// touch, else --eye-height below the head, else the old floor), then the room's stage written to the room
+/// (<room>/lh-stage) and to the live file steamvr_lh re-reads (lhstage.h). Takes effect at once.
+int lhStage(const Options& o) {
+    const std::string ring = o.ringFile.empty() ? anchor::ring_path() : o.ringFile;
+    RecenterFlow flow;
+    std::signal(SIGINT, onSignal);
+    std::signal(SIGTERM, onSignal);
+    auto r = runRecenterXr(flow, XrOpts{o.resDiv}, g_stop, [ring] { return readRing(ring); });
+    if (!r) {
+        return fail(r.error());
+    }
+    if (!flow.result()) {
+        return fail("room setup cancelled", 3);
+    }
+    const std::string roomDir = roommap::store::map_dir(o.room);
+    const std::string live = lhStageRuntimePath();
+    // the head was read in the stage that is live now: the live file, else the saved one, else the raw space
+    StagePose old = kStageIdentity;
+    for (const std::string& p : {live, lhStageRoomPath(roomDir)}) {
+        std::ifstream f(p);
+        std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        if (const auto st = parseStage(text)) {
+            old = *st;
+            break;
+        }
+    }
+    const StagePose st = lhStageFromRecenter(old, *flow.result(), o.eyeHeight);
+    std::error_code ec;
+    std::filesystem::create_directories(roomDir, ec);
+    std::filesystem::create_directories(std::filesystem::path(live).parent_path(), ec);
+    for (const std::string& p : {lhStageRoomPath(roomDir), live}) {
+        if (auto w = room::writeFileAtomic(p, stageText(st)); !w) {
+            return fail(w.error());
+        }
+    }
+    std::printf("Lighthouse stage of room \"%s\" (Monado backend): %s written to %s and %s\n", o.room.c_str(),
+                stageText(st).c_str(), lhStageRoomPath(roomDir).c_str(), live.c_str());
     return 0;
 }
 
@@ -320,11 +361,7 @@ int floorHeight(const Options& o) {
     }
     const std::string dir = roommap::store::map_dir(o.room);
     const char* rt = std::getenv("XDG_RUNTIME_DIR");
-    std::string ringPath = o.ringFile;
-    if (ringPath.empty()) {
-        const char* env = std::getenv("PIMAX_ANCHOR_HEAD_FILE");
-        ringPath = env && *env ? env : std::string(rt && *rt ? rt : "/tmp") + "/pimax-anchor.head";
-    }
+    const std::string ringPath = o.ringFile.empty() ? anchor::ring_path() : o.ringFile;
     const auto ring = readRing(ringPath);
     auto res = roommap::store::RelocResult::load(dir + "/last-reloc.toml");
     if (!ring || ring->pid == 0) {
@@ -423,11 +460,7 @@ int mapRoom(const Options& o) {
     std::filesystem::create_directories(dir, ec);
     std::filesystem::remove(dir + "/" + roommap::guide::STATE_FILE, ec);
     std::filesystem::remove(dir + "/" + roommap::guide::ANSWER_FILE, ec);
-    std::string ring = o.ringFile;
-    if (ring.empty()) {
-        const char* env = std::getenv("PIMAX_ANCHOR_HEAD_FILE");
-        ring = env && *env ? env : std::string(rt && *rt ? rt : "/tmp") + "/pimax-anchor.head";
-    }
+    const std::string ring = o.ringFile.empty() ? anchor::ring_path() : o.ringFile;
     // pibridge-roommap does the work. The logs: its output and this tool's own lines, in the session's logs folder
     const std::string tool = roommapTool(o);
     const std::string logs = mapLogDir(o);
@@ -656,6 +689,10 @@ int main(int argc, char** argv) {
         std::fputs(usage().c_str(), stdout);
         return 0;
     }
+    if (!o->backend.empty()) {
+        // the library (rooms folder, ring, offset) and every child (pibridge-roommap) follow the same backend
+        ::setenv(anchor::BACKEND_ENV, o->backend.c_str(), 1);
+    }
     switch (o->run) {
     case Run::VrUniverse: return vrUniverseMain();
     case Run::VrReload: return vrReloadMain();
@@ -685,6 +722,12 @@ int main(int argc, char** argv) {
         return recenter(*o);
 #else
         return fail("built without OpenXR / Vulkan: no --recenter", 2);
+#endif
+    case Run::LhStage:
+#ifdef PIBRIDGE_ROOMSETUP_XR
+        return lhStage(*o);
+#else
+        return fail("built without OpenXR / Vulkan: no --lh-stage", 2);
 #endif
     case Run::FloorHeight:
 #ifdef PIBRIDGE_ROOMSETUP_XR

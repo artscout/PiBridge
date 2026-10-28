@@ -242,6 +242,7 @@ std::expected<void, std::string> SceneGpu::draw(std::size_t eye, std::size_t idx
     pt.recordUpload(cmd); // a new camera frame: copied once, before the first eye's pass
     sky.recordUpload(cmd);
     panel.recordUpload(cmd);
+    hole.recordUpload(cmd);
     VkClearValue clear{};
     clear.color = {{background[0], background[1], background[2], background[3]}};
     auto rbi = vk_make<VkRenderPassBeginInfo>(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
@@ -282,6 +283,10 @@ std::expected<void, std::string> SceneGpu::draw(std::size_t eye, std::size_t idx
         panel.eyeOn[eye] = false;
     }
     lists(nTris + nLines, overlayTris, overlayLines);
+    if (eye < 2 && hole.ready() && hole.eyeOn[eye]) {
+        hole.recordDraw(cmd, eye);
+        hole.eyeOn[eye] = false;
+    }
     vkCmdEndRenderPass(cmd);
     PIBRIDGE_VK(vkEndCommandBuffer(cmd), "end");
     auto si = vk_make<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
@@ -670,6 +675,14 @@ std::expected<void, std::string> openSession(Session& x, const OpenOpts& opts) {
     if (ctrlModel) {
         exts.push_back(XR_MSFT_CONTROLLER_MODEL_EXTENSION_NAME);
     }
+    if (opts.overlay) {
+        if (!std::ranges::any_of(props, [](const XrExtensionProperties& p) {
+                return std::strcmp(p.extensionName, XR_EXTX_OVERLAY_EXTENSION_NAME) == 0;
+            })) {
+            return std::unexpected(std::string("the OpenXR runtime does not offer XR_EXTX_overlay (overlay sessions)"));
+        }
+        exts.push_back(XR_EXTX_OVERLAY_EXTENSION_NAME);
+    }
     auto ici = xr_make<XrInstanceCreateInfo>(XR_TYPE_INSTANCE_CREATE_INFO);
     std::snprintf(ici.applicationInfo.applicationName, sizeof ici.applicationInfo.applicationName, "%s", opts.appName.c_str());
     std::snprintf(ici.applicationInfo.engineName, sizeof ici.applicationInfo.engineName, "%s", opts.appName.c_str());
@@ -751,6 +764,11 @@ std::expected<void, std::string> openSession(Session& x, const OpenOpts& opts) {
     binding.device = x.device;
     binding.queueFamilyIndex = x.qf;
     binding.queueIndex = 0;
+    // an overlay session: the overlay info after the graphics binding in the chain
+    XrSessionCreateInfoOverlayEXTX ov{XR_TYPE_SESSION_CREATE_INFO_OVERLAY_EXTX, nullptr, 0, opts.overlayPlacement};
+    if (opts.overlay) {
+        binding.next = &ov;
+    }
     XrSessionCreateInfo sci{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, x.system};
     PIBRIDGE_XR(xrCreateSession(x.instance, &sci, &x.session), "xrCreateSession");
     XrReferenceSpaceCreateInfo rsi{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr, XR_REFERENCE_SPACE_TYPE_STAGE, kIdentity};
@@ -850,6 +868,19 @@ std::expected<void, std::string> enablePanel(Session& x) {
         x.gpu.panel.destroy();
     }
     return r;
+}
+
+std::expected<void, std::string> enableHole(Session& x) {
+    if (x.gpu.hole.ready()) {
+        return {};
+    }
+    auto r = x.gpu.hole.create(x.device, x.memProps, x.gpu.renderPass, x.size, TexPass::Kind::Hole, VK_FORMAT_B8G8R8A8_SRGB);
+    if (!r) {
+        x.gpu.hole.destroy();
+        return r;
+    }
+    const std::uint8_t clear[4] = {0, 0, 0, 0}; // a texture is required by the pass; the shader writes 0 regardless
+    return x.gpu.hole.setPixels(clear, 1, 1, 4);
 }
 
 std::optional<XrTime> xrTimeOfMonotonic(const Session& x, std::uint64_t ns) {
@@ -960,7 +991,13 @@ std::expected<bool, std::string> renderStereo(Session& x, const room::Batch& bat
         if (extras && extras->panel && x.gpu.panel.ready()) {
             Push pp = push;
             pp.flags[1] = extras->panelOpacity;
+            pp.flags[2] = extras->panelTexAlpha ? 1.0F : 0.0F;
             x.gpu.panel.setMeshEye(e, pp);
+        }
+        if (extras && extras->hole && x.gpu.hole.ready()) {
+            Push pp = push;
+            pp.flags[3] = 1.0F; // write transparent
+            x.gpu.hole.setMeshEye(e, pp);
         }
         std::uint32_t idx = 0;
         auto ai = xr_make<XrSwapchainImageAcquireInfo>(XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO);

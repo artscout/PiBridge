@@ -65,8 +65,8 @@ RecordCardModel recordCardModel(const RecordInputs& in) {
         }
         return m;
     }
-    // the source follows the session (pibridge-record --source auto does the same): SteamVR's mirror while SteamVR
-    // runs (also SteamVR + Monado, whose image SteamVR's compositor draws), else Monado's own tap
+    // the source follows the session (pibridge-record --source auto does the same): the Vulkan capture layer while
+    // SteamVR runs, else Monado's own tap (the Monado backend)
     if (in.steamvrRunning) {
         m.chip = QStringLiteral("READY");
         m.chipKind = ChipKind::Info;
@@ -85,7 +85,7 @@ RecordCardModel recordCardModel(const RecordInputs& in) {
         m.chip = QStringLiteral("OFF");
         m.chipKind = ChipKind::Off;
         m.headline = QStringLiteral("No VR session");
-        m.detail = QStringLiteral("Start SteamVR, then press Record.");
+        m.detail = QStringLiteral("Press START VR on the Dashboard, then press Record.");
     }
     // the last result, in plain words
     if (st.state == "error" && !st.note.empty()) {

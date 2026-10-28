@@ -332,7 +332,7 @@ void VrHomePage::updateView() {
     homeNote_->setVisible(!homeNote_->text().isEmpty());
     steamvr_->setEnabled(steamvr && !h.running);
     if (!steamvr) {
-        steamvrWhy_->setText(QStringLiteral("SteamVR is not running."));
+        steamvrWhy_->setText(QStringLiteral("VR is not running (START VR on the Dashboard)."));
     } else if (h.running) {
         steamvrWhy_->setText(QStringLiteral("The home runs already."));
     } else if (steamvrWhy_->text().startsWith(QLatin1String("SteamVR is not")) || steamvrWhy_->text().startsWith(QLatin1String("The home runs"))) {

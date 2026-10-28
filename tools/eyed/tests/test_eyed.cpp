@@ -402,7 +402,7 @@ TEST(options_come_from_the_settings_and_the_default_files) {
     const ConfigDirs dirs{g_tmp / "opt/pibridge", g_tmp / "opt/pimax-linux", g_tmp / "opt/omarchyvr"};
     const Settings def = Settings::parse("");
     auto o = parse_args({}, def, dirs);
-    CHECK(o && !o->frames && !o->profile && o->follow == "vrserver" && o->eye_tracking && o->flip_x);
+    CHECK(o && !o->frames && !o->profile && o->follow == "vrserver,monado-service" && o->eye_tracking && o->flip_x);
     CHECK(o && o->shm == shm::default_path() && o->settings_path == Settings::default_path());
     // only the omarchyvr files exist: they are used
     put(dirs.omarchyvr / START_LIST_FILE, "x");

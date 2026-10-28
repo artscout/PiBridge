@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "tracking.h"
 
+#include "core/vr_backend.h"
+
 #include <QComboBox>
 #include <QDesktopServices>
 #include <QFileDialog>
@@ -200,6 +202,25 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
         save(iokey::kMode, i == 1 ? QStringLiteral("inside-out") : QStringLiteral("lighthouse"));
     });
     modeCard_->body()->addWidget(pibridge::ui::settingRow(QStringLiteral("Head tracking by"), mode_));
+    // the VR backend (core/vr_backend.h): who runs the headset and the apps. Each keeps its own tracking and rooms.
+    backend_ = new pibridge::ui::Segmented({QStringLiteral("SteamVR"), QStringLiteral("Monado")});
+    connect(backend_, &pibridge::ui::Segmented::activated, this, [this](int i) {
+        if (control_.active()) {
+            say(QStringLiteral("Stop the running session first: the backend changes only between sessions."), true);
+            load();
+            return;
+        }
+        const VrBackend b = i == 1 ? VrBackend::Monado : VrBackend::SteamVr;
+        save(kVrBackendKey, vrBackendName(b));
+        exportVrBackend(b);
+        control_.setVariant(b == VrBackend::Monado ? IoVariant::MonadoDirect : IoVariant::SteamVr);
+    });
+    modeCard_->body()->addWidget(pibridge::ui::settingRow(
+        QStringLiteral("VR backend"), backend_, nullptr, true,
+        QStringLiteral("SteamVR: PiBridge's head tracking into SteamVR (CustomHeadsetOpenVR); games start through "
+                       "Steam. Monado: PiBridge's own OpenXR runtime with the Pimax driver - inside-out, or Lighthouse "
+                       "through the faceplate (Valve's lighthouse driver tracks it); PiBridge's lens profile, eye "
+                       "tracking and quad views. Each backend keeps its own rooms.")));
     modeText_ = new QLabel;
     modeText_->setWordWrap(true);
     modeText_->setTextFormat(Qt::RichText);
@@ -432,6 +453,12 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
            QStringLiteral("Holds a camera fix for 220 ms instead of 80 ms and confirms before switching back, so they "
                           "jump less at the edge of the view (off: PIMAX_CTRL_TRACK_HYST=0)."),
            ctrlSteady_, [](const IoSettings& io) { return io.ctrlSteady; }, noCtrl);
+    ctrlHands_ = toggle(iokey::kCtrlHands);
+    addRow(ctrl, QStringLiteral("Hands from the controllers"),
+           QStringLiteral("Monado: offers hand tracking driven by the controllers (fingers from trigger, grip and touch). "
+                          "Off by default: a game that uses hand tracking then shows hands, not the controllers "
+                          "(PIMAX_CTRL_HANDS)."),
+           ctrlHands_, [](const IoSettings& io) { return !io.ctrlHands; });
     camFps_ = seg({QStringLiteral("50 Hz"), QStringLiteral("60 Hz")}, iokey::kCamFps,
                   {QStringLiteral("50"), QStringLiteral("60")});
     addRow(ctrl, QStringLiteral("Camera rate"),
@@ -529,6 +556,8 @@ void TrackingPage::load() {
     const RecSetup& s = control_.setup();
 
     mode_->setCurrent(io_.mode == TrackingMode::InsideOut ? 1 : 0);
+    backend_->setCurrent(vrBackend(conf_) == VrBackend::Monado ? 1 : 0);
+    sessionCard_->titleLabel()->setText(QStringLiteral("Session: ") + vrBackendWord(vrBackend(conf_)));
     modeCard_->chip()->set(modeWord(io_.mode), io_.mode == TrackingMode::InsideOut ? ChipKind::Warn : ChipKind::Info);
     modeText_->setText(QStringLiteral(
         "<p style='color:#9a9aa5'><b style='color:#e6e6ec'>Lighthouse</b> (works today): SteamVR tracks the head and the "
@@ -575,6 +604,7 @@ void TrackingPage::load() {
     ctrlAngle_->setValue(io_.ctrlAngle);
     ctrlLost_->setValue(io_.ctrlLostS);
     ctrlSteady_->setCheckedQuiet(io_.ctrlSteady);
+    ctrlHands_->setCheckedQuiet(io_.ctrlHands);
     camFps_->setCurrent(io_.camFps == 60 ? 1 : 0);
     extraEnv_->setText(conf_.value(reckey::kEnv, QString()).trimmed());
 

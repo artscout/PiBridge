@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "world.h"
 
+#include <filesystem>
+
 #include <atomic>
 #include <cerrno>
 #include <cmath>
@@ -25,12 +27,17 @@ constexpr std::uint32_t MAGIC = 0x434E4150u;
 constexpr std::size_t SLOTS = 128, HDR = 16, SLOT = 40, SIZE = HDR + SLOTS * SLOT;
 constexpr double SLEW_M_S = 0.05, SLEW_DEG_S = 2.0;
 
+// The anchor files of the SteamVR backend (libpibridge-anchor backend.h; pibridge-headtrack is that backend by
+// definition): <runtime>/pibridge/steamvr/<leaf>, the explicit PIMAX_ANCHOR_* file first. Monado's files are its own.
 std::string path_of(const char* env, const char* leaf) {
     if (const char* e = std::getenv(env); e != nullptr && *e != '\0') {
         return e;
     }
     const char* d = std::getenv("XDG_RUNTIME_DIR");
-    return std::string(d != nullptr && *d != '\0' ? d : "/tmp") + "/" + leaf;
+    const std::string dir = std::string(d != nullptr && *d != '\0' ? d : "/tmp") + "/pibridge/steamvr";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    return dir + "/" + leaf;
 }
 
 bool pid_alive(std::uint32_t pid) {
@@ -98,8 +105,8 @@ RigidPose compose(const RigidPose& a, const RigidPose& b) {
     return {geom::add(slam::qrot(a.q, b.p), a.p), slam::qnorm(slam::qmul(a.q, b.q))};
 }
 
-World::World() : ring_path_(path_of("PIMAX_ANCHOR_HEAD_FILE", "pimax-anchor.head")),
-                 offset_path_(path_of("PIMAX_ANCHOR_FILE", "pimax-anchor.offset")) {
+World::World() : ring_path_(path_of("PIMAX_ANCHOR_HEAD_FILE", "anchor.head")),
+                 offset_path_(path_of("PIMAX_ANCHOR_FILE", "anchor.offset")) {
     // When the floor is carried by the anchor (apply_vertical_), hold it: placed at once, NO glide (step() snaps y),
     // changed only when a new offset is written (setup / the long-press recenter), never chased live so crouching
     // cannot move it. Default OFF: today the chaperone's universe carries the floor (its standing translation y), so

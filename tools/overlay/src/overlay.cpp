@@ -12,13 +12,15 @@
 #include <openvr.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -26,7 +28,7 @@ namespace pibridge::overlay {
 
 namespace {
 
-constexpr const char* kAppKey = "pibridge.dashboard";
+constexpr const char* kAppKey = "pibridge.dashboard"; // the SteamVR application (manifest) key
 constexpr const char* kName = "PiBridge";
 
 using InitInternal2Fn = std::uint32_t (*)(vr::EVRInitError*, vr::EVRApplicationType, const char*);
@@ -131,10 +133,14 @@ void writeRequest(const std::string& line) {
     std::filesystem::rename(tmp, path, ec);
 }
 
-// A pibridge-record process is actually running. The capture control file can be left `active 1` by a recorder that
-// died with SteamVR, so the overlay also checks the process: the button follows the app's real recording state instead
-// of a stale file (it no longer sticks on STOP after a crash + restart).
-bool recorderAlive() {
+// What the processes say: a pibridge-record is alive, an in-headset room setup (`pibridge-roomsetup --map`) is alive.
+// One /proc pass for both.
+struct ProcState {
+    bool recorder = false;
+    bool roomSetup = false;
+};
+ProcState scanProcs() {
+    ProcState s;
     std::error_code ec;
     for (const auto& e : std::filesystem::directory_iterator("/proc", ec)) {
         const std::string name = e.path().filename().string();
@@ -142,93 +148,115 @@ bool recorderAlive() {
             !std::all_of(name.begin(), name.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; })) {
             continue; // not a pid directory
         }
-        std::ifstream f(e.path() / "comm");
         std::string comm;
-        if (std::getline(f, comm) && comm == "pibridge-record") { // comm is 15 chars, so the mirror counts too
-            return true;
+        {
+            std::ifstream f(e.path() / "comm");
+            std::getline(f, comm);
+        }
+        if (comm == "pibridge-record") { // comm is 15 chars, so the mirror counts too
+            s.recorder = true;
+        } else if (comm == "pibridge-roomse") { // pibridge-roomsetup, cut to 15: look at its arguments
+            std::ifstream f(e.path() / "cmdline", std::ios::binary);
+            const std::string cmd((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            s.roomSetup = s.roomSetup || isRoomSetupCmdline(cmd);
         }
     }
-    return false;
+    return s;
 }
 
-// True while a recording is really running: the capture control file (pibridge_record_capture_control.h) says active
-// AND a pibridge-record process is alive. A missing file, `active 0`, or a dead recorder all read as not recording.
-bool recordingActive() {
+// The real state the buttons follow. Recording = the capture control file (pibridge_record_capture_control.h) says
+// active AND a pibridge-record process is alive: the file can be left `active 1` by a recorder that died with SteamVR,
+// so the button never sticks on STOP after a crash + restart. Room setup = a `pibridge-roomsetup --map` is alive, however
+// it was started (the overlay, the app's Dashboard or Room page).
+TabState readState() {
+    const ProcState p = scanProcs();
     std::ifstream f(reclayer::captureControlPath());
-    std::string line;
-    bool active = false;
-    while (std::getline(f, line)) {
-        std::istringstream is(line);
-        std::string key;
-        if ((is >> key) && key == "active") {
-            int v = 0;
-            if (is >> v) {
-                active = v != 0;
-            }
-        }
-    }
-    return active && recorderAlive();
+    const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    TabState s;
+    s.recording = captureActive(text) && p.recorder;
+    s.roomSetupRunning = p.roomSetup;
+    return s;
 }
 
-// The small panel: a dashboard overlay with the RECORDING rows and the ROOM buttons, uploaded ONCE and re-uploaded only
-// when the hovered target, the selection or the recording state changes. No app-window embed, no per-frame upload.
+// Our three buttons fit inline in the SteamVR dashboard bar: raise dashboard/maxInlineTabs (default 2, which folds the
+// rest into a "N more" button) once, if it is lower. A user setting in steamvr.vrsettings; never lowered.
+void ensureInlineTabs(Client& c) {
+    auto* settings = c.iface<vr::IVRSettings>(vr::IVRSettings_Version);
+    if (settings == nullptr) {
+        return;
+    }
+    vr::EVRSettingsError e = vr::VRSettingsError_None;
+    const std::int32_t now = settings->GetInt32("dashboard", "maxInlineTabs", &e);
+    const int want = inlineTabsToSet(e == vr::VRSettingsError_None ? now : 0);
+    if (want > 0) {
+        settings->SetInt32("dashboard", "maxInlineTabs", want, &e);
+        std::fprintf(stderr, "pibridge-overlay: SteamVR dashboard/maxInlineTabs %d -> %d (so the PiBridge buttons show "
+                             "inline in the dashboard bar)\n", static_cast<int>(now), want);
+    }
+}
+
+using Clock = std::chrono::steady_clock;
+
+// The three dashboard overlays -- Room Setup, Quick Room Setup, Record Video -- each a button in the SteamVR dashboard
+// bar (its drawn icon + its name) that opens one big button. A page / an icon is uploaded when created and again only
+// when what it shows changes (hover, the real state). No app-window embed, no per-frame upload.
 class Launcher {
 public:
     Launcher(vr::IVROverlay* ov, const Options& o) : ov_(ov), o_(o) {}
 
     bool create() {
-        const vr::EVROverlayError e = ov_->CreateDashboardOverlay(kAppKey, kName, &main_, &thumb_);
-        if (e != vr::VROverlayError_None) {
-            err_ = std::string("CreateDashboardOverlay: ") + ov_->GetOverlayErrorNameFromEnum(e);
-            return false;
+        state_ = readState(); // reflect a recording / a room setup already running
+        for (std::size_t i = 0; i < kTabs.size(); i++) {
+            Page& pg = pages_[i];
+            pg.tab = kTabs[i];
+            pg.title = tabTitle(pg.tab, state_);
+            const vr::EVROverlayError e = ov_->CreateDashboardOverlay(tabKey(pg.tab), pg.title.c_str(), &pg.main, &pg.thumb);
+            if (e != vr::VROverlayError_None) {
+                err_ = std::string("CreateDashboardOverlay ") + tabKey(pg.tab) + ": " + ov_->GetOverlayErrorNameFromEnum(e);
+                return false;
+            }
+            ov_->SetOverlayWidthInMeters(pg.main, static_cast<float>(o_.width)); // small, fixed (~0.6 m)
+            ov_->SetOverlayInputMethod(pg.main, vr::VROverlayInputMethod_Mouse);
+            const vr::HmdVector2_t scale{{static_cast<float>(kPanelW), static_cast<float>(kPanelH)}};
+            ov_->SetOverlayMouseScale(pg.main, &scale);
+            redraw(pg);  // the one page upload
+            reicon(pg);  // the one icon upload
         }
-        if (!o_.icon.empty() && std::filesystem::exists(o_.icon)) {
-            ov_->SetOverlayFromFile(thumb_, o_.icon.c_str()); // the dashboard tab icon
-        }
-        ov_->SetOverlayWidthInMeters(main_, static_cast<float>(o_.width)); // small, fixed (~0.6 m)
-        ov_->SetOverlayInputMethod(main_, vr::VROverlayInputMethod_Mouse);
-        const vr::HmdVector2_t scale{{static_cast<float>(kPanelW), static_cast<float>(kPanelH)}};
-        ov_->SetOverlayMouseScale(main_, &scale);
-        syncState(); // reflect any recording already running
-        redraw();    // the one upload
+        nextSync_ = Clock::now();
         return true;
     }
 
     /// Returns false on VREvent_Quit (SteamVR going down: exit; the app restarts us).
     bool poll() {
-        if (syncState()) {
-            redraw();
-        }
-        vr::VREvent_t e{};
-        while (ov_->PollNextOverlayEvent(main_, &e, sizeof(e))) {
-            switch (e.eventType) {
-            case vr::VREvent_MouseMove: {
-                const Hit b = hitTest(e.data.mouse.x, e.data.mouse.y);
-                if (!(b == hover_)) {
-                    hover_ = b;
-                    redraw(); // only on a hover change
-                }
-                break;
-            }
-            case vr::VREvent_MouseButtonUp:
-                if (e.data.mouse.button == vr::VRMouseButton_Left) {
-                    const Hit h = hitTest(e.data.mouse.x, e.data.mouse.y);
-                    const std::string req = requestFor(h, recording_);
-                    if (!req.empty()) {
-                        writeRequest(req);
+        sync();
+        for (Page& pg : pages_) {
+            vr::VREvent_t e{};
+            while (ov_->PollNextOverlayEvent(pg.main, &e, sizeof(e))) {
+                switch (e.eventType) {
+                case vr::VREvent_MouseMove: {
+                    const bool hot = hitButton(e.data.mouse.x, e.data.mouse.y);
+                    if (hot != pg.hot) {
+                        pg.hot = hot;
+                        redraw(pg); // only on a hover change
                     }
+                    break;
                 }
-                break;
-            case vr::VREvent_FocusLeave:
-                if (hover_.kind != Hit::Kind::None) {
-                    hover_ = Hit{};
-                    redraw();
+                case vr::VREvent_MouseButtonUp:
+                    if (e.data.mouse.button == vr::VRMouseButton_Left && hitButton(e.data.mouse.x, e.data.mouse.y)) {
+                        click(pg.tab);
+                    }
+                    break;
+                case vr::VREvent_FocusLeave:
+                    if (pg.hot) {
+                        pg.hot = false;
+                        redraw(pg);
+                    }
+                    break;
+                case vr::VREvent_Quit:
+                    return false;
+                default:
+                    break;
                 }
-                break;
-            case vr::VREvent_Quit:
-                return false;
-            default:
-                break;
             }
         }
         return true;
@@ -237,28 +265,91 @@ public:
     const std::string& error() const { return err_; }
 
 private:
-    void redraw() {
-        rgba_ = drawPanel(recording_, hover_);
-        ov_->SetOverlayRaw(main_, rgba_.data(), kPanelW, kPanelH, 4);
+    struct Page {
+        Tab tab = Tab::Room;
+        vr::VROverlayHandle_t main = vr::k_ulOverlayHandleInvalid;
+        vr::VROverlayHandle_t thumb = vr::k_ulOverlayHandleInvalid;
+        bool hot = false;
+        std::string title;              // the name SteamVR shows under the icon
+        std::vector<std::uint8_t> rgba; // kept alive for SetOverlayRaw
+        std::vector<std::uint8_t> icon;
+    };
+
+    // A click on a page's big button: write the request (the app launches the setup / starts or stops the recording
+    // with its own machinery) and hold the button as STARTING... until the real state follows or a few seconds pass,
+    // so a double click never sends two.
+    void click(Tab t) {
+        const std::string req = requestFor(t, state_);
+        if (req.empty()) {
+            return; // disabled: a room setup runs (or was just asked for), or a record request is on its way
+        }
+        writeRequest(req);
+        TabState s = state_;
+        if (t == Tab::Record) {
+            s.recordPending = true;
+            recordSince_ = Clock::now();
+            recordWas_ = state_.recording;
+        } else {
+            s.roomPending = true;
+            roomSince_ = Clock::now();
+        }
+        apply(s);
     }
 
-    // Follow the app's real recording state (a live pibridge-record + an active control file). Returns true when it
-    // changed (so the caller redraws): the button flips to STOP when a recording starts and back to START when it ends,
-    // including when a recording ends by a crash rather than a clean stop.
-    bool syncState() {
-        const bool active = recordingActive();
-        const bool changed = active != recording_;
-        recording_ = active;
-        return changed;
+    // Follow the real state (twice a second: one /proc pass). A pending request ends when its state shows up (the room
+    // setup process appears, the recording flips) or after a timeout (the app refused it: see the app window).
+    void sync() {
+        const Clock::time_point now = Clock::now();
+        if (now < nextSync_) {
+            return;
+        }
+        nextSync_ = now + std::chrono::milliseconds(500);
+        TabState s = readState();
+        s.roomPending = state_.roomPending && !s.roomSetupRunning && now - roomSince_ < std::chrono::seconds(8);
+        s.recordPending = state_.recordPending && s.recording == recordWas_ && now - recordSince_ < std::chrono::seconds(10);
+        apply(s);
+    }
+
+    // Re-upload only the pages and icons whose look changed.
+    void apply(const TabState& s) {
+        if (s == state_) {
+            return;
+        }
+        const TabState was = state_;
+        state_ = s;
+        for (Page& pg : pages_) {
+            if (drawPage(pg.tab, was, pg.hot) != drawPage(pg.tab, state_, pg.hot)) {
+                redraw(pg);
+            }
+            if (drawIcon(pg.tab, was) != drawIcon(pg.tab, state_)) {
+                reicon(pg);
+            }
+            const std::string title = tabTitle(pg.tab, state_);
+            if (title != pg.title) { // "Record Video" <-> "Recording" under the icon
+                pg.title = title;
+                ov_->SetOverlayName(pg.main, pg.title.c_str());
+            }
+        }
+    }
+
+    void redraw(Page& pg) {
+        pg.rgba = drawPage(pg.tab, state_, pg.hot);
+        ov_->SetOverlayRaw(pg.main, pg.rgba.data(), kPanelW, kPanelH, 4);
+    }
+    // The dashboard bar icon (the thumbnail overlay): drawn in code so the record one shows the recording state.
+    void reicon(Page& pg) {
+        pg.icon = drawIcon(pg.tab, state_);
+        ov_->SetOverlayRaw(pg.thumb, pg.icon.data(), kIconSize, kIconSize, 4);
     }
 
     vr::IVROverlay* ov_;
     Options o_;
-    vr::VROverlayHandle_t main_ = vr::k_ulOverlayHandleInvalid;
-    vr::VROverlayHandle_t thumb_ = vr::k_ulOverlayHandleInvalid;
-    Hit hover_;
-    bool recording_ = false; // last-seen capture state, so the record button shows START or STOP
-    std::vector<std::uint8_t> rgba_;
+    std::array<Page, kTabs.size()> pages_{};
+    TabState state_;
+    Clock::time_point nextSync_{};
+    Clock::time_point roomSince_{};
+    Clock::time_point recordSince_{};
+    bool recordWas_ = false; // the recording state when the record request was sent
     std::string err_;
 };
 
@@ -354,6 +445,7 @@ int run(const Options& o, std::atomic<bool>& stop) {
             std::fprintf(stderr, "pibridge-overlay: SteamVR has no IVROverlay (%s)\n", vr::IVROverlay_Version);
             return 1;
         }
+        ensureInlineTabs(c);
         Launcher app(ov, o);
         if (!app.create()) {
             std::fprintf(stderr, "pibridge-overlay: %s\n", app.error().c_str());
@@ -363,7 +455,7 @@ int run(const Options& o, std::atomic<bool>& stop) {
         if (!ring.create()) {
             std::fprintf(stderr, "pibridge-overlay: recenter ring overlay not created (non-fatal)\n");
         }
-        std::fprintf(stderr, "pibridge-overlay: dashboard launcher up\n");
+        std::fprintf(stderr, "pibridge-overlay: dashboard buttons up (Room Setup, Quick Room Setup, Record Video)\n");
         while (!stop.load()) {
             if (!app.poll()) {
                 // SteamVR is going down: exit cleanly (no shutdown). The app restarts us, and the next process waits.

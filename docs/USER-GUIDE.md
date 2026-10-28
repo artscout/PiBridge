@@ -2,15 +2,19 @@
 
 **One app for your Pimax headset on Linux.** PiBridge wakes the headset, keeps it awake while you play, runs its eye
 tracker, switches the sound to it, and gives you one window where everything about the headset lives: the display, the
-controllers, the tracking, the room boundary, foveated rendering and recording. SteamVR is the runtime that actually
-runs your games; PiBridge is the hub around it.
+controllers, the tracking, the room boundary, foveated rendering and recording. A VR runtime actually runs your
+games; PiBridge is the hub around it. You choose the runtime, the **VR backend**, on the Dashboard:
+
+- **SteamVR**: games start through Steam and SteamVR, as on Windows. The default.
+- **Monado**: PiBridge's own OpenXR runtime. In the headset you are in **PiBridge World**, a small world with the
+  dashboard, your apps, passthrough and the settings. Over a game, the menu button opens PiBridge's dashboard.
 
 You never need the command line. Every switch, button and page described here is in the app. The one-time setup (the
 driver, the display patch, the SteamVR display driver) is in [INSTALL.md](INSTALL.md); after that, you open PiBridge,
 press **START VR**, and play.
 
 PiBridge works with the Pimax Crystal Super and with the original Pimax Crystal, each with Lighthouse tracking (base
-stations) or with the headset's own inside-out tracking.
+stations) or with the headset's own inside-out tracking. The Monado backend is for the Crystal Super.
 
 This is an unofficial community project. It is not made or supported by Pimax, and it is still young: expect rough
 edges.
@@ -23,22 +27,26 @@ Pimax Play on Windows is one program that does everything: it wakes the headset,
 pairs the controllers, sets up your room. PiBridge is that program for Linux. It talks to small background helpers that
 do the real work with the hardware:
 
-- **`pibridge-keepalived`** wakes the headset, keeps it awake while SteamVR runs, switches the panel on at your chosen
-  refresh rate, and makes the headset the default sound device. When SteamVR closes, it hands everything back and the
+- **`pibridge-keepalived`** wakes the headset, keeps it awake while VR runs, switches the panel on at your chosen
+  refresh rate, and makes the headset the default sound device. When VR closes, it hands everything back and the
   headset goes to standby (the LED turns green).
-- **`pibridge-eyed`** runs the eye tracker and feeds your gaze to SteamVR and to games.
-- **`pibridge-headtrack`** does the inside-out tracking, when you use it (see Tracking below).
+- **`pibridge-eyed`** runs the eye tracker and feeds your gaze to the runtime and to games.
+- **`pibridge-headtrack`** does the inside-out tracking on the SteamVR backend, when you use it (see Tracking below).
+  On the Monado backend the tracking runs inside PiBridge's Monado.
 
-You do not start or stop these by hand. They follow SteamVR on their own, and the app shows what they are doing.
+You do not start or stop these by hand. They follow the VR runtime (SteamVR or Monado) on their own, and the app shows
+what they are doing.
 
 ## A normal session
 
 1. Open **PiBridge** from your application menu.
-2. Press **START VR** on the Dashboard (or start a VR game from the **Apps** page or from Steam). SteamVR starts, the
-   headset wakes, the panel turns on, and the sound moves to the headset.
+2. Press **START VR** on the Dashboard (or start a VR game from the **Apps** page). The runtime starts (SteamVR, or
+   Monado and PiBridge World), the headset wakes, the panel turns on, and the sound moves to the headset.
 3. Put the headset on and play. Pair controllers, set up your room and change settings from the app whenever you like.
-4. Press **STOP VR** (or close SteamVR). A few seconds later the sound returns to your speakers and the headset goes to
-   standby.
+4. Press **STOP VR**. A few seconds later the sound returns to your speakers and the headset goes to standby.
+
+**Recenter** whenever forward is not where you look: hold the **Pimax button** on a controller (a ring fills up), or
+press **Recenter** on a dashboard in the headset. Forward becomes where you look and the centre where you stand.
 
 The Dashboard shows the whole state at a glance, and the bar along the bottom of the window always shows whether
 SteamVR is running, whether the headset screen is on and whether the eye tracker is streaming. **HELP** at the bottom
@@ -46,8 +54,8 @@ right opens this guide.
 
 ## The pages
 
-The left menu has one page per part of the headset: **DASHBOARD**, **DISPLAY**, **APPS**, **PERFORMANCE**,
-**TRACKING**, **ROOM**, **RECORDING**, **LOGS** and **ABOUT**. Here is what each one is for.
+The left menu has one page per part of the headset: **DASHBOARD**, **DISPLAY**, **APPS**, **VR HOME**,
+**PERFORMANCE**, **TRACKING**, **ROOM**, **RECORDING**, **LOGS** and **ABOUT**. Here is what each one is for.
 
 ### Dashboard
 
@@ -59,12 +67,17 @@ Across the top:
   starting) after you confirm, and starts it again. When no SteamVR is running, it offers to restart Steam.
 - **RESTART SERVICES** restarts the headset and eye-tracking helpers.
 - **RESTART HEADSET** restarts the headset helper, which wakes the headset again.
+- **OPENXR RUNTIME** chooses what OpenXR games started outside PiBridge (from Steam, for example) run on: SteamVR or
+  Monado. Games started from PiBridge's Apps page always run on the backend you chose.
+- **FIX PERMISSIONS** appears when PiBridge's Monado lacks its realtime permission (after an update of Monado). Press
+  it once and confirm the password prompt.
 
 The **Headset** card:
 
-- **START VR** starts SteamVR (and, in inside-out mode, the headset's own tracking). While VR runs the same button is a
-  red **STOP VR**. On the original Crystal, **STOP VR** also switches the headset off.
-- **ROOM SETUP** starts the room setup in the headset. It works only in inside-out mode, while SteamVR runs.
+- **START VR** starts the chosen backend: SteamVR (and, in inside-out mode, the headset's own tracking), or Monado with
+  PiBridge World. While VR runs the same button is a red **STOP VR**. On the original Crystal, **STOP VR** also
+  switches the headset off.
+- **ROOM SETUP** starts the room setup in the headset, for the chosen backend's rooms.
 - The headset's **STATE** and **SERIAL**, how long VR has been running, and the resolution.
 - **REFRESH RATE**: **72 / 90 Hz**. It takes effect the next time the headset wakes.
 - On the original Crystal: **72 / 90 / 120 Hz** instead (a running SteamVR is restarted for the change), its battery
@@ -80,7 +93,8 @@ when it is not tracked), the battery and the serial number with **COPY**. Under 
 
 - **PASSTHROUGH**: see your room through the headset cameras.
 - **STEAMVR DASHBOARD**: puts a small PiBridge tab in the SteamVR dashboard, so you can start room setup from inside
-  VR with the controller (see [OVERLAY.md](OVERLAY.md)).
+  VR with the controller (see [OVERLAY.md](OVERLAY.md)). It is off and locked while the Monado backend is chosen:
+  PiBridge's own dashboard in the headset has the same buttons there.
 - **EYE TRACKING**: the switch turns eye tracking on or off. **CALIBRATE** runs the eye tracker's own calibration in
   the headset, the way Pimax Play does it.
 - **IPD**: the distance between your eyes. Moving the slider moves the lens motors and renders with the same distance.
@@ -89,6 +103,7 @@ when it is not tracked), the battery and the serial number with **COPY**. Under 
 
 The **Tracking** card:
 
+- **VR BACKEND**: **STEAMVR** or **MONADO**. It changes only while VR is stopped. Each backend keeps its own rooms.
 - **LIGHTHOUSE / INSIDE-OUT** chooses how the headset is tracked. Switching restarts SteamVR when it is running.
 - In Lighthouse mode it lists your base stations, whether each one is seen, and **COPY SN** for each.
 - **SETTINGS** opens the tracking settings.
@@ -126,8 +141,21 @@ Your Steam games and your own programs, shown as cover tiles like a game library
 - A search box and a **VR ONLY** filter.
 - **ADD APP...** adds a program of your own: its path, arguments, working folder, environment and icon, and whether to
   use foveated rendering (quad views) for it. **EDIT** on its tile changes it later.
-- **PLAY** on a tile. If SteamVR is not running yet, PiBridge starts it first and waits until it is fully ready, then
-  launches the game. Your own apps show **STOP** while running.
+- **PLAY** on a tile. If VR is not running yet, PiBridge starts it first and waits until it is fully ready, then
+  launches the game. Your own apps show **STOP** while running. On the Monado backend Steam games show **NEEDS
+  STEAMVR** and stay off; your own OpenXR programs run on Monado. (PiBridge World's Apps page in the headset can also
+  start Steam's OpenXR games, switching the system's OpenXR runtime for them.)
+
+### VR Home
+
+What you see in the headset on the Monado backend, before and between games.
+
+- **In the headset**: whether this app's window is shown in the headset, passthrough, and the room map and recenter
+  in the headset.
+- **Background**: the sky around you, with a preview of each picture. **Room (passthrough)** shows your room through
+  the cameras, **Dusk** and **Dark grid** are built in, and the other pictures download once when you pick them.
+
+In the headset, PiBridge World has the same choice on its **World** page.
 
 ### Performance
 
@@ -169,7 +197,8 @@ tracking itself.
   (marked "For Basalt only").
 - **Cameras**: the tracking cameras' auto exposure.
 - **Controllers**: optical tracking of the controllers, the controller angle, how long a controller the cameras lost
-  keeps its place, and steadier controllers.
+  keeps its place, steadier controllers, and **HANDS FROM THE CONTROLLERS** (Monado: off by default, so games show
+  your controllers, not hands).
 - **Advanced**: extra settings for testing, the programs and files used, what a start sets, and **RESET TO
   RECOMMENDED**.
 
@@ -199,7 +228,9 @@ direction games use. **HOW ROOM SETUP WORKS** opens [ROOM-SETUP.md](ROOM-SETUP.m
   **SHOW**, **RENAME** or **DELETE**.
 
 In inside-out mode you can also set up the room in the headset with **ROOM SETUP** on the Dashboard, or from the
-PiBridge tab in the SteamVR dashboard (see [OVERLAY.md](OVERLAY.md)).
+PiBridge tab in the SteamVR dashboard (see [OVERLAY.md](OVERLAY.md)). On the Monado backend, the room setup also runs
+from PiBridge World's **Room** page and from the dashboard over a game (**Quick room setup**); it saves into the
+Monado rooms only.
 
 ### Recording
 
@@ -220,9 +251,31 @@ Record what you see in the headset to a video file.
   something needs looking into.
 - **About**: the version, the licence, what PiBridge is built on, and where its settings live.
 
+## In the headset on the Monado backend
+
+**PiBridge World** is where you are when no game runs ([world.md](world.md)).
+
+- **The menu button** shows or hides the dashboard in front of you; holding a grip brings it to where you look.
+- **Dashboard pages**: Headset, Tracking, Controllers, Room (Recenter, Room setup), **Apps** (your apps as tiles with
+  **Run** and **Edit**, a keyboard in VR for names and paths), **Quad views** (the foveated rendering settings),
+  **Recording** (start and stop, and the video settings) and **World** (the background). The dashboard over a game
+  has a Recording page too.
+- **Passthrough** shows your room through the cameras, with a small panel to come back; the menu button brings you
+  back too.
+- **Record** starts and stops a video recording.
+
+**When a game starts**, PiBridge World closes itself so the game gets all of the graphics memory. It comes back by
+itself a few seconds after the game ends.
+
+**Over a game**, the menu button opens PiBridge's dashboard: the same settings pages, **Record video**, and along the
+bottom **Record video** (**Stop recording** while it records), **Quick room setup**, **Recenter** and **Close app**
+(ends the game in front of you). While it is open, the game
+does not see your clicks. The menu button again closes it.
+
 ## Eye tracking
 
-Eye tracking drives the gaze-following foveated rendering and is available to games through SteamVR. Calibrate once
+Eye tracking drives the gaze-following foveated rendering and is available to games through the runtime (SteamVR or
+Monado). Calibrate once
 with **CALIBRATE** on the Dashboard: it runs the eye tracker's own calibration in the headset, and the headset then
 applies your calibration itself, as it does under Windows. The full setup is in [INSTALL.md](INSTALL.md).
 
@@ -236,7 +289,8 @@ Your eye profile and calibration files hold your personal eye data. They stay on
 - If a control is greyed out, its tooltip says why (for example, that it needs SteamVR running, or a tool that was not
   found). The small **?** next to a setting explains it.
 - More detail: [INSTALL.md](INSTALL.md), [TRACKING.md](TRACKING.md), [ROOM-SETUP.md](ROOM-SETUP.md),
-  [OVERLAY.md](OVERLAY.md) and [WINBRIDGE.md](WINBRIDGE.md).
+  [OVERLAY.md](OVERLAY.md), [WINBRIDGE.md](WINBRIDGE.md), [world.md](world.md), [home.md](home.md) and
+  [monado.md](monado.md).
 
 PiBridge is independent and not affiliated with Pimax. Pimax, Crystal, Crystal Super and Dream Air are trademarks of
 their owners, used here only to say which hardware PiBridge works with.

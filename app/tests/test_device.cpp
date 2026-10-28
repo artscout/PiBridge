@@ -134,12 +134,12 @@ TEST(device_view_without_steamvr_falls_back_to_the_configured_values) {
     const DeviceView v = deviceView(in);
     CHECK(v.chip.text == QStringLiteral("STEAMVR OFF"));
     const InfoRow* sn = row(v.headset, QStringLiteral("Headset SN"));
-    CHECK(sn && sn->value.isEmpty() && sn->note == QStringLiteral("Start SteamVR to read it."));
+    CHECK(sn && sn->value.isEmpty() && sn->note == QStringLiteral("Read while VR runs (START VR on the Dashboard)."));
     const InfoRow* ipd = row(v.headset, QStringLiteral("IPD"));
     CHECK(ipd->value == QStringLiteral("63.0 mm") && ipd->note.startsWith(QStringLiteral("Configured in CustomHeadsetOpenVR")));
     CHECK(row(v.headset, QStringLiteral("Measured IPD"))->value.isEmpty());
     CHECK(v.controllers.empty() && v.stations.empty());
-    CHECK(v.devicesNote.contains(QStringLiteral("Start SteamVR")));
+    CHECK(v.devicesNote.contains(QStringLiteral("START VR")));
     CHECK(row(v.rendering, QStringLiteral("Render resolution"))->value.isEmpty());
     // the fake idle state: panel off, so the configured rate
     CHECK(row(v.rendering, QStringLiteral("Refresh rate"))->note.startsWith(QStringLiteral("set in PiBridge")));

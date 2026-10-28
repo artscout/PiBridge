@@ -111,7 +111,7 @@ std::expected<void, std::string> TexPass::create(VkDevice dev, const VkPhysicalD
     const std::array<VkVertexInputAttributeDescription, 2> attrs{{{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
                                                                   {1, 0, VK_FORMAT_R32G32_SFLOAT, 12}}};
     auto vin = vk_make<VkPipelineVertexInputStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
-    if (kind == Kind::Mesh) {
+    if (kind != Kind::Sky) {
         vin.vertexBindingDescriptionCount = 1;
         vin.pVertexBindingDescriptions = &bind;
         vin.vertexAttributeDescriptionCount = static_cast<std::uint32_t>(attrs.size());
@@ -159,7 +159,7 @@ std::expected<void, std::string> TexPass::create(VkDevice dev, const VkPhysicalD
     vkDestroyShaderModule(device, vs, nullptr);
     vkDestroyShaderModule(device, fs, nullptr);
     PIBRIDGE_VK(r, "texture pipeline");
-    if (kind == Kind::Mesh) {
+    if (kind != Kind::Sky) {
         auto vb = hostBuf(device, memProps, sizeof(TexVertex) * kMaxVerts, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         if (!vb) {
             return std::unexpected(vb.error());

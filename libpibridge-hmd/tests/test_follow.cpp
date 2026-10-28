@@ -39,6 +39,13 @@ TEST(finds_a_process_by_comm) {
     std::filesystem::create_directories(root / "77");
     std::ofstream(root / "77/comm") << "a-very-long-pro\n";
     CHECK(process_running_in(root, "a-very-long-process-name"));
+    // a list: either runtime (SteamVR's vrserver or Monado's monado-service)
+    std::filesystem::create_directories(root / "88");
+    std::ofstream(root / "88/comm") << "monado-service\n";
+    CHECK(process_running_in(root, "vrserver,monado-service"));
+    CHECK(process_running_in(root, "vrserver, monado-service"));
+    CHECK(!process_running_in(root, "vrserver,vrcompositor"));
+    CHECK(!process_running_in(root, ","));
     std::filesystem::remove_all(root);
 }
 

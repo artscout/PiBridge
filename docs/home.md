@@ -1,7 +1,16 @@
 # pibridge-home: the VR home in the headset (`tools/home/`)
 
-`pibridge-home` is a small OpenXR + Vulkan program that is PiBridge's VR home in the headset (after omarchyvr's
-docs/VR-HOME.md and docs/BACKGROUNDS.md):
+`pibridge-home` is a small OpenXR + Vulkan program with three jobs in the headset:
+
+- **The dashboard over games** (`--dashboard-overlay`, the Monado backend; section "Over a game" below): PiBridge's
+  dashboard as a Monado overlay, opened with the menu button while a game runs.
+- **The passthrough window** (`--passthrough-overlay`): PiBridge World's passthrough, the room through the cameras
+  with a hole where the world's panel is.
+- **The classic VR home** (`vr_home=classic`, or when Godot is missing): the first home before PiBridge World
+  ([world.md](world.md)), after omarchyvr's docs/VR-HOME.md and docs/BACKGROUNDS.md. The rest of this page up to "Over a
+  game" describes it.
+
+The classic home shows:
 
 - **The PiBridge window** on a curved screen 1.3 m in front of you (a piece of a cylinder around where you stood, 1.5 m
   wide, its height from the window's aspect). It is the app's real main window, so the home's menu is the app: the VR
@@ -27,6 +36,8 @@ passthrough; a game started later takes the headset).
 ```
 pibridge-home [--rooms DIR] [--res-div N] [--camera SPEC]            run (the VR home page starts it)
 pibridge-home --selftest [--snapshot DIR [--panel-ppm FILE]]         checks without a runtime or GPU (and pictures)
+pibridge-home --dashboard-overlay                                    the dashboard over games (the session starts it)
+pibridge-home --passthrough-overlay                                  PiBridge World's passthrough (the world starts it)
 ```
 
 ## The PiBridge window in the headset
@@ -150,3 +161,57 @@ the session, the Vulkan drawing (the sky, the window and the passthrough passes)
 controllers (trigger, stick, grip), that a game started after it takes the headset and the home comes back after it, the
 window's text at the 2048 px cap, the pointer's clicks and scrolling in the real app, the passthrough's four cameras
 (orientation, seams, gains), and the background download from Poly Haven.
+
+## The dashboard (`tools/home/src/dash_*`)
+
+Under Monado nothing else in the headset shows settings, so the home's curved panel starts with PiBridge's own
+dashboard (1.9 m wide, a picture of 2400 x 1200 painted with QPainter, only when it changes): a top bar (the runtime,
+the room, the clock), the pages on the left, the page's rows in the middle, and a bottom bar with what the last click
+did, **PiBridge window** (the app's window as before, when the app is linked) and **Hide**. Point and pull the
+trigger to click (down and up on the same box). The **menu button** (Touch: the left menu and the right menu, which
+Touch names `system/click`; Index: B; simple / Vive: menu), a short press, hides the panel and brings the dashboard back in front of you (a long press stays the driver's
+recenter); the grip held 0.5 s brings it in front too. Without Qt or without the panel pass the home behaves as
+before (the window or the text panel).
+
+Every row has a real receiver (`dash_settings.h`); its tag says when it takes effect:
+
+| Page | Row | Receiver | When |
+|---|---|---|---|
+| Headset | IPD 58-72 mm, 0.5 mm steps | `$XDG_RUNTIME_DIR/pibridge/ipd-request` (lens motors: Monado's Pimax driver or keepalived) + `ipd_mm` (`OXR_DEBUG_IPD_MM`) | lenses now, picture after a restart |
+| Headset | Volume, 5 % steps | the headset's PipeWire output (`pactl`, a thread of its own) | now |
+| Headset | Refresh rate 72 / 90 Hz | `refresh_hz` (`PIMAX_FPS`) | after a restart |
+| Tracking | Head tracking engine Pimax / Basalt | `io_slam_engine` | after a restart |
+| Tracking | Optical controller tracking | `io_ctrl_track` | after a restart |
+| Tracking | Camera rate 50 / 60 Hz | `io_cam_fps` | after a restart |
+| Controllers | Controller angle -20..70 deg | `$XDG_RUNTIME_DIR/pimax-ctrl-angle` + `io_ctrl_angle` | now |
+| Controllers | Controllers shown: always / when held / off | `$XDG_RUNTIME_DIR/pimax-ctrl-inhand-mode` (Monado only) | now, this session |
+| Controllers | Test vibration left / right | `$XDG_RUNTIME_DIR/pimax-haptic-request` | now |
+| Recording | Record video / Stop recording; Picture (one eye / both), Frame rate 30 / 60 / 72, Quality, Resolution 1080p / 1440p / 4K, Codec H.264 / H.265, Sound, Microphone | `pibridge-record start|stop --brief`; the settings into `record.toml` next to pibridge.conf, quoted as pibridge-record writes them | the next recording |
+| Room | Room setup / Quick setup | `pibridge-roomsetup --map --room <io_room> [--eye-height M] [--quick-direct] --backend monado`, `PIBRIDGE_BACKEND=monado` (Monado only) | an OpenXR app of the same Monado: it takes the headset, the home comes back when it ends |
+
+"After a restart" means the next start of the Tracking session in PiBridge; a changed one is marked in amber.
+`--backend` is passed only when `pibridge-roomsetup --help` names it (the variable always). The status file says what
+the panel shows (`panel_shows`: dashboard | window | text | nothing).
+
+## Over a game (`--dashboard-overlay`)
+
+The Monado session starts `pibridge-home --dashboard-overlay` next to PiBridge World. It is a Monado overlay session
+(`XR_EXTX_overlay`, placement 8), hidden until the menu button is pressed, and only while a game is the main app:
+while PiBridge World is in front, the menu button is the world's.
+
+- **The panel**: the same dashboard pages as above, opened in front of you.
+- **The bottom bar**: **Record video** / **Stop recording** (the recording at hand, highlighted while it records;
+  the state is the recorder's own, checked once a second while the panel is open), **Quick room setup** (the Room page's quick setup; the dashboard closes, the setup takes the
+  headset), **Recenter** (as the Room page's: the driver turns forward to where you look, for every app, seated ones
+  too; the dashboard closes) and **Close app** (the game in front ends: SIGTERM, then SIGKILL after 3 s if it is still
+  there; its process id comes from libmonado's `mnd_root_get_client_pid`, PiBridge's fork, docs/monado.md). Close app is
+  off when the libmonado has no process ids or no game is in front. There is no Hide and no PiBridge window here.
+- **The game's inputs** are blocked while the panel is open (libmonado `mnd_root_set_client_io_blocks`), as SteamVR's
+  dashboard does, and released when it closes or the overlay ends.
+
+It also brings PiBridge World back after a game. PiBridge World closes itself while a game runs (exit code 75,
+[world.md](world.md)). When the game is gone and no app has been in front for 3 s, the overlay:
+
+- writes `$XDG_RUNTIME_DIR/pibridge/world-return`; the PiBridge app starts the world again;
+- writes `$XDG_RUNTIME_DIR/pibridge/loading` from the moment the game is gone until an app is in front again (at most
+  60 s, refreshed while waiting): `pibridge-xroverlay` shows its loading dots meanwhile ([xroverlay.md](xroverlay.md)).

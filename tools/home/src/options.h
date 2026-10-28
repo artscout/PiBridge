@@ -16,6 +16,8 @@ struct Options {
     unsigned resDiv = 1;      // --res-div N: divide the eye size
     std::string camera = "broker"; // --camera SPEC: the passthrough's frames (broker, a .pxcam, "off")
     std::string panelPpm;     // --panel-ppm FILE (with --snapshot): a picture of the app window instead of the test card
+    bool passthroughOverlay = false; // --passthrough-overlay: the cameras only, as an overlay over the app (Monado)
+    bool dashboardOverlay = false;   // --dashboard-overlay: the dashboard over a running game, on the menu button (Monado)
 };
 
 std::expected<Options, std::string> parseArgs(const std::vector<std::string>& args);

@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: MIT
-# pibridge-overlay: the PiBridge window as a SteamVR dashboard tab (docs/OVERLAY.md). It reads the app's shared frame
-# (common/pibridge_vrpanel.h), uploads it to a dashboard overlay with IVROverlay::SetOverlayRaw, and writes the
-# controller laser back as the pointer the app turns into mouse events. libopenvr_api.so is loaded with dlopen at run
-# time (the OpenVR SDK header only, app/third_party/openvr, as tools/roomsetup does); nothing is downloaded.
+# pibridge-overlay: three PiBridge buttons in the SteamVR dashboard bar -- Room Setup, Quick Room Setup, Record Video
+# (three small dashboard overlays, docs/OVERLAY.md) -- and the in-game recenter ring. A click writes a request file the
+# app acts on. libopenvr_api.so is loaded with dlopen at run time (the OpenVR SDK header only, app/third_party/openvr, as
+# tools/roomsetup does); nothing is downloaded.
 
-# The pure parts (no OpenVR, no I/O): the byte swizzle, the laser->pixel mapping, the placeholder and the manifest text.
+# The pure parts (no OpenVR, no I/O): the pages and bar icons, the hit test, the request lines, the state parsing and
+# the manifest text.
 add_library(pibridge_overlay_core STATIC src/overlay_core.cpp src/options.cpp)
 target_include_directories(pibridge_overlay_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(pibridge_overlay_core PUBLIC pibridge_common)

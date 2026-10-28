@@ -118,6 +118,7 @@ struct Hand {
     Quat eng_dfi = cam::slam::QUAT_ID;
     std::int64_t eng_last_ns = 0;
     int logged_state = -1;
+    std::uint32_t logged_buttons = 0xffffffffu; // the button bits at the last "buttons" log line (every change is logged)
     std::int64_t diag_last_ns = 0; // throttles the controller prediction diagnostic (~30 Hz)
     // the Pimax button: a long press (0.8 s) recenters (session thread)
     std::int64_t pimax_down_ns = 0;
@@ -199,6 +200,10 @@ private:
     std::uint64_t acquired_ = 0, lost_ = 0, sample_ = 0;
     bool own_marker_ = false;
     Hand hands_[2];
+    // the right controller's Menu button is held: also sent as the LEFT controller's system click, since SteamVR's
+    // Touch profile has /input/system on the left hand only (vrcompositor_bindings_touch.json binds the dashboard to
+    // the left one, the right one to nothing), so the right Menu button did nothing in SteamVR
+    std::atomic<bool> right_menu_{false};
     /// The head poses published lately (output thread only): the controllers go under the head at their sample time.
     struct HeadAt {
         std::int64_t ts = 0;

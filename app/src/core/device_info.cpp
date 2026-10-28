@@ -84,7 +84,7 @@ DeviceView deviceView(const DeviceInputs& in) {
     DeviceView v;
     const bool live = in.steamvrRunning && in.steamvr.state == VrLinkState::Connected;
     const VrDevice* hmd = live ? findHmd(in.steamvr) : nullptr;
-    const QString startVr = QStringLiteral("Start SteamVR to read it.");
+    const QString startVr = QStringLiteral("Read while VR runs (START VR on the Dashboard).");
 
     QString model = in.keepalive.model;
     if (model.isEmpty() && hmd) {
@@ -142,8 +142,8 @@ DeviceView deviceView(const DeviceInputs& in) {
     }
     if (!live) {
         v.devicesNote = in.steamvrRunning ? QStringLiteral("Connecting to SteamVR...")
-                                          : QStringLiteral("Start SteamVR to see the controllers' and base stations' "
-                                                           "serial numbers.");
+                                          : QStringLiteral("The controllers' and base stations' serial numbers show "
+                                                           "while VR runs (START VR on the Dashboard).");
     } else if (v.controllers.empty() && v.stations.empty()) {
         v.devicesNote = QStringLiteral("SteamVR sees no controllers or base stations. Turn the controllers on.");
     }

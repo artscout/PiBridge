@@ -2,10 +2,10 @@
 // The world pibridge-headtrack hands out: the room anchor and the recenter on top of the tracker's raw head pose, as
 // Monado's Pimax driver did (pimax_anchor.h, pimax_hmd.c pimax_hmd_apply_recenter). The file formats are the ones
 // libpibridge-anchor reads and writes (world.h), so pibridge-roommap and the app's RECENTER IN HEADSET work as before:
-//   - the head ring $XDG_RUNTIME_DIR/pimax-anchor.head: 16-byte header (u32 magic 0x434E4150, u32 version 1, u32 seq
+//   - the head ring $XDG_RUNTIME_DIR/pibridge/steamvr/anchor.head (the SteamVR backend's; Monado has its own): 16-byte header (u32 magic 0x434E4150, u32 version 1, u32 seq
 //     odd while writing, u32 writer pid), 128 slots of 40 bytes (u64 ts_ns, f32 pos[3], f32 quat xyzw, u32 flags bit 0
 //     position valid), the raw head poses, at most one every 3 ms; created under a temporary name and renamed in;
-//   - the offset file $XDG_RUNTIME_DIR/pimax-anchor.offset ("pimax-anchor-offset 1", "pid N", "pose px py pz qx qy qz
+//   - the offset file $XDG_RUNTIME_DIR/pibridge/steamvr/anchor.offset ("pimax-anchor-offset 1", "pid N", "pose px py pz qx qy qz
 //     qw"), deleted at start (the tracker world is new every run), re-read every 250 ms, honoured only for our pid,
 //     applied as offset * raw. The first offset of a session is placed at once, later ones glide (0.05 m/s, 2 deg/s,
 //     up to 3x while the head turns faster than 60 deg/s).

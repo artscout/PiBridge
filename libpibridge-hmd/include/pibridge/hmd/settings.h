@@ -18,8 +18,9 @@
 namespace pibridge::hmd {
 
 struct Settings {
-    /// The process whose life the daemons follow; empty = always on.
-    std::string follow = "vrserver";
+    /// The process whose life the daemons follow; empty = always on. A comma list is any of them: either VR runtime
+    /// (SteamVR's vrserver, PiBridge's Monado backend's monado-service).
+    std::string follow = "vrserver,monado-service";
     /// 72 or 90.
     int refresh_hz = 90;
     bool audio_to_headset = true;

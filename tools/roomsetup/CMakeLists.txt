@@ -4,7 +4,8 @@
 # OpenVR helper processes (universe, reload, zone settings) and the self test. Built with OpenXR when tools/xrkit is
 # (the loader, Vulkan and glslangValidator are there; else only --selftest, --list and --use). Nothing is downloaded.
 
-add_library(pibridge_roomsetup_core STATIC src/options.cpp src/host.cpp src/selftest.cpp src/recenter.cpp src/mapflow.cpp)
+add_library(pibridge_roomsetup_core STATIC src/options.cpp src/host.cpp src/selftest.cpp src/recenter.cpp src/mapflow.cpp
+            src/lhstage.cpp)
 target_include_directories(pibridge_roomsetup_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # the map flow speaks pibridge-roommap's guide files (libpibridge-roommap guide_ipc.h); the self test draws the passthrough
 # of the synthetic room (libpibridge-roommap synth.h) with the CPU reference (tools/xrkit passthrough.h)
@@ -48,7 +49,7 @@ target_link_libraries(pibridge-roomsetup PRIVATE pibridge_roomsetup_core ${CMAKE
 install(TARGETS pibridge-roomsetup RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 if(PIBRIDGE_BUILD_TESTS)
-    foreach(t options host selftest recenter mapflow passthrough)
+    foreach(t options host selftest recenter mapflow passthrough lhstage)
         add_executable(pibridge_roomsetup_test_${t} tests/test_${t}.cpp)
         target_link_libraries(pibridge_roomsetup_test_${t} PRIVATE pibridge_roomsetup_core pibridge_common)
         add_test(NAME pibridge_roomsetup_${t} COMMAND pibridge_roomsetup_test_${t})

@@ -18,6 +18,7 @@
 #include <memory>
 
 class QLabel;
+class QComboBox;
 class QPushButton;
 
 namespace pibridge::ui {
@@ -85,6 +86,9 @@ private:
     void updateMode();
     /// The original Crystal is on: it tracks itself (Lighthouse faceplate or its own inside-out), VR is SteamVR alone.
     bool crystalOn() const;
+    // the running Monado session, if any: the Monado backend's main one, else "Monado directly"
+    const IoSessionControl& monadoControl() const;
+    void updateRuntime();
     /// The tracking mode in effect: the Crystal's own while it is on, the saved setting otherwise.
     bool insideOutNow() const;
     /// What the tracking selector shows: the original Crystal's chosen mode (crystal_tracking), else insideOutNow().
@@ -105,10 +109,11 @@ private:
     MonadoStatus mndStatus_;
     QString mndService_; // the monado-service the library below was looked up for
     QString mndLibrary_;
-    QLabel* runtime_ = nullptr;
+    QComboBox* runtime_ = nullptr; // the system's active OpenXR runtime (core/openxr_runtime.h)
     std::unique_ptr<MonadoWorker> mnd_; // last: joined first, before the widgets go
     pibridge::ui::Chip* trChip_ = nullptr;
     QLabel* trMode_ = nullptr;
+    pibridge::ui::Segmented* backendSel_ = nullptr; // vr_backend (SteamVR / Monado), same as the Tracking page
     pibridge::ui::Segmented* trModeSel_ = nullptr; // head-tracking mode (Lighthouse / Inside-out), same as the Tracking page
     QPushButton* ioStart_ = nullptr;
     QPushButton* ioStop_ = nullptr;

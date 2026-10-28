@@ -6,6 +6,7 @@
 // by holding still works; triggers and the traced boundary need a panel's input, i.e. setup full needs the app).
 #include "roommap_cli.h"
 
+#include "pibridge/anchor/backend.h"
 #include "pibridge/anchor/rustx.h"
 #include "pibridge/cam/io.h"
 #include "pibridge/cam/rustfmt.h"
@@ -416,14 +417,21 @@ R<setup::RoomSetup> finish(RingGuide& gd, const std::string& dir, const std::str
         return std::unexpected(w.error());
     }
     std::printf("saved %s: %s\n", cam::path_join(dir, setup::FILE).c_str(), st.describe().c_str());
-    // SteamVR-only output (Crystal Super on Linux, SteamVR is the runtime; room-setup rework Phase 1): the room setup
-    // NEVER writes the Monado world offset. The floor/centre/forward go into SteamVR's chaperone instead
-    // (pibridge-roomsetup --vr-standing writes the standing zero pose and commits it live). `apply_offset` and `res`
-    // are kept in the signature only so the non-setup callers still compile; the setup flow is always no-offset.
+    // The commit is the backend's (anchor/backend.h; each keeps its own rooms):
+    //   SteamVR: never the world offset. The floor/centre/forward go into SteamVR's chaperone (pibridge-roomsetup
+    //            --vr-standing writes the standing zero pose and commits it live, from the saved floor plane).
+    //   Monado:  the world offset carries all of it: room_from_slam with setup_from_room and the floor shift
+    //            (write_offset's Monado branch), placed live by the Pimax driver's room anchor.
     (void)apply_offset;
-    (void)res;
-    std::printf("steamvr: the setup is saved; the floor/centre/forward go into SteamVR's chaperone, never a Monado "
-                "offset\n");
+    if (anchor::backend_from_env() == anchor::Backend::Monado) {
+        if (auto w = write_offset(dir, res, res.pid, false, false, anchor::Role::Setup); !w) {
+            return std::unexpected("the room offset could not be written: " + w.error());
+        }
+        std::printf("monado: the setup is saved and the world offset written (floor, centre, forward)\n");
+    } else {
+        std::printf("steamvr: the setup is saved; the floor/centre/forward go into SteamVR's chaperone, never a "
+                    "world offset\n");
+    }
     write_status(status_path(), "ok", name, res.pid, "Room \"" + name + "\" set up: " + st.describe());
     return st;
 }
@@ -1050,13 +1058,15 @@ R<void> cmd_setup_run(setup::SetupMode mode, Args v) {
     if (tag_holds(*pid)) {
         return std::unexpected("the AprilTag placed the world in this session: press Clear offset on the Room page first");
     }
-    // The room setup is SteamVR-chaperone-only: finish() writes no Monado world offset. The (now vestigial) offset
-    // lease must therefore NOT be able to block a user-initiated setup. Take it when it is free, but if a leftover or
-    // background holder (e.g. the relocalizer, or a stale pid) has it, just carry on — the setup still finishes to the
-    // SteamVR chaperone, and it never writes the offset, so holding the lease is not required.
+    // The offset lease: the Monado backend's setup writes the world offset at the end (finish), so it must hold it (a
+    // user action preempts a background writer). The SteamVR backend's setup never writes the offset during the
+    // setup (finish commits the chaperone), so a holder there must not block it.
     if (auto l = take_lease(*pid, anchor::Role::Setup); !l) {
-        std::printf("note: could not take the room offset lease (%s); continuing anyway (the setup writes no Monado "
-                    "offset, only the SteamVR chaperone)\n",
+        if (anchor::backend_from_env() == anchor::Backend::Monado) {
+            return std::unexpected("cannot start the room setup: " + l.error());
+        }
+        std::printf("note: could not take the room offset lease (%s); continuing anyway (the SteamVR setup commits the "
+                    "chaperone, not the offset)\n",
                     l.error().c_str());
     }
     if (*guide_o) {

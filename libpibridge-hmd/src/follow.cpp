@@ -13,6 +13,19 @@ namespace fs = std::filesystem;
 bool process_running(std::string_view name) { return process_running_in("/proc", name); }
 
 bool process_running_in(const fs::path& proc_root, std::string_view name) {
+    // several names, comma separated ("vrserver,monado-service": either VR runtime): any of them
+    if (const auto comma = name.find(','); comma != std::string_view::npos) {
+        return process_running_in(proc_root, name.substr(0, comma)) || process_running_in(proc_root, name.substr(comma + 1));
+    }
+    while (!name.empty() && name.front() == ' ') {
+        name.remove_prefix(1);
+    }
+    while (!name.empty() && name.back() == ' ') {
+        name.remove_suffix(1);
+    }
+    if (name.empty()) {
+        return false;
+    }
     // comm holds at most 15 bytes; Rust takes 15 characters (the same for the ASCII names used here)
     const std::string want(name.substr(0, std::min<std::size_t>(name.size(), 15)));
     std::error_code ec;

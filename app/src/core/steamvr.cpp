@@ -318,7 +318,7 @@ ControllersView controllersView(const SteamVrStatus& s, bool steamvrRunning) {
     switch (st) {
     case VrLinkState::NotRunning:
         v.header = {QStringLiteral("STEAMVR OFF"), ChipKind::Off};
-        v.message = QStringLiteral("Start SteamVR to see the controllers.");
+        v.message = QStringLiteral("The controllers show while VR runs (START VR on the Dashboard).");
         return v;
     case VrLinkState::NotInstalled:
         v.header = {QStringLiteral("NO STEAMVR"), ChipKind::Off};
@@ -364,7 +364,7 @@ TrackingView trackingView(const SteamVrStatus& s, bool steamvrRunning) {
     const VrLinkState st = steamvrRunning ? s.state : VrLinkState::NotRunning;
     switch (st) {
     case VrLinkState::NotRunning:
-        v.message = QStringLiteral("Start SteamVR to see the base stations.");
+        v.message = QStringLiteral("The base stations show while VR runs (START VR on the Dashboard).");
         return v;
     case VrLinkState::NotInstalled:
         v.message = QStringLiteral("SteamVR not installed: the base stations cannot be read.");

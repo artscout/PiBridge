@@ -17,6 +17,7 @@ class QPushButton;
 class QStackedWidget;
 
 namespace pibridge::app {
+class BackgroundLibrary;
 
 class VrPanelLink;
 
@@ -27,7 +28,7 @@ public:
     MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder findTool, QWidget* parent = nullptr);
 
     // Tracking: the tracking mode and the inside-out settings (pages/tracking.h).
-    enum Page { Dashboard, Apps, Performance, Tracking, Room, Logs, About, Display, Recording, PageCount };
+    enum Page { Dashboard, Apps, Performance, Tracking, Room, Logs, About, Display, Recording, VrHome, PageCount };
     void showPage(int page);
     static QString pageSlug(int page);
     QWidget* page(int page) const;
@@ -43,6 +44,7 @@ private:
 
     StateSource& source_;
     Conf conf_;
+    BackgroundLibrary* bgLibrary_ = nullptr; // the VR home backgrounds (VR Home page)
     Actions actions_;
     // the one tracking session (START TRACKING), shared by the Dashboard, the Tracking page and the Apps page
     std::unique_ptr<IoSessionControl> io_;

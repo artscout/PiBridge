@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "conf.h"
+#include "vr_backend.h"
 #include "inside_out.h"
 #include "monado_build.h"
 
@@ -87,6 +88,16 @@ struct RecPath {
 
 struct RecSetup {
     RecPath monado, cam, ctrl, basalt, slamConfig, lens, calib;
+    // The VR backend (core/vr_backend.h) and, for Monado, whether the head is the Lighthouse faceplate's (the tracking
+    // mode Lighthouse): then monado-service runs alone (the pibridge_lh builder), no cameras, SLAM or winbridge.
+    VrBackend backend = VrBackend::SteamVr;
+    bool monadoLighthouse = false;
+    QString lhStageFile;          // <runtime>/pibridge/monado/lh-stage (steamvr_lh LH_STAGE_FILE)
+    QString lhStageSaved;         // <rooms>/monado/<room>/lh-stage: copied to lhStageFile at the start
+    // The Monado backend's home in the headset: PiBridge World (world/, a Godot 4 project, docs/world.md) run by Godot,
+    // unless vr_home=classic (pibridge-home). Both "" when not found: pibridge-home then.
+    QString worldGodot;           // the Godot binary: rec_godot=, else ~/gamedev/godot/Godot_v4*_linux.x86_64, else PATH
+    QString worldDir;             // the project: <prefix>/share/pibridge/world, else the source tree's world/
     // The Pimax SLAM engine (io_slam_engine=pimax, docs/WINBRIDGE.md): the server, Monado's VIT library for it, Wine,
     // and the kit copied from Pimax Play ($XDG_DATA_HOME/pibridge/windata: dlls/ + slam/ with a device_calibration_*.xml).
     RecPath winbridge, vitBridge;

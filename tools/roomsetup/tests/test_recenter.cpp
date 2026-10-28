@@ -126,7 +126,7 @@ TEST(floor_touch_is_checked_against_the_head) {
 }
 
 TEST(recenter_options) {
-    auto o = parseArgs({"--recenter", "--recenter-out", "/r/out.txt", "--ring", "/r/ring"});
+    auto o = parseArgs({"--recenter", "--recenter-out", "/r/out.txt", "--ring", "/r/ring", "--backend", "steamvr"});
     CHECK(o && o->run == Run::Recenter && o->recenterOut == "/r/out.txt" && o->ringFile == "/r/ring");
     CHECK(!parseArgs({"--recenter"}).has_value());
     CHECK(usage().find("--recenter") != std::string::npos);

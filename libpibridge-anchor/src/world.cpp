@@ -31,9 +31,42 @@ std::string runtime_dir() {
     return "/tmp";
 }
 
+std::optional<Backend> parse_backend(std::string_view s) {
+    if (s == "steamvr") {
+        return Backend::SteamVr;
+    }
+    if (s == "monado") {
+        return Backend::Monado;
+    }
+    return std::nullopt;
+}
+
+std::string_view backend_name(Backend b) {
+    return b == Backend::Monado ? "monado" : "steamvr";
+}
+
+std::optional<Backend> backend_from_env(std::string* bad) {
+    const auto v = cam::env_os(BACKEND_ENV);
+    if (!v || v->empty()) {
+        return std::nullopt;
+    }
+    const auto b = parse_backend(*v);
+    if (!b && bad != nullptr) {
+        *bad = *v;
+    }
+    return b;
+}
+
+std::string backend_runtime_dir(Backend b) {
+    return cam::path_join(cam::path_join(runtime_dir(), "pibridge"), std::string(backend_name(b)));
+}
+
 std::string ring_path() {
     if (auto v = cam::env_os("PIMAX_ANCHOR_HEAD_FILE"); v && !v->empty()) {
         return *v;
+    }
+    if (const auto b = backend_from_env()) {
+        return cam::path_join(backend_runtime_dir(*b), "anchor.head");
     }
     return cam::path_join(runtime_dir(), "pimax-anchor.head");
 }
@@ -41,6 +74,9 @@ std::string ring_path() {
 std::string offset_path() {
     if (auto v = cam::env_os("PIMAX_ANCHOR_FILE"); v && !v->empty()) {
         return *v;
+    }
+    if (const auto b = backend_from_env()) {
+        return cam::path_join(backend_runtime_dir(*b), "anchor.offset");
     }
     return cam::path_join(runtime_dir(), "pimax-anchor.offset");
 }
@@ -295,6 +331,9 @@ class LeaseLock {
 public:
     static cam::Result<LeaseLock> take(const std::string& offset) {
         const std::string p = rs::with_file_name(offset, "omarchyvr-anchor.offset.lock");
+        if (const auto dir = cam::path_parent(offset); dir && !dir->empty()) {
+            (void)cam::create_dir_all(*dir); // the backend's runtime folder (backend.h) may not exist yet
+        }
         const int fd = ::open(p.c_str(), O_WRONLY | O_CREAT | O_CLOEXEC, 0666);
         if (fd < 0) {
             return cam::fail(cam::IoError::last_os());

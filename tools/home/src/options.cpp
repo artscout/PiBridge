@@ -17,6 +17,10 @@ std::expected<Options, std::string> parseArgs(const std::vector<std::string>& ar
         };
         if (a == "-h" || a == "--help") {
             o.help = true;
+        } else if (a == "--passthrough-overlay") {
+            o.passthroughOverlay = true;
+        } else if (a == "--dashboard-overlay") {
+            o.dashboardOverlay = true;
         } else if (a == "--selftest") {
             o.selfTest = true;
         } else if (a == "--snapshot" || a == "--rooms" || a == "--camera" || a == "--panel-ppm") {
@@ -50,13 +54,17 @@ std::expected<Options, std::string> parseArgs(const std::vector<std::string>& ar
 }
 
 std::string usage() {
-    return "pibridge-home: the VR home in the headset: the PiBridge window on a curved panel (point and pull the trigger),\n"
-           "over the room seen through the cameras or a 360-degree background (home_background in pibridge.conf), the\n"
-           "saved room and the controllers. PiBridge's Tracking session starts it with XR_RUNTIME_JSON pointing at\n"
-           "Monado (the app's Home page also starts it under SteamVR); it yields to every app started after it and\n"
-           "ends on SIGTERM or when the runtime goes away.\n"
+    return "pibridge-home: PiBridge's dashboard and home in the headset (OpenXR + Vulkan).\n"
+           "  --dashboard-overlay: the dashboard over games on the Monado backend (the menu button opens it; Quick room\n"
+           "    setup, Recenter, Close app; it brings PiBridge World back after a game). The Monado session starts it.\n"
+           "  --passthrough-overlay: PiBridge World's passthrough (the room through the cameras, a window to the world's\n"
+           "    panel). The world starts it.\n"
+           "  no mode: the classic VR home (vr_home=classic, or no Godot for PiBridge World): the PiBridge window on a\n"
+           "    curved panel over the room or a 360-degree background, the saved room and the controllers.\n"
+           "Every mode runs inside a running Monado (XR_RUNTIME_JSON); it ends on SIGTERM or when the runtime goes away.\n"
            "\n"
            "  pibridge-home [--rooms DIR] [--res-div N] [--camera SPEC]   run (OpenXR + Vulkan)\n"
+           "  pibridge-home --dashboard-overlay | --passthrough-overlay\n"
            "  pibridge-home --selftest [--snapshot DIR [--panel-ppm FILE]] checks without a runtime or GPU\n"
            "  pibridge-home --help\n";
 }

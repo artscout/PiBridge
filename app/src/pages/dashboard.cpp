@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "dashboard.h"
+#include <QSignalBlocker>
+#include <QComboBox>
+#include "core/apps_runtime.h"
+#include "core/openxr_runtime.h"
 #include "record_card.h"
 #include "sound_tests.h"
 
@@ -103,10 +107,30 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     // ---- toolbar
     auto* bar = new QHBoxLayout;
     bar->setSpacing(8);
-    auto* runtime = runtime_ = new QLabel(QStringLiteral("Runtime: SteamVR"));
-    runtime->setObjectName(QStringLiteral("dim"));
-    runtime->setStyleSheet(QStringLiteral("QLabel { border: 1px solid #3a3a43; border-radius: 2px; padding: 5px 10px; }"));
-    runtime->setToolTip(QStringLiteral("The OpenXR / OpenVR runtime games use. Only SteamVR for now."));
+    // the system's active OpenXR runtime (core/openxr_runtime.h): what every OpenXR game starts on, Steam's included
+    auto* runtime = runtime_ = new QComboBox;
+    runtime->addItem(QStringLiteral("SteamVR"), QStringLiteral("steamvr"));
+    runtime->addItem(QStringLiteral("Monado"), QStringLiteral("monado"));
+    runtime->setToolTip(QStringLiteral(
+        "The system's active OpenXR runtime (~/.config/openxr/1/active_runtime.json): what OpenXR games start on, also "
+        "from Steam. SteamVR: SteamVR's runtime. Monado: PiBridge's Monado build (start tracking with the Monado "
+        "backend first). OpenVR-only games always need SteamVR."));
+    connect(runtime, &QComboBox::activated, this, [this](int i) {
+        const RecSetup s = resolveRecSetup(conf_, RecEnv::defaults());
+        const bool monado = runtime_->itemData(i).toString() == QLatin1String("monado");
+        const QString target = monado ? monadoRuntimeJsonFor(s.monado.path) : steamVrRuntimeJsonFor(s.steamVrStartup);
+        if (target.isEmpty()) {
+            say(monado ? QStringLiteral("No Monado build with an OpenXR runtime file was found.")
+                       : QStringLiteral("SteamVR's OpenXR runtime file (steamxr_linux64.json) was not found."),
+                true);
+        } else if (auto r = setActiveRuntime(activeRuntimePath(), target); !r) {
+            say(r.error(), true);
+        } else {
+            say(QStringLiteral("OpenXR games now start on %1 (%2). Games already running keep theirs.")
+                    .arg(monado ? QStringLiteral("Monado") : QStringLiteral("SteamVR"), target));
+        }
+        updateRuntime();
+    });
     // LAUNCH STEAMVR was removed from the top bar (user 2026-10-20): the big START VR button in the headset box does it.
     auto* restartServices = pibridge::ui::toolButton(QStringLiteral("Restart services"));
     restartServices->setIcon(pibridge::ui::lineIcon(pibridge::ui::Icon::Restart, pibridge::ui::color::text));
@@ -150,6 +174,7 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
             updateFixCaps();
         });
     });
+    bar->addWidget(pibridge::ui::capsLabel(QStringLiteral("OpenXR runtime"), 12));
     bar->addWidget(runtime);
     bar->addWidget(fixCaps_);
     bar->addSpacing(12);
@@ -714,6 +739,39 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
         applyState();
     });
     tracking->header()->addWidget(trModeSel_, 0, Qt::AlignVCenter);
+    // the VR backend (core/vr_backend.h): a choice, labelled, first in the card - who runs the headset and the apps
+    backendSel_ = new pibridge::ui::Segmented({QStringLiteral("SteamVR"), QStringLiteral("Monado")});
+    backendSel_->setToolTip(QStringLiteral(
+        "SteamVR: PiBridge starts SteamVR with its head tracking (CustomHeadsetOpenVR); games start through Steam. "
+        "Monado: PiBridge's own OpenXR runtime with the Pimax driver (inside-out or Lighthouse), PiBridge's lens "
+        "profile, eye tracking and quad views. Each keeps its own rooms. Changes only while VR is stopped."));
+    connect(backendSel_, &pibridge::ui::Segmented::activated, this, [this](int i) {
+        if (io_.active() || direct_.active()) {
+            say(QStringLiteral("Stop VR first: the backend changes only between sessions."), true);
+            updateMode();
+            return;
+        }
+        const VrBackend b = i == 1 ? VrBackend::Monado : VrBackend::SteamVr;
+        if (!conf_.set(kVrBackendKey, vrBackendName(b).toStdString())) {
+            say(QStringLiteral("Could not write %1").arg(conf_.path()), true);
+            return;
+        }
+        exportVrBackend(b);
+        io_.setVariant(b == VrBackend::Monado ? IoVariant::MonadoDirect : IoVariant::SteamVr);
+        overlay_.setBlocked(b == VrBackend::Monado);
+        say(QStringLiteral("VR backend: %1.").arg(vrBackendWord(b)));
+        updateMode();
+        applyState();
+    });
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(10);
+        auto* lbl = pibridge::ui::capsLabel(QStringLiteral("VR backend"), 13);
+        row->addWidget(lbl);
+        row->addWidget(backendSel_);
+        row->addStretch(1);
+        tracking->body()->addLayout(row);
+    }
     trBaseHead_ = new QWidget; // the base stations' summary: Lighthouse only
     auto* trHead = new QHBoxLayout(trBaseHead_);
     trHead->setContentsMargins(0, 0, 0, 0);
@@ -929,7 +987,8 @@ void DashboardPage::startVr() {
                 true);
             return;
         }
-        say(QStringLiteral("Starting VR: head tracking and SteamVR..."));
+        say(io_.variant() == IoVariant::MonadoDirect ? QStringLiteral("Starting VR: Monado (head tracking in the Pimax driver)...")
+                                                     : QStringLiteral("Starting VR: head tracking and SteamVR..."));
         return;
     }
     const bool steamUp = source_.fake() || steamClientRunning();
@@ -1029,10 +1088,37 @@ void DashboardPage::updateFixCaps() {
     }
     const RecSetup s = resolveRecSetup(conf_, RecEnv::defaults());
     fixCapsPath_ = s.monado.path;
-    // only a session that still runs monado-service needs it (pibridge-headtrack does not)
-    const bool need = !s.io.headtrack && !fixCapsPath_.isEmpty() && QFileInfo::exists(fixCapsPath_) &&
+    // only a session that runs monado-service needs it: the Monado backend, or SteamVR with the old driver_monado
+    // (pibridge-headtrack does not)
+    const bool usesMonado = s.backend == VrBackend::Monado || !s.io.headtrack;
+    const bool need = usesMonado && !fixCapsPath_.isEmpty() && QFileInfo::exists(fixCapsPath_) &&
                       !fileCaps(fixCapsPath_).ok();
     fixCaps_->setVisible(need);
+}
+
+const IoSessionControl& DashboardPage::monadoControl() const {
+    // the Monado backend's main session, else "Monado directly" (Development page)
+    if (io_.variant() == IoVariant::MonadoDirect && io_.active()) {
+        return io_;
+    }
+    return direct_;
+}
+
+void DashboardPage::updateRuntime() {
+    const OpenXrRuntime r = activeRuntimeOf(activeRuntimePath());
+    const QSignalBlocker block(runtime_);
+    if (r == OpenXrRuntime::SteamVr || r == OpenXrRuntime::Monado) {
+        if (runtime_->count() > 2) {
+            runtime_->removeItem(2);
+        }
+        runtime_->setCurrentIndex(r == OpenXrRuntime::Monado ? 1 : 0);
+    } else {
+        if (runtime_->count() < 3) {
+            runtime_->addItem(QString(), QString());
+        }
+        runtime_->setItemText(2, openXrRuntimeWord(r));
+        runtime_->setCurrentIndex(2);
+    }
 }
 
 bool DashboardPage::crystalOn() const {
@@ -1063,7 +1149,9 @@ bool DashboardPage::selectedInsideOut() const {
 }
 
 bool DashboardPage::monadoSession() const {
-    return !crystalOn() && ioSettings(conf_).mode == TrackingMode::InsideOut;
+    // START VR runs PiBridge's session (io_): inside-out with SteamVR, or the Monado backend in either mode;
+    // only SteamVR with Lighthouse is a plain SteamVR launch
+    return !crystalOn() && (ioSettings(conf_).mode == TrackingMode::InsideOut || vrBackend(conf_) == VrBackend::Monado);
 }
 
 void DashboardPage::updateVrStatus() {
@@ -1083,8 +1171,12 @@ void DashboardPage::updateVrStatus() {
         line = QStringLiteral("VR not running");
         // SteamVR is a Steam app and cannot start unless the Steam client is running, so say so plainly: otherwise
         // START VR looks like it does nothing when Steam is closed.
-        if (!source_.fake() && !steamClientRunning()) {
-            line += QStringLiteral("      Start Steam first to launch SteamVR");
+        if (vrBackend(conf_) == VrBackend::Monado) {
+            // the Monado backend never starts SteamVR; say what would block its start instead
+            const RecReadiness& r = io_.readiness();
+            if (!r.ready() && !r.blocking.isEmpty()) {
+                line += QStringLiteral("      Cannot start: ") + r.blocking.first();
+            }
         }
     }
     const VrDevice* hmd = nullptr;
@@ -1106,6 +1198,10 @@ void DashboardPage::updateMode() {
     if (trModeSel_ != nullptr) {
         trModeSel_->setCurrent(selectedInsideOut() ? 1 : 0); // the chosen mode (programmatic: no activated)
     }
+    if (backendSel_ != nullptr) {
+        backendSel_->setCurrent(vrBackend(conf_) == VrBackend::Monado ? 1 : 0);
+        backendSel_->setEnabled(!io_.active() && !direct_.active());
+    }
     const bool active = io_.active();
     if (crystalOn()) {
         trMode_->setText(inside ? QStringLiteral("Mode: Inside-out, tracked by the Crystal itself (SteamVR).")
@@ -1115,9 +1211,9 @@ void DashboardPage::updateMode() {
     } else if (!inside) {
         trMode_->setText(QStringLiteral("Mode: Lighthouse (SteamVR and the base stations)."));
     } else if (active || io_.state() != RecState::Idle) {
-        trMode_->setText(QStringLiteral("Mode: Inside-out (experimental). %1").arg(io_.message()));
+        trMode_->setText(QStringLiteral("Mode: Inside-out, %1. %2").arg(vrBackendWord(vrBackend(conf_)), io_.message()));
     } else {
-        trMode_->setText(QStringLiteral("Mode: Inside-out (experimental)."));
+        trMode_->setText(QStringLiteral("Mode: Inside-out, %1.").arg(vrBackendWord(vrBackend(conf_))));
     }
     const RecReadiness& r = io_.readiness();
     const bool steamvr = source_.state().steamvrRunning;
@@ -1137,16 +1233,22 @@ void DashboardPage::updateMode() {
         ioStart_->setText(QStringLiteral("START VR"));
         ioStart_->setStyleSheet(QString()); // back to the accent (blue) style
         ioStart_->setEnabled(session ? r.ready() : true);
-        ioStart_->setToolTip(session ? (r.ready() ? QStringLiteral("Starts the camera broker, head tracking "
-                                                                  "(pibridge-headtrack) and SteamVR with the Tracking "
-                                                                  "page's settings.")
-                                                 : r.blocking.join(QLatin1Char('\n')))
+        ioStart_->setToolTip(session ? (!r.ready() ? r.blocking.join(QLatin1Char('\n'))
+                                        : io_.variant() == IoVariant::MonadoDirect
+                                            ? QStringLiteral("Starts Monado with the Pimax driver (and the camera broker "
+                                                             "and Pimax's engine for inside-out) with the Tracking page's "
+                                                             "settings.")
+                                            : QStringLiteral("Starts the camera broker, head tracking "
+                                                             "(pibridge-headtrack) and SteamVR with the Tracking "
+                                                             "page's settings."))
                                     : QStringLiteral("Launches SteamVR (the base stations track the headset)."));
     }
 
-    // the Controllers card reads Monado (libmonado) in "Monado directly" mode, SteamVR otherwise
-    const bool monado = direct_.active();
-    runtime_->setText(monado ? QStringLiteral("Runtime: Monado") : QStringLiteral("Runtime: SteamVR"));
+    // the Controllers card reads Monado (libmonado) while a Monado session runs (the Monado backend's or "Monado
+    // directly"), SteamVR otherwise
+    const IoSessionControl& mc = monadoControl();
+    const bool monado = mc.active();
+    updateRuntime();
     if (monado && !mnd_) {
         mnd_ = std::make_unique<MonadoWorker>(
             source_.fake() ? [] {
@@ -1163,13 +1265,13 @@ void DashboardPage::updateMode() {
             });
     }
     if (mnd_) {
-        const QString svc = direct_.setup().monado.path;
+        const QString svc = mc.setup().monado.path;
         if (svc != mndService_) {
             mndService_ = svc; // looked up again only when the program changes (this runs at every session tick)
             mndLibrary_ = source_.fake() ? QStringLiteral("/fake/monado/libmonado.so") : libmonadoFor(svc);
         }
         MonadoTarget t;
-        t.wanted = monado && direct_.state() == RecState::Recording;
+        t.wanted = monado && mc.state() == RecState::Recording;
         t.library = mndLibrary_;
         t.socketPath = source_.fake() ? QString() : monadoSocketPath(RecEnv::defaults().runtimeDir);
         mnd_->setTarget(t);
@@ -1205,7 +1307,9 @@ void DashboardPage::updateOverlay() {
         return;
     }
     const OverlayStatus s = overlay_.status(source_.state().steamvrRunning);
-    dashOverlay_->setCheckedQuiet(overlay_.wanted());
+    // the Monado backend: the SteamVR panel is off and locked (its own dashboard in the headset does the same job)
+    dashOverlay_->setEnabled(!overlay_.blocked());
+    dashOverlay_->setCheckedQuiet(overlay_.wanted() && !overlay_.blocked());
     dashOverlay_->setToolTip(s.words.isEmpty() ? dashOverlay_->toolTip().section(QStringLiteral("\n\n"), 0, 0)
                                                : dashOverlay_->toolTip().section(QStringLiteral("\n\n"), 0, 0) +
                                                      QStringLiteral("\n\n") + s.words);
@@ -1285,7 +1389,7 @@ void DashboardPage::applyState() {
             }
         }
     }
-    const bool present = (k.running && k.headsetPresent) || k.crystalPresent || hmd != nullptr || direct_.active();
+    const bool present = (k.running && k.headsetPresent) || k.crystalPresent || hmd != nullptr || monadoControl().active();
     // the original Crystal: SteamVR shows its Lighthouse module ("REF-HMD"), keepalived knows the headset
     const QString model = k.crystalPresent                               ? QStringLiteral("Pimax Crystal")
                           : (k.running && !k.model.isEmpty())             ? k.model
@@ -1303,7 +1407,8 @@ void DashboardPage::applyState() {
     hsChip_->set(hmd != nullptr ? ChipText{QStringLiteral("SCREEN ON"), ChipKind::Info} : headsetChip(k));
     hsHint_->setText(headsetHint(k, s.steamvrRunning));
     // "Monado directly" owns the headset: keepalived follows vrserver and only waits, so say what Monado does
-    const MonadoHeadsetWords mw = direct_.active() ? monadoHeadsetWords(direct_.state(), direct_.message()) : MonadoHeadsetWords{};
+    const IoSessionControl& hc = monadoControl();
+    const MonadoHeadsetWords mw = hc.active() ? monadoHeadsetWords(hc.state(), hc.message()) : MonadoHeadsetWords{};
     if (!mw.state.isEmpty()) {
         hsHint_->setText(mw.hint);
     }
@@ -1337,14 +1442,20 @@ void DashboardPage::applyState() {
     // Room setup and the sound tests need a live SteamVR session; grey them out until it runs. Room setup builds the
     // inside-out room map: in Lighthouse mode SteamVR's own Room Setup does that job (user 2026-10-22).
     const bool roomInside = insideOutNow();
-    roomBtn_->setEnabled(s.steamvrRunning && roomInside);
-    roomBtn_->setToolTip(roomInside ? QStringLiteral("Room setup in the headset (floor, boundary, room map).")
-                                    : QStringLiteral("Lighthouse: SteamVR's own Room Setup sets up the room."));
+    // the room setup needs the running session of the backend: SteamVR (inside-out), or Monado (either mode)
+    const bool monadoBackend = vrBackend(conf_) == VrBackend::Monado;
+    roomBtn_->setEnabled(monadoBackend ? monadoControl().active() : s.steamvrRunning && roomInside);
+    roomBtn_->setToolTip(monadoBackend ? QStringLiteral("Room setup in the headset for Monado (its own rooms).")
+                         : roomInside  ? QStringLiteral("Room setup in the headset (floor, boundary, room map).")
+                                       : QStringLiteral("Lighthouse: SteamVR's own Room Setup sets up the room."));
     if (soundPanel_ != nullptr) {
         soundPanel_->setVrRunning(s.steamvrRunning);
     }
     updateOverlay(); // SteamVR up/down changes the launcher's status words
-    const ControllersView cv = monadoMode_ ? monadoControllersView(mndStatus_) : controllersView(s.steamvr, s.steamvrRunning);
+    // the Monado backend shows Monado's controllers (MONADO OFF until its session runs), SteamVR's otherwise
+    const ControllersView cv = monadoMode_                              ? monadoControllersView(mndStatus_)
+                               : vrBackend(conf_) == VrBackend::Monado ? monadoControllersView(MonadoStatus{})
+                                                                        : controllersView(s.steamvr, s.steamvrRunning);
     ctrlChip_->set(cv.header);
     const bool connected = monadoMode_ ? mndStatus_.state == MndLinkState::Connected
                                        : s.steamvrRunning && s.steamvr.state == VrLinkState::Connected;
@@ -1430,7 +1541,7 @@ void DashboardPage::applyState() {
     // base stations only in Lighthouse mode
     const bool lighthouse = !insideOutNow();
     trBaseHead_->setVisible(lighthouse);
-    trText_->setVisible(lighthouse && !trText_->text().isEmpty()); // "Start SteamVR to see the base stations"
+    trText_->setVisible(lighthouse && !trText_->text().isEmpty()); // "The base stations show while VR runs"
     trStations_->setVisible(lighthouse && !tv.stations.empty());
     eyeChip_->set(eyeChip(s.eyed));
     eyeLine_->setText(eyeLine(s.eyed) +

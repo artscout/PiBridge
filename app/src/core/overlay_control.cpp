@@ -2,6 +2,7 @@
 #include "overlay_control.h"
 
 #include "conf.h"
+#include "vr_backend.h"
 #include "pibridge_status.h"
 
 #include <QByteArray>
@@ -17,7 +18,7 @@ OverlayStatus overlayStatusWords(bool wanted, bool processRunning, bool steamvrR
     OverlayStatus s;
     if (!wanted) {
         s.run = OverlayRun::Off;
-        s.words = QStringLiteral("Off: no PiBridge tab in the SteamVR dashboard.");
+        s.words = QStringLiteral("Off: no PiBridge buttons in the SteamVR dashboard.");
         return s;
     }
     if (!processRunning) {
@@ -28,12 +29,12 @@ OverlayStatus overlayStatusWords(bool wanted, bool processRunning, bool steamvrR
     }
     if (!steamvrRunning) {
         s.run = OverlayRun::WaitingForSteamVr;
-        s.words = QStringLiteral("Waiting for SteamVR. The tab appears in the dashboard when SteamVR starts.");
+        s.words = QStringLiteral("Waiting for SteamVR. The buttons appear in the dashboard when SteamVR starts.");
         return s;
     }
     s.run = OverlayRun::Running;
-    s.words = QStringLiteral("Running: a PiBridge tab is in the SteamVR dashboard. Point at it with the controller to "
-                             "set up the room or start/stop a recording.");
+    s.words = QStringLiteral("Running: Room Setup, Quick Room Setup and Record Video are buttons in the SteamVR dashboard "
+                             "bar. Point at one with the controller to set up the room or start/stop a recording.");
     return s;
 }
 
@@ -98,7 +99,21 @@ OverlayControl::OverlayControl(Conf& conf, bool fake, QObject* parent) : QObject
     if (QCoreApplication::instance() != nullptr) {
         requestTimer_.start(); // needs the app's event loop (tests construct us without one)
     }
+    blocked_ = vrBackend(conf_) == VrBackend::Monado;
     follow();
+}
+
+void OverlayControl::setBlocked(bool blocked) {
+    if (blocked == blocked_) {
+        return;
+    }
+    blocked_ = blocked;
+    if (blocked_) {
+        stop();
+    } else {
+        follow();
+    }
+    emit changed();
 }
 
 OverlayControl::~OverlayControl() { stop(); }
@@ -145,6 +160,12 @@ bool OverlayControl::running() const {
 }
 
 OverlayStatus OverlayControl::status(bool steamvrRunning) const {
+    if (blocked_) {
+        OverlayStatus s;
+        s.words = QStringLiteral("SteamVR backend only: on the Monado backend, PiBridge's own dashboard in the headset "
+                                 "(the menu button) has the same buttons.");
+        return s;
+    }
     return overlayStatusWords(wanted(), running(), steamvrRunning, lastError_);
 }
 
@@ -166,7 +187,7 @@ void OverlayControl::follow() {
 }
 
 void OverlayControl::start() {
-    if (running()) {
+    if (running() || blocked_) {
         return;
     }
     lastError_.clear();

@@ -23,6 +23,11 @@ tests faithfully; do not redesign what the Rust code already gets right (timings
 | `tools/roomsetup/` | `pibridge-roomsetup`: the OpenXR + Vulkan in-headset room setup, its OpenVR helper processes, `--selftest` | ZoneTweak `xr.go`, `main.go` |
 | `tools/xrkit/` | `pibridge_xrkit`: the OpenXR + Vulkan plumbing shared by the in-headset tools (session, swapchains, the scene pipelines and shaders); `pibridge::xrkit::`, doc `docs/home.md` | moved out of `tools/roomsetup` |
 | `tools/home/` | `pibridge-home`: the VR home scene in the headset (VR home page), `--selftest`; `pibridge::home::`, doc `docs/home.md` | new |
+| `tools/xroverlay/` | `pibridge-xroverlay`: the Monado backend's overlay over every app (the recenter ring, the loading dots); doc `docs/xroverlay.md` | new |
+| `quadviews/` | the quad views OpenXR API layer (formerly the separate qv-vulkan project); its settings are the app's Performance page and PiBridge World's Quad views page | `~/gamedev/artscout-qv-vulkan-linux` |
+| `world/` | PiBridge World, the Monado backend's home in the headset: a Godot 4 project, GDScript only, no imported assets; doc `docs/world.md` | new |
+| `monado-abi/` | `libpibridge_pimax.a`, the C ABI the Monado fork's Pimax driver links (instead of omarchyvr's Rust archives); doc `docs/monado-abi.md` | omarchyvr's Pimax crates |
+| `third_party/monado/` | PiBridge's Monado fork (plain files; its git history is kept outside the tree), built on its own; doc `docs/monado.md`. Its files keep Monado's style and licence (BSL-1.0), not these conventions | Monado + omarchyvr's fork |
 | `app/` | Qt 6 app, Pimax EVO layout | new; quad views page from `~/gamedev/artscout-qv-vulkan-linux/gui` + `layer/src/settings.*`, `fovmath.*` |
 | `patches/`, `udev/` | setup files for the Crystal Super (CustomHeadsetOpenVR and NVIDIA patches, EDID and driver install scripts, WirePlumber rule) and our udev rule; see `patches/README.md` | copies from omarchyvr `linux/crystal-super/`, `patches/nvidia/` (as patch sets per GPU generation and driver version) |
 

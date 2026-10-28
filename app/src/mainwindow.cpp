@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include "mainwindow.h"
+#include "backgrounds.h"
+#include "core/vr_backgrounds.h"
+#include "pages/vrhome.h"
+
+#include "core/vr_backend.h"
 
 #include <algorithm>
 
@@ -126,6 +131,7 @@ MainWindow::MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder 
     navButton(QStringLiteral("Dashboard"), pibridge::ui::Icon::Dashboard, Dashboard);
     navButton(QStringLiteral("Display"), pibridge::ui::Icon::Dashboard, Display);
     navButtonIcon(QStringLiteral("Apps"), appsNavIcon(pibridge::ui::color::dim, Qt::white), Apps);
+    navButton(QStringLiteral("VR Home"), pibridge::ui::Icon::Dashboard, VrHome);
     nv->addWidget(navSep());
     navButton(QStringLiteral("Performance"), pibridge::ui::Icon::Performance, Performance);
     navButton(QStringLiteral("Tracking"), pibridge::ui::Icon::Tracking, Tracking);
@@ -148,7 +154,12 @@ MainWindow::MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder 
     const auto deps = [&](IoVariant v) {
         return source_.fake() ? IoSessionControl::fakeDeps(v, conf_, links) : IoSessionControl::realDeps(v, conf_, links);
     };
+    // the VR backend (core/vr_backend.h): exported for every tool PiBridge starts; the main session (START TRACKING)
+    // is that backend's (the Tracking page changes both together)
+    const VrBackend backend = vrBackend(conf_);
+    exportVrBackend(backend);
     io_ = std::make_unique<IoSessionControl>(deps(IoVariant::SteamVr));
+    io_->setVariant(backend == VrBackend::Monado ? IoVariant::MonadoDirect : IoVariant::SteamVr);
     direct_ = std::make_unique<IoSessionControl>(deps(IoVariant::MonadoDirect));
     // one session at a time: each blocks the other (and the recorder blocks both)
     connect(io_.get(), &IoSessionControl::changed, direct_.get(), [this] {
@@ -197,6 +208,15 @@ MainWindow::MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder 
     stack_->addWidget(new AboutPage);
     stack_->addWidget(new DisplayPage(source_, conf_, actions_));      // index = Display
     stack_->addWidget(new RecordingPage(source_, *direct_, conf_));    // index = Recording
+    // the VR home's switches and the backgrounds (thumbnails, download, choice; shared with PiBridge World)
+    bgLibrary_ = new BackgroundLibrary(QString::fromStdString(pibridge::home::bg::libraryDir().string()), source_.fake(), this);
+    auto* vrHome = new VrHomePage(source_, conf_, runner, findTool, *bgLibrary_);
+    connect(vrHome, &VrHomePage::roomAction, roomPage, [roomPage](const QString& which) {
+        if (which == QLatin1String("map")) {
+            roomPage->launchSetup();
+        }
+    });
+    stack_->addWidget(vrHome);                                          // index = VrHome
     if (!source_.fake()) {
         // shows this window in the headset (the SteamVR-panel embed; VR home was dropped, user 2026-10-20)
         vrPanel_ = new VrPanelLink(this, this);
@@ -268,7 +288,7 @@ QWidget* MainWindow::page(int p) const {
 
 void MainWindow::applyState() {
     const AppState& s = source_.state();
-    sbSteam_->setText(s.steamvrRunning ? QStringLiteral("SteamVR running") : QStringLiteral("SteamVR not running"));
+    sbSteam_->setText(vrRuntimeWords(s));
     const ChipText h = headsetChip(s.keepalive);
     sbHeadset_->setText(QStringLiteral("Headset: %1").arg(s.keepalive.running ? h.text.toLower()
                                                                                : QStringLiteral("service not running")));

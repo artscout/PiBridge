@@ -220,4 +220,32 @@ TEST(recenter_puts_the_head_at_the_origin_looking_forward) {
     }
 }
 
+TEST(backend_names_and_paths) {
+    using namespace pibridge::anchor;
+    CHECK(parse_backend("steamvr") == Backend::SteamVr && parse_backend("monado") == Backend::Monado);
+    CHECK(!parse_backend("SteamVR") && !parse_backend("") && !parse_backend("both"));
+    CHECK(backend_name(Backend::SteamVr) == "steamvr" && backend_name(Backend::Monado) == "monado");
+    ::setenv("XDG_RUNTIME_DIR", "/run/x", 1);
+    ::unsetenv("PIMAX_ANCHOR_FILE");
+    ::unsetenv("PIMAX_ANCHOR_HEAD_FILE");
+    ::unsetenv("PIBRIDGE_BACKEND");
+    CHECK(!backend_from_env());
+    CHECK(offset_path() == "/run/x/pimax-anchor.offset" && ring_path() == "/run/x/pimax-anchor.head");
+    ::setenv("PIBRIDGE_BACKEND", "monado", 1);
+    CHECK(backend_from_env() == Backend::Monado);
+    CHECK(offset_path() == "/run/x/pibridge/monado/anchor.offset" && ring_path() == "/run/x/pibridge/monado/anchor.head");
+    ::setenv("PIBRIDGE_BACKEND", "steamvr", 1);
+    CHECK(offset_path() == "/run/x/pibridge/steamvr/anchor.offset");
+    ::setenv("PIBRIDGE_BACKEND", "nope", 1);
+    std::string bad;
+    CHECK(!backend_from_env(&bad) && bad == "nope");
+    CHECK(offset_path() == "/run/x/pimax-anchor.offset");
+    // the explicit file still wins over the backend
+    ::setenv("PIBRIDGE_BACKEND", "monado", 1);
+    ::setenv("PIMAX_ANCHOR_FILE", "/elsewhere/o", 1);
+    CHECK(offset_path() == "/elsewhere/o");
+    ::unsetenv("PIMAX_ANCHOR_FILE");
+    ::unsetenv("PIBRIDGE_BACKEND");
+}
+
 PIBRIDGE_TEST_MAIN()
