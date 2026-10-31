@@ -70,4 +70,12 @@ TEST(a_new_stage_composes_onto_the_old_one) {
     CHECK(near(h[0], 0) && near(h[1], 1.6) && near(h[2], 0));
 }
 
+TEST(base_stations_file_and_drawing) {
+    const auto st = parseBaseStations("LHB-1 1 2.5 -3 0 0 0 1\nbroken\nLHB-2 0 0 0 0 0 0 0\nLHB-3 0 2 0 0 1 0 0");
+    CHECK(st.size() == 2 && near(st[0].pos().y, 2.5) && near(st[1].axis(2).z, -1)); // LHB-2: no rotation, left out
+    pibridge::room::Batch b;
+    drawBaseStations(b, st);
+    CHECK(b.lines.size() == 2 * 2 * 14 && b.tris.empty()); // 12 edges + the front cross, per station
+}
+
 PIBRIDGE_TEST_MAIN()

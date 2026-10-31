@@ -61,7 +61,22 @@ public:
 		std::unordered_map<vr::VRInputComponentHandle_t, Vec2Components *> vec2_inputs;
 		std::unordered_map<xrt_input *, std::unique_ptr<Vec2Components>> vec2_input_to_components;
 		std::unordered_map<vr::VRInputComponentHandle_t, ControllerDevice *> skeleton_to_controller;
+		//! PiBridge: the Valve Index controllers' system/click components and their device (the right one's
+		//! goes to steamvr_lh_pibridge_hooks::right_system_button).
+		std::unordered_map<vr::VRInputComponentHandle_t, Device *> index_system_click;
 	} input;
+
+	//! PiBridge (PIBRIDGE_LH=1): the base stations, activated only for their poses (never Monado devices), written
+	//! to $XDG_RUNTIME_DIR/pibridge/monado/basestations for PiBridge World. Locked by `devices_mut`.
+	struct BaseStation
+	{
+		std::string serial;
+		xrt_pose pose = XRT_POSE_IDENTITY; //!< in the Lighthouse driver's world (the stage not applied yet)
+		bool valid{false};
+	};
+	std::unordered_map<uint32_t, BaseStation> base_stations;
+	int64_t base_stations_written_ns{0};
+	static constexpr uint32_t kBaseStationFirstIndex = 64;
 
 private:
 	Resources resources;
@@ -101,6 +116,12 @@ private:
 
 	bool
 	setup_controller(const char *serial, vr::ITrackedDeviceServerDriver *driver);
+
+	bool
+	setup_base_station(const char *serial, vr::ITrackedDeviceServerDriver *driver);
+
+	void
+	write_base_stations_locked();
 	std::vector<vr::IServerTrackedDeviceProvider *> providers;
 
 public:
@@ -112,6 +133,11 @@ public:
 	class ControllerDevice *controller[16]{nullptr};
 
 	bool in_setup{true};
+
+	//! PiBridge (PIBRIDGE_LH=1): the hands are HandSlotDevices; controllers may come after the setup.
+	bool hand_slots{false};
+	//! The HandSlotDevices not destroyed yet; the last one destroys the controllers outside the system.
+	int hand_slots_alive{0};
 	const u_logging_level log_level;
 
 	void

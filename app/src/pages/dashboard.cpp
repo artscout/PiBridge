@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "dashboard.h"
 #include <QSignalBlocker>
-#include <QComboBox>
 #include "core/apps_runtime.h"
 #include "core/openxr_runtime.h"
 #include "record_card.h"
@@ -107,28 +106,47 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     // ---- toolbar
     auto* bar = new QHBoxLayout;
     bar->setSpacing(8);
-    // the system's active OpenXR runtime (core/openxr_runtime.h): what every OpenXR game starts on, Steam's included
-    auto* runtime = runtime_ = new QComboBox;
-    runtime->addItem(QStringLiteral("SteamVR"), QStringLiteral("steamvr"));
-    runtime->addItem(QStringLiteral("Monado"), QStringLiteral("monado"));
-    runtime->setToolTip(QStringLiteral(
-        "The system's active OpenXR runtime (~/.config/openxr/1/active_runtime.json): what OpenXR games start on, also "
-        "from Steam. SteamVR: SteamVR's runtime. Monado: PiBridge's Monado build (start tracking with the Monado "
-        "backend first). OpenVR-only games always need SteamVR."));
-    connect(runtime, &QComboBox::activated, this, [this](int i) {
-        const RecSetup s = resolveRecSetup(conf_, RecEnv::defaults());
-        const bool monado = runtime_->itemData(i).toString() == QLatin1String("monado");
-        const QString target = monado ? monadoRuntimeJsonFor(s.monado.path) : steamVrRuntimeJsonFor(s.steamVrStartup);
-        if (target.isEmpty()) {
-            say(monado ? QStringLiteral("No Monado build with an OpenXR runtime file was found.")
-                       : QStringLiteral("SteamVR's OpenXR runtime file (steamxr_linux64.json) was not found."),
-                true);
-        } else if (auto r = setActiveRuntime(activeRuntimePath(), target); !r) {
-            say(r.error(), true);
-        } else {
-            say(QStringLiteral("OpenXR games now start on %1 (%2). Games already running keep theirs.")
-                    .arg(monado ? QStringLiteral("Monado") : QStringLiteral("SteamVR"), target));
+    // the VR backend (core/vr_backend.h) and, with it, the system's active OpenXR runtime (core/openxr_runtime.h):
+    // one choice - who runs the headset, and what every OpenXR game starts on (Steam's included)
+    backendSel_ = new pibridge::ui::Segmented({QStringLiteral("SteamVR"), QStringLiteral("Monado")});
+    backendSel_->setToolTip(QStringLiteral(
+        "SteamVR: PiBridge starts SteamVR with its head tracking (CustomHeadsetOpenVR); OpenXR games start on SteamVR. "
+        "Monado: PiBridge's own OpenXR runtime with the Pimax driver (inside-out or Lighthouse), PiBridge's lens "
+        "profile, eye tracking and quad views; OpenXR games start on Monado. Also points the system's OpenXR runtime "
+        "(~/.config/openxr/1/active_runtime.json) at the same one. OpenVR-only games always need SteamVR. Each keeps "
+        "its own rooms. Changes only while VR is stopped."));
+    connect(backendSel_, &pibridge::ui::Segmented::activated, this, [this](int i) {
+        if (io_.active() || direct_.active()) {
+            say(QStringLiteral("Stop VR first: the backend changes only between sessions."), true);
+            updateMode();
+            return;
         }
+        const VrBackend b = i == 1 ? VrBackend::Monado : VrBackend::SteamVr;
+        if (!conf_.set(kVrBackendKey, vrBackendName(b).toStdString())) {
+            say(QStringLiteral("Could not write %1").arg(conf_.path()), true);
+            updateMode();
+            return;
+        }
+        exportVrBackend(b);
+        io_.setVariant(b == VrBackend::Monado ? IoVariant::MonadoDirect : IoVariant::SteamVr);
+        overlay_.setBlocked(b == VrBackend::Monado);
+        const QString err = pointRuntimeAt(b);
+        say(err.isEmpty() ? QStringLiteral("VR backend: %1. OpenXR games now start on it (games already running keep "
+                                           "theirs).")
+                                .arg(vrBackendWord(b))
+                          : QStringLiteral("VR backend: %1. %2").arg(vrBackendWord(b), err),
+            !err.isEmpty());
+        updateMode();
+        applyState();
+    });
+    // shown only when the system's OpenXR runtime is not the backend's (SteamVR took it back, another tool set it)
+    runtimeFix_ = pibridge::ui::accentButton(QString());
+    runtimeFix_->setCursor(Qt::PointingHandCursor);
+    runtimeFix_->setVisible(false);
+    connect(runtimeFix_, &QPushButton::clicked, this, [this] {
+        const VrBackend b = vrBackend(conf_);
+        const QString err = pointRuntimeAt(b);
+        say(err.isEmpty() ? QStringLiteral("OpenXR games now start on %1.").arg(vrBackendWord(b)) : err, !err.isEmpty());
         updateRuntime();
     });
     // LAUNCH STEAMVR was removed from the top bar (user 2026-10-20): the big START VR button in the headset box does it.
@@ -155,7 +173,7 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
         message_->clear();
     });
     message_->setObjectName(QStringLiteral("dim"));
-    // right of Runtime: a noticeable "Fix permissions" button, shown only when monado-service lacks cap_sys_nice
+    // right of the backend: a noticeable "Fix permissions" button, shown only when monado-service lacks cap_sys_nice
     fixCaps_ = pibridge::ui::accentButton(QStringLiteral("Fix permissions"));
     fixCaps_->setIcon(pibridge::ui::lineIcon(pibridge::ui::Icon::Power, Qt::white));
     fixCaps_->setCursor(Qt::PointingHandCursor);
@@ -174,8 +192,9 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
             updateFixCaps();
         });
     });
-    bar->addWidget(pibridge::ui::capsLabel(QStringLiteral("OpenXR runtime"), 12));
-    bar->addWidget(runtime);
+    bar->addWidget(pibridge::ui::capsLabel(QStringLiteral("VR backend"), 12));
+    bar->addWidget(backendSel_);
+    bar->addWidget(runtimeFix_);
     bar->addWidget(fixCaps_);
     bar->addSpacing(12);
     bar->addWidget(message_, 1);
@@ -739,39 +758,6 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
         applyState();
     });
     tracking->header()->addWidget(trModeSel_, 0, Qt::AlignVCenter);
-    // the VR backend (core/vr_backend.h): a choice, labelled, first in the card - who runs the headset and the apps
-    backendSel_ = new pibridge::ui::Segmented({QStringLiteral("SteamVR"), QStringLiteral("Monado")});
-    backendSel_->setToolTip(QStringLiteral(
-        "SteamVR: PiBridge starts SteamVR with its head tracking (CustomHeadsetOpenVR); games start through Steam. "
-        "Monado: PiBridge's own OpenXR runtime with the Pimax driver (inside-out or Lighthouse), PiBridge's lens "
-        "profile, eye tracking and quad views. Each keeps its own rooms. Changes only while VR is stopped."));
-    connect(backendSel_, &pibridge::ui::Segmented::activated, this, [this](int i) {
-        if (io_.active() || direct_.active()) {
-            say(QStringLiteral("Stop VR first: the backend changes only between sessions."), true);
-            updateMode();
-            return;
-        }
-        const VrBackend b = i == 1 ? VrBackend::Monado : VrBackend::SteamVr;
-        if (!conf_.set(kVrBackendKey, vrBackendName(b).toStdString())) {
-            say(QStringLiteral("Could not write %1").arg(conf_.path()), true);
-            return;
-        }
-        exportVrBackend(b);
-        io_.setVariant(b == VrBackend::Monado ? IoVariant::MonadoDirect : IoVariant::SteamVr);
-        overlay_.setBlocked(b == VrBackend::Monado);
-        say(QStringLiteral("VR backend: %1.").arg(vrBackendWord(b)));
-        updateMode();
-        applyState();
-    });
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(10);
-        auto* lbl = pibridge::ui::capsLabel(QStringLiteral("VR backend"), 13);
-        row->addWidget(lbl);
-        row->addWidget(backendSel_);
-        row->addStretch(1);
-        tracking->body()->addLayout(row);
-    }
     trBaseHead_ = new QWidget; // the base stations' summary: Lighthouse only
     auto* trHead = new QHBoxLayout(trBaseHead_);
     trHead->setContentsMargins(0, 0, 0, 0);
@@ -790,6 +776,22 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
     tracking->body()->addWidget(trStations_);
     trText_ = pibridge::ui::dimLabel(QString());
     tracking->body()->addWidget(trText_);
+    // the Monado backend in the Lighthouse mode: PiBridge World draws the base stations where they stand, as SteamVR
+    // does (show_base_stations; Monado's steamvr_lh writes their poses)
+    showStations_ = new pibridge::ui::Toggle;
+    showStations_->setChecked(conf_.flag("show_base_stations", false));
+    const QString stationsTip = QStringLiteral(
+        "Draws the base stations in PiBridge World where they stand, as SteamVR does (Monado backend, Lighthouse). "
+        "Saved as show_base_stations in pibridge.conf; the world picks it up within a second.");
+    showStations_->setToolTip(stationsTip);
+    showStationsRow_ = pibridge::ui::settingRow(QStringLiteral("Show base stations in VR"), showStations_, nullptr,
+                                                false, stationsTip);
+    tracking->body()->addWidget(showStationsRow_);
+    connect(showStations_, &QAbstractButton::toggled, this, [this](bool on) {
+        if (!conf_.set("show_base_stations", on ? "on" : "off")) {
+            say(QStringLiteral("Could not write %1").arg(conf_.path()), true);
+        }
+    });
     tracking->body()->addStretch(1);
     // no mode sentence and no settings link: the mode is the selector in the header (user 2026-10-23)
     trMode_ = pibridge::ui::dimLabel(QString());
@@ -1104,21 +1106,32 @@ const IoSessionControl& DashboardPage::monadoControl() const {
     return direct_;
 }
 
-void DashboardPage::updateRuntime() {
-    const OpenXrRuntime r = activeRuntimeOf(activeRuntimePath());
-    const QSignalBlocker block(runtime_);
-    if (r == OpenXrRuntime::SteamVr || r == OpenXrRuntime::Monado) {
-        if (runtime_->count() > 2) {
-            runtime_->removeItem(2);
-        }
-        runtime_->setCurrentIndex(r == OpenXrRuntime::Monado ? 1 : 0);
-    } else {
-        if (runtime_->count() < 3) {
-            runtime_->addItem(QString(), QString());
-        }
-        runtime_->setItemText(2, openXrRuntimeWord(r));
-        runtime_->setCurrentIndex(2);
+QString DashboardPage::pointRuntimeAt(VrBackend b) {
+    const RecSetup s = resolveRecSetup(conf_, RecEnv::defaults());
+    const bool monado = b == VrBackend::Monado;
+    const QString target = monado ? monadoRuntimeJsonFor(s.monado.path) : steamVrRuntimeJsonFor(s.steamVrStartup);
+    if (target.isEmpty()) {
+        return monado ? QStringLiteral("No Monado build with an OpenXR runtime file was found: OpenXR games still "
+                                       "start on the old runtime.")
+                      : QStringLiteral("SteamVR's OpenXR runtime file (steamxr_linux64.json) was not found: OpenXR "
+                                       "games still start on the old runtime.");
     }
+    if (auto r = setActiveRuntime(activeRuntimePath(), target); !r) {
+        return r.error();
+    }
+    return {};
+}
+
+void DashboardPage::updateRuntime() {
+    // the system's OpenXR runtime follows the backend; say so when it does not (and offer to fix it)
+    const VrBackend b = vrBackend(conf_);
+    const OpenXrRuntime r = activeRuntimeOf(activeRuntimePath());
+    const bool match = r == (b == VrBackend::Monado ? OpenXrRuntime::Monado : OpenXrRuntime::SteamVr);
+    runtimeFix_->setVisible(!match && !source_.fake());
+    runtimeFix_->setText(QStringLiteral("OpenXR → %1").arg(vrBackendWord(b)));
+    runtimeFix_->setToolTip(QStringLiteral("OpenXR games now start on %1, not on the %2 backend. Points the system's "
+                                           "OpenXR runtime (~/.config/openxr/1/active_runtime.json) at %2.")
+                                .arg(openXrRuntimeWord(r), vrBackendWord(b)));
 }
 
 bool DashboardPage::crystalOn() const {
@@ -1543,6 +1556,7 @@ void DashboardPage::applyState() {
     trBaseHead_->setVisible(lighthouse);
     trText_->setVisible(lighthouse && !trText_->text().isEmpty()); // "The base stations show while VR runs"
     trStations_->setVisible(lighthouse && !tv.stations.empty());
+    showStationsRow_->setVisible(lighthouse && vrBackend(conf_) == VrBackend::Monado && !crystalOn());
     eyeChip_->set(eyeChip(s.eyed));
     eyeLine_->setText(eyeLine(s.eyed) +
                       (s.eyed.running && s.eyed.profile == QLatin1String("none")

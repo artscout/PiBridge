@@ -15,6 +15,8 @@
 
 #include "util/u_var.h"
 #include "util/u_device.h"
+#include "util/u_time.h"
+#include "os/os_time.h"
 
 #include "vive/vive_bindings.h"
 
@@ -27,6 +29,8 @@
 #include "steamvr_lh_interface.h"
 #include "device.hpp"
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
 #include <memory>
@@ -83,6 +87,10 @@ DEBUG_GET_ONCE_LOG_OPTION(lh_log, "LIGHTHOUSE_LOG", U_LOGGING_INFO)
 DEBUG_GET_ONCE_BOOL_OPTION(lh_load_slimevr, "LH_LOAD_SLIMEVR", false)
 DEBUG_GET_ONCE_NUM_OPTION(lh_discover_wait_ms, "LH_DISCOVER_WAIT_MS", 3000)
 DEBUG_GET_ONCE_FLOAT_OPTION(lh_stick_deadzone, "LH_STICK_DEADZONE", 0)
+DEBUG_GET_ONCE_BOOL_OPTION(lh_pibridge_bs, "PIBRIDGE_LH", false)
+// PiBridge: the hands as HandSlotDevices (device.hpp), so Index controllers switched on later work; 0 = upstream's
+// behaviour (the controllers found at the start are the hands, later ones are refused)
+DEBUG_GET_ONCE_BOOL_OPTION(lh_hand_slots, "PIBRIDGE_LH_HAND_SLOTS", true)
 
 static constexpr size_t MAX_CONTROLLERS = 16;
 
@@ -377,6 +385,59 @@ Context::setup_controller(const char *serial, vr::ITrackedDeviceServerDriver *dr
 	return true;
 }
 
+bool
+Context::setup_base_station(const char *serial, vr::ITrackedDeviceServerDriver *driver)
+{
+	uint32_t idx = 0;
+	{
+		std::lock_guard lk(this->devices_mut);
+		idx = kBaseStationFirstIndex + (uint32_t)this->base_stations.size();
+		this->base_stations[idx] = BaseStation{serial};
+	}
+	// as for the controllers: never call into the driver with `devices_mut` held
+	vr::EVRInitError err = driver->Activate(idx);
+	if (err != vr::VRInitError_None) {
+		CTX_WARN("Activating base station %s failed: error %u (not drawn in PiBridge World)", serial, err);
+		std::lock_guard lk(this->devices_mut);
+		this->base_stations.erase(idx);
+		return false;
+	}
+	return true;
+}
+
+void
+Context::write_base_stations_locked()
+{
+	// once a second at most: base stations stand still; the stage or the recenter may move
+	const int64_t now = os_monotonic_get_ns();
+	if (this->base_stations.empty() || now - this->base_stations_written_ns < 1000 * U_TIME_1MS_IN_NS) {
+		return;
+	}
+	this->base_stations_written_ns = now;
+	const char *rt = getenv("XDG_RUNTIME_DIR");
+	const std::string dir = std::string(rt != nullptr && *rt != '\0' ? rt : "/tmp") + "/pibridge/monado";
+	const std::string path = dir + "/basestations";
+	const std::string tmp = path + ".tmp";
+	FILE *f = fopen(tmp.c_str(), "w");
+	if (f == nullptr) {
+		return;
+	}
+	const xrt_pose stage = Device::stage();
+	for (const auto &[i, b] : this->base_stations) {
+		if (!b.valid) {
+			continue;
+		}
+		xrt_space_relation rel = XRT_SPACE_RELATION_ZERO;
+		math_pose_transform(&stage, &b.pose, &rel.pose);
+		pibridge_apply_world_offset(&rel);
+		fprintf(f, "%s %f %f %f %f %f %f %f\n", b.serial.c_str(), rel.pose.position.x, rel.pose.position.y,
+		        rel.pose.position.z, rel.pose.orientation.x, rel.pose.orientation.y, rel.pose.orientation.z,
+		        rel.pose.orientation.w);
+	}
+	fclose(f);
+	rename(tmp.c_str(), path.c_str());
+}
+
 void
 Context::wait_for_discover()
 {
@@ -416,17 +477,29 @@ Context::TrackedDeviceAdded(const char *pchDeviceSerialNumber,
                             vr::ETrackedDeviceClass eDeviceClass,
                             vr::ITrackedDeviceServerDriver *pDriver)
 {
+	// PiBridge: the base stations come after the setup window as a rule; they are no Monado devices, only poses
+	if (eDeviceClass == vr::TrackedDeviceClass_TrackingReference) {
+		CTX_INFO("Found lighthouse base station: %s", pchDeviceSerialNumber);
+		return debug_get_bool_option_lh_pibridge_bs() && setup_base_station(pchDeviceSerialNumber, pDriver);
+	}
+
 	{
 		std::lock_guard lk(this->devices_mut);
 
-		if (!this->in_setup) {
+		if (!this->in_setup && !(this->hand_slots && eDeviceClass == vr::TrackedDeviceClass_Controller)) {
 			// devices appearing after setup are not added to xrt_system_devices and would be leaked on
 			// exit
 			CTX_WARN("Cannot add device after setup; consider increasing LH_DISCOVER_WAIT_MS");
 			return false;
 		}
 
-		this->extend_discover();
+		if (this->in_setup) {
+			this->extend_discover();
+		} else {
+			// PiBridge: a controller switched on later; a hand slot takes it once it has its role (the
+			// hands' cleanup destroys it at the end)
+			CTX_INFO("Controller after the setup: %s (PiBridge hand slots)", pchDeviceSerialNumber);
+		}
 
 		// The setup below runs without `devices_mut` held, and publishes the device before the driver has
 		// finished activating it - keep discovery from ending in the middle of that.
@@ -445,10 +518,6 @@ Context::TrackedDeviceAdded(const char *pchDeviceSerialNumber,
 	case vr::TrackedDeviceClass_Controller: {
 		CTX_INFO("Found lighthouse controller: %s", pchDeviceSerialNumber);
 		added = setup_controller(pchDeviceSerialNumber, pDriver);
-		break;
-	}
-	case vr::TrackedDeviceClass_TrackingReference: {
-		CTX_INFO("Found lighthouse base station: %s", pchDeviceSerialNumber);
 		break;
 	}
 	case vr::TrackedDeviceClass_GenericTracker: {
@@ -476,13 +545,29 @@ Context::TrackedDevicePoseUpdated(uint32_t unWhichDevice, const vr::DriverPose_t
 {
 	assert(sizeof(newPose) == unPoseStructSize);
 
+	std::lock_guard lk(this->devices_mut);
+
+	// PiBridge: a base station (setup_base_station); and the file of them, now and then
+	if (auto it = this->base_stations.find(unWhichDevice); it != this->base_stations.end()) {
+		if (newPose.poseIsValid) {
+			const auto pose = [](const vr::HmdQuaternion_t &q, const double (&v)[3]) {
+				return xrt_pose{xrt_quat{(float)q.x, (float)q.y, (float)q.z, (float)q.w},
+				                xrt_vec3{(float)v[0], (float)v[1], (float)v[2]}};
+			};
+			const xrt_pose p = pose(newPose.qRotation, newPose.vecPosition);
+			const xrt_pose world = pose(newPose.qWorldFromDriverRotation, newPose.vecWorldFromDriverTranslation);
+			math_pose_transform(&world, &p, &it->second.pose);
+			math_quat_normalize(&it->second.pose.orientation);
+			it->second.valid = true;
+		}
+	}
+	write_base_stations_locked();
+
 	// Check for valid device index, allowing for the HMD plus up to MAX_CONTROLLERS controllers
 	if (unWhichDevice > MAX_CONTROLLERS)
 		return;
 
 	Device *dev = nullptr;
-
-	std::lock_guard lk(this->devices_mut);
 
 	// If unWhichDevice is 0, it refers to the HMD; otherwise, it refers to one of the controllers
 	if (unWhichDevice == 0) {
@@ -653,6 +738,9 @@ Context::create_component_common(vr::PropertyContainerHandle_t container,
 		CTX_DEBUG("creating component %s for %p", name, (void *)device);
 		vr::VRInputComponentHandle_t handle = device->new_input_handle_locked();
 		this->input.handle_to_input[handle] = input;
+		if (input->name == XRT_INPUT_INDEX_SYSTEM_CLICK) {
+			this->input.index_system_click[handle] = device;
+		}
 		*pHandle = handle;
 	}
 
@@ -692,6 +780,15 @@ Context::UpdateBooleanComponent(vr::VRInputComponentHandle_t ulComponent, bool b
 	std::lock_guard lk(this->devices_mut);
 	xrt_input *input = update_component_common_locked(ulComponent, fTimeOffset);
 	if (input) {
+		// PiBridge: the right Index controller's system button is the recenter (held), never the apps' input;
+		// the left one stays the menu
+		if (auto it = this->input.index_system_click.find(ulComponent);
+		    it != this->input.index_system_click.end() && g_pibridge_hooks.right_system_button != nullptr &&
+		    it->second->device_type == XRT_DEVICE_TYPE_RIGHT_HAND_CONTROLLER) {
+			g_pibridge_hooks.right_system_button(bNewValue);
+			input->value.boolean = false;
+			return vr::VRInputError_None;
+		}
 		input->value.boolean = bNewValue;
 	}
 	return vr::VRInputError_None;
@@ -1066,6 +1163,10 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices *xsys
 	auto ctx = Context::create(STEAM_INSTALL_DIR, steamvr, std::move(drivers));
 	if (ctx == nullptr)
 		return xrt_result::XRT_ERROR_DEVICE_CREATION_FAILED;
+	{
+		std::lock_guard lk(ctx->devices_mut);
+		ctx->hand_slots = debug_get_bool_option_lh_pibridge_bs() && debug_get_bool_option_lh_hand_slots();
+	}
 
 	U_LOG_IFL_I(level, "Lighthouse initialization complete, giving time to setup connected devices...");
 	// RunFrame needs to be called to detect controllers
@@ -1087,12 +1188,36 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices *xsys
 		}
 
 		xsysd->static_xdevs[xsysd->static_xdev_count++] = ctx->hmd;
+		ctx->hmd->in_system = true;
 	}
 
-	// Include the controllers
+	// Include the controllers; with the hand slots not the Index controllers (the hands stand for them)
+	bool hand_taken[2] = {false, false};
 	for (size_t i = 0; i < MAX_CONTROLLERS; i++) {
-		if (ctx->controller[i]) {
-			xsysd->static_xdevs[xsysd->static_xdev_count++] = ctx->controller[i];
+		ControllerDevice *c = ctx->controller[i];
+		if (c == nullptr) {
+			continue;
+		}
+		if (ctx->hand_slots && c->name == XRT_DEVICE_INDEX_CONTROLLER) {
+			continue;
+		}
+		if (c->device_type == XRT_DEVICE_TYPE_LEFT_HAND_CONTROLLER) {
+			hand_taken[XRT_HAND_LEFT] = true; // another kind of controller (a Vive wand) holds this hand
+		} else if (c->device_type == XRT_DEVICE_TYPE_RIGHT_HAND_CONTROLLER) {
+			hand_taken[XRT_HAND_RIGHT] = true;
+		}
+		xsysd->static_xdevs[xsysd->static_xdev_count++] = c;
+		c->in_system = true;
+	}
+	if (ctx->hand_slots) {
+		for (xrt_hand h : {XRT_HAND_LEFT, XRT_HAND_RIGHT}) {
+			if (hand_taken[h] || xsysd->static_xdev_count >= XRT_SYSTEM_MAX_DEVICES) {
+				continue;
+			}
+			xsysd->static_xdevs[xsysd->static_xdev_count++] = new HandSlotDevice(ctx, h);
+			ctx->hand_slots_alive++;
+			U_LOG_IFL_I(level, "PiBridge hand %s: an Index controller, also one switched on later",
+			            h == XRT_HAND_LEFT ? "left" : "right");
 		}
 	}
 

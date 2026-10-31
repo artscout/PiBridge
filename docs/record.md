@@ -96,6 +96,15 @@ frames instead. monado-service gets `PIMAX_RECORD=1` and `PIMAX_RECORD_SHM=<ring
 removes the tap). Under SteamVR, SteamVR's compositor draws the headset image and a tap sees nothing
 (`--source tap` under SteamVR is refused in plain words).
 
+**Menus fill the frame.** A game's main menu is often a single flat panel (an OpenXR quad layer) and no 3D: in the
+eye images it is a small rectangle in a ~100° view. So the tap looks at every frame's layers (all clients, merged):
+when there is nothing but quads, it records the largest quad's own image instead, fitted into the whole video frame
+with black around it, kept as wide as the panel is in the headset and converted to sRGB like the eye images. As soon as
+a frame has 3D (a projection layer: the cockpit, PiBridge World) it records the eye images again. The video keeps its
+size throughout. Falcon BMS's menu and its loading splash are such quad-only frames. monado.log notes each switch
+(`recorder: now recording the quad layer ...` / `... the eye images`). `PIMAX_RECORD_QUAD=0` in monado-service's
+environment (`rec_env=` in pibridge.conf) always records the eye images.
+
 **Not known yet**: whether SteamVR's Vulkan compositor on Linux shares its mirror texture with OpenGL at all. If it
 does not, `GetMirrorTextureGL` returns an error (most likely `VRCompositorError_SharedTexturesNotSupported`, 106,
 or `IsNotSceneApplication`, 103) and the card shows "SteamVR's mirror could not start: SteamVR's mirror texture is

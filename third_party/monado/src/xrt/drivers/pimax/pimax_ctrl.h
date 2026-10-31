@@ -43,6 +43,11 @@ pimax_ctrl_on_status(struct pimax_ctrl_ctx *ctx, const pimax_controller_status *
 void
 pimax_ctrl_on_state(struct pimax_ctrl_ctx *ctx, pimax_state state);
 
+//! $XDG_RUNTIME_DIR/pibridge/recenter-progress (PiBridge's recenter ring, 0..1 of a held recenter button): written
+//! atomically, only when the value moved by 1/40 since @p last_q (the caller's, -1 at first).
+void
+pimax_recenter_progress_publish(double prog, int *last_q);
+
 #ifdef __cplusplus
 }
 #endif

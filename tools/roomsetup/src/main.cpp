@@ -241,7 +241,19 @@ int lhStage(const Options& o) {
     RecenterFlow flow;
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
-    auto r = runRecenterXr(flow, XrOpts{o.resDiv}, g_stop, [ring] { return readRing(ring); });
+    // the base stations where they stand (steamvr_lh's file, re-read once a second: the stage moves with the setup)
+    std::vector<room::Mat34> stations;
+    auto stationsRead = std::chrono::steady_clock::time_point{};
+    const auto drawStations = [&stations, &stationsRead](room::Batch& b) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - stationsRead > std::chrono::seconds(1)) {
+            stationsRead = now;
+            std::ifstream f(baseStationsPath());
+            stations = parseBaseStations(std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()));
+        }
+        drawBaseStations(b, stations);
+    };
+    auto r = runRecenterXr(flow, XrOpts{o.resDiv}, g_stop, [ring] { return readRing(ring); }, drawStations);
     if (!r) {
         return fail(r.error());
     }

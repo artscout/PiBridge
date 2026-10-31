@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The system's active OpenXR runtime (the Dashboard's Runtime switch): $XDG_CONFIG_HOME/openxr/1/active_runtime.json
+// The system's active OpenXR runtime (follows the Dashboard's VR backend choice): $XDG_CONFIG_HOME/openxr/1/active_runtime.json
 // (default ~/.config/openxr/1/active_runtime.json), which the OpenXR loader of every app reads (unless the app has its
 // own XR_RUNTIME_JSON). SteamVR installs it as a symlink to <SteamVR>/steamxr_linux64.json; PiBridge points it at
 // SteamVR's file or at the Monado build's openxr_monado-dev.json, always as a symlink swapped in atomically. A regular

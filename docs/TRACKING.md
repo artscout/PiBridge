@@ -240,6 +240,11 @@ onto the head as well, each app's own included, so seated games that use LOCAL f
 right `menu/click`). Under SteamVR, `pibridge-headtrack` also sends the right Menu button as the left controller's
 system click, since SteamVR's Touch bindings open the dashboard from the left one only.
 
+With Lighthouse on the Monado backend and Valve Index controllers (they have one menu-like button each, the system
+button): the **left** one is the menu (the apps get it), the **right** one is the recenter button: it never reaches the
+apps, held 0.8 s it recenters with the same ring. The recenter moves the Index controllers, trackers and base stations
+with the head (steamvr_lh's hooks, [monado.md](monado.md)).
+
 ## Fake mode
 
 `pibridge --fake` / `--screenshots`: the setup is made up, a synthetic base Basalt config and factory file (made-up

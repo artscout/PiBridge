@@ -13,6 +13,7 @@
 
 #include "util/u_template_historybuf.hpp"
 #include "xrt/xrt_device.h"
+#include "steamvr_lh_interface.h"
 
 #include "vive/vive_common.h"
 
@@ -64,6 +65,13 @@ public:
 	std::vector<uint8_t> buffer;
 };
 
+//! PiBridge's hooks (steamvr_lh_set_pibridge_hooks); all NULL unless its Lighthouse builder set them.
+extern steamvr_lh_pibridge_hooks g_pibridge_hooks;
+
+//! PiBridge: @p rel moved by the world offset hook (the manual recenter), when there is one.
+void
+pibridge_apply_world_offset(xrt_space_relation *rel);
+
 class Device : public xrt_device
 {
 public:
@@ -71,6 +79,10 @@ public:
 
 	//! The component handles that are attached to this device.
 	std::vector<vr::VRInputComponentHandle_t> handles;
+
+	//! PiBridge: in xrt_system_devices (destroyed with it); false for the controllers behind the hand slots and
+	//! those that came after the setup (the hand slots' cleanup destroys them).
+	bool in_system{false};
 
 	virtual ~Device();
 
@@ -83,6 +95,13 @@ public:
 	//! Helper to use the @ref m_relation_history member.
 	void
 	get_pose(uint64_t at_timestamp_ns, xrt_space_relation *out_relation);
+
+	//! PiBridge: the stage every pose is put into (stage_from_raw: LH_STAGE_FILE, or SteamVR's chaperone).
+	static xrt_pose
+	stage()
+	{
+		return chaperone;
+	}
 
 	vr::ETrackedPropertyError
 	handle_properties(const vr::PropertyWrite_t *batch, uint32_t count);
@@ -287,4 +306,48 @@ private:
 
 	vr::ETrackedPropertyError
 	handle_property_write(const vr::PropertyWrite_t &prop) override;
+};
+
+/*!
+ * PiBridge (PIBRIDGE_LH=1): a hand that is always there. Monado's device list is fixed when monado-service starts
+ * (and copied to every client), so a controller switched on later could never be added. Instead the system gets one
+ * Valve Index shaped device per hand from the start; it stands for the Index controller that holds that hand now
+ * (the role the driver gives it), wherever and whenever that one was activated: its poses, hand joints, inputs
+ * (copied at update_inputs), haptics and battery. No controller: no pose, inputs not active. Its inputs, outputs and
+ * binding profiles never change, as IPC requires.
+ */
+class HandSlotDevice : public xrt_device
+{
+public:
+	HandSlotDevice(std::shared_ptr<Context> ctx, xrt_hand hand);
+
+private:
+	std::shared_ptr<Context> ctx;
+	xrt_hand hand;
+	std::vector<xrt_input> inputs_vec;
+	xrt_output output{XRT_OUTPUT_NAME_INDEX_HAPTIC};
+	std::string bound_serial; //!< the controller it stood for last (for the log)
+
+	//! The Index controller that holds this hand now (nullptr: none); `devices_mut` held.
+	ControllerDevice *
+	target_locked();
+	ControllerDevice *
+	target();
+
+	static xrt_result_t
+	update_inputs(xrt_device *xdev);
+	static xrt_result_t
+	get_tracked_pose(xrt_device *xdev, xrt_input_name name, int64_t at_timestamp_ns, xrt_space_relation *out);
+	static xrt_result_t
+	get_hand_tracking(xrt_device *xdev,
+	                  xrt_input_name name,
+	                  int64_t desired_timestamp_ns,
+	                  xrt_hand_joint_set *out_value,
+	                  int64_t *out_timestamp_ns);
+	static xrt_result_t
+	set_output(xrt_device *xdev, xrt_output_name name, const xrt_output_value *value);
+	static xrt_result_t
+	get_battery_status(xrt_device *xdev, bool *out_present, bool *out_charging, float *out_charge);
+	static void
+	destroy(xrt_device *xdev);
 };

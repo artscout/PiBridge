@@ -13,12 +13,12 @@
 #include "../core/monado_devices.h"
 #include "../core/state.h"
 #include "../core/steamvr_reset.h"
+#include "../core/vr_backend.h"
 
 #include <QElapsedTimer>
 #include <memory>
 
 class QLabel;
-class QComboBox;
 class QPushButton;
 
 namespace pibridge::ui {
@@ -88,7 +88,10 @@ private:
     bool crystalOn() const;
     // the running Monado session, if any: the Monado backend's main one, else "Monado directly"
     const IoSessionControl& monadoControl() const;
+    // The system's OpenXR runtime follows the backend: the "OpenXR -> backend" button when it does not.
     void updateRuntime();
+    // Point the system's OpenXR runtime at the backend's runtime file. Empty, or what went wrong in plain words.
+    QString pointRuntimeAt(VrBackend b);
     /// The tracking mode in effect: the Crystal's own while it is on, the saved setting otherwise.
     bool insideOutNow() const;
     /// What the tracking selector shows: the original Crystal's chosen mode (crystal_tracking), else insideOutNow().
@@ -109,11 +112,13 @@ private:
     MonadoStatus mndStatus_;
     QString mndService_; // the monado-service the library below was looked up for
     QString mndLibrary_;
-    QComboBox* runtime_ = nullptr; // the system's active OpenXR runtime (core/openxr_runtime.h)
+    QPushButton* runtimeFix_ = nullptr; // top bar: point the system's OpenXR runtime at the backend's
     std::unique_ptr<MonadoWorker> mnd_; // last: joined first, before the widgets go
     pibridge::ui::Chip* trChip_ = nullptr;
     QLabel* trMode_ = nullptr;
-    pibridge::ui::Segmented* backendSel_ = nullptr; // vr_backend (SteamVR / Monado), same as the Tracking page
+    pibridge::ui::Segmented* backendSel_ = nullptr; // top bar: vr_backend (SteamVR / Monado), also the OpenXR runtime
+    pibridge::ui::Toggle* showStations_ = nullptr; // show_base_stations: PiBridge World draws them (Monado, Lighthouse)
+    QWidget* showStationsRow_ = nullptr;
     pibridge::ui::Segmented* trModeSel_ = nullptr; // head-tracking mode (Lighthouse / Inside-out), same as the Tracking page
     QPushButton* ioStart_ = nullptr;
     QPushButton* ioStop_ = nullptr;

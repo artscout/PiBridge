@@ -106,4 +106,56 @@ std::string lhStageRoomPath(const std::string& roomDir) {
     return roomDir + "/lh-stage";
 }
 
+std::string baseStationsPath() {
+    const char* rt = std::getenv("XDG_RUNTIME_DIR");
+    return std::string(rt != nullptr && *rt != '\0' ? rt : "/tmp") + "/pibridge/monado/basestations";
+}
+
+std::vector<room::Mat34> parseBaseStations(std::string_view text) {
+    std::vector<room::Mat34> out;
+    std::size_t at = 0;
+    while (at < text.size()) {
+        std::size_t end = text.find('\n', at);
+        if (end == std::string_view::npos) {
+            end = text.size();
+        }
+        const std::string line(text.substr(at, end - at));
+        at = end + 1;
+        char serial[64];
+        double v[7];
+        if (std::sscanf(line.c_str(), "%63s %lf %lf %lf %lf %lf %lf %lf", serial, &v[0], &v[1], &v[2], &v[3], &v[4],
+                        &v[5], &v[6]) != 8) {
+            continue;
+        }
+        const double n = std::sqrt(v[3] * v[3] + v[4] * v[4] + v[5] * v[5] + v[6] * v[6]);
+        if (!(n > 0.5)) {
+            continue;
+        }
+        out.push_back(room::poseMatrix(v[3] / n, v[4] / n, v[5] / n, v[6] / n, {v[0], v[1], v[2]}));
+    }
+    return out;
+}
+
+void drawBaseStations(room::Batch& b, const std::vector<room::Mat34>& stations) {
+    const room::Rgba wire{0.55F, 0.85F, 1.0F, 0.9F};
+    const room::Rgba face{0.3F, 1.0F, 0.75F, 0.95F};
+    const double hx = 0.04, hy = 0.04, hz = 0.03; // about the size of a 2.0 base station
+    for (const room::Mat34& m : stations) {
+        room::Vec3 c[8];
+        for (int i = 0; i < 8; i++) {
+            c[i] = m.xform({(i & 1) ? hx : -hx, (i & 2) ? hy : -hy, (i & 4) ? hz : -hz});
+        }
+        for (int i = 0; i < 8; i++) {
+            for (int bit : {1, 2, 4}) {
+                if ((i & bit) == 0) {
+                    b.line(c[i], c[i | bit], wire);
+                }
+            }
+        }
+        // the front (-Z): a cross over the face
+        b.line(c[0], c[3], face);
+        b.line(c[1], c[2], face);
+    }
+}
+
 } // namespace pibridge::roomsetup

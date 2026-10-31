@@ -10,6 +10,15 @@
  * (PIBRIDGE_LH=1, set by its Monado backend in the Lighthouse mode), so the inside-out session (the legacy builder's
  * Pimax HMD with its own tracking) is unchanged.
  *
+ * The hands are steamvr_lh's PiBridge hand slots (PIBRIDGE_LH_HAND_SLOTS, on by default): one Valve Index shaped
+ * device per hand from the start, standing for whichever Index controller holds that hand, also one switched on after
+ * Monado started (Monado's device list is fixed at the start). PIBRIDGE_LH_HAND_SLOTS=0: the controllers found at the
+ * start are the hands, else the Pimax controllers.
+ *
+ * Valve Index controllers: the left system button is the menu; the right one never reaches the apps, held ~0.8 s it
+ * recenters (as the Pimax button does), and the recenter moves the Lighthouse controllers with the head. The base
+ * stations' poses go to $XDG_RUNTIME_DIR/pibridge/monado/basestations (PiBridge World draws them).
+ *
  * PIBRIDGE_LH_HEAD_OFFSET="px py pz qx qy qz qw": the Pimax head relative to the faceplate's pose (default identity:
  * driver_lighthouse already reports the head pose of the headset it knows).
  * LH_STAGE_FILE (steamvr_lh): PiBridge's stage of this backend ("px py pz qx qy qz qw" = stage_from_raw), re-read
@@ -119,7 +128,14 @@ pibridge_lh_open_system_impl(struct xrt_builder *xb, cJSON *config, struct xrt_p
                              struct xrt_tracking_origin *origin, struct xrt_system_devices *xsysd,
                              struct xrt_frame_context *xfctx, struct t_builder_options *tbo)
 {
-	// 1. Lighthouse: the faceplate (an HMD to steamvr_lh) and the controllers / trackers.
+	// 1. Lighthouse: the faceplate (an HMD to steamvr_lh) and the controllers / trackers. The Pimax HMD's manual
+	// recenter moves them (and the base stations) with the head; the right Valve Index controller's system button
+	// is the recenter button (held), the left one stays the menu.
+	const struct steamvr_lh_pibridge_hooks hooks = {
+	    .world_offset = pimax_hmd_get_recenter,
+	    .right_system_button = pimax_hmd_recenter_button,
+	};
+	steamvr_lh_set_pibridge_hooks(&hooks);
 	xrt_result_t r = steamvr_lh_create_devices(xp, xsysd);
 	if (r != XRT_SUCCESS) {
 		PLH_ERROR("steamvr_lh could not start (SteamVR installed? base stations on?)");

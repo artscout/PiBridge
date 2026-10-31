@@ -62,6 +62,15 @@ pimax_hmd_head_relation_at(struct xrt_device *hmd, int64_t at_timestamp_ns, stru
  * the world turns and shifts so the head faces forward (-Z) above the origin; the floor height stays. Thread-safe. */
 void
 pimax_hmd_request_recenter(void);
+/*! The manual recenter now (identity when none): the Lighthouse controllers, trackers and base stations get it too
+ * (steamvr_lh_pibridge_hooks::world_offset), as the head does. Thread-safe. */
+void
+pimax_hmd_get_recenter(struct xrt_pose *out);
+/*! A recenter button of another driver (the right Valve Index controller's system button) went down / up: held
+ * ~0.8 s it recenters, as the Pimax button does, with the recenter ring's progress; timed at the compositor's head
+ * queries. Thread-safe. */
+void
+pimax_hmd_recenter_button(bool down);
 /*!
  * Lighthouse: take the head pose from @p source (the faceplate's HMD device of steamvr_lh, its
  * XRT_INPUT_GENERIC_HEAD_POSE) composed with @p offset (NULL = identity), and use its tracking origin. The display,

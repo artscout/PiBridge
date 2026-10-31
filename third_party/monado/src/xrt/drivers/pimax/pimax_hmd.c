@@ -680,6 +680,49 @@ pimax_hmd_request_recenter(void)
 	atomic_store(&g_recenter_request, true);
 }
 
+void
+pimax_hmd_get_recenter(struct xrt_pose *out)
+{
+	pthread_mutex_lock(&g_recenter_lock);
+	*out = g_recenter;
+	pthread_mutex_unlock(&g_recenter_lock);
+}
+
+// pimax_hmd_recenter_button: when the button went down (0: up), whether this press already recentered
+static _Atomic uint64_t g_button_down_ns;
+static atomic_bool g_button_fired;
+static int g_button_progress_q = -1; // the compositor query thread only
+
+void
+pimax_hmd_recenter_button(bool down)
+{
+	if (down && atomic_load(&g_button_down_ns) == 0) {
+		atomic_store(&g_button_fired, false);
+		atomic_store(&g_button_down_ns, os_monotonic_get_ns());
+	} else if (!down) {
+		atomic_store(&g_button_down_ns, 0);
+	}
+}
+
+//! The held button (compositor queries): the recenter ring's progress, the recenter after 0.8 s (once per press).
+static void
+recenter_button_tick(void)
+{
+	const uint64_t down_ns = atomic_load(&g_button_down_ns);
+	if (down_ns == 0) {
+		if (g_button_progress_q > 0) {
+			pimax_recenter_progress_publish(0.0, &g_button_progress_q);
+		}
+		return;
+	}
+	const double prog = (double)(os_monotonic_get_ns() - down_ns) / (800.0 * 1000 * 1000);
+	pimax_recenter_progress_publish(prog > 1.0 ? 1.0 : prog, &g_button_progress_q);
+	if (prog >= 1.0 && !atomic_exchange(&g_button_fired, true)) {
+		U_LOG_W("PIMAX_RECENTER: recenter button long-press (Lighthouse controller): recentering");
+		pimax_hmd_request_recenter();
+	}
+}
+
 static void
 pimax_hmd_apply_recenter(bool compositor_query, struct xrt_space_relation *rel)
 {
@@ -703,6 +746,9 @@ pimax_hmd_apply_recenter(bool compositor_query, struct xrt_space_relation *rel)
 	struct xrt_pose w = rel->pose;
 	if (valid) {
 		math_pose_transform(&c, &rel->pose, &w);
+	}
+	if (compositor_query) {
+		recenter_button_tick();
 	}
 	if (compositor_query && valid && atomic_exchange(&g_recenter_request, false)) {
 		// the head now: its forward (-Z) turned onto -Z, its position moved over the origin

@@ -28,9 +28,11 @@ using EditorFactory = std::function<room::Editor*(const std::string& runtimeName
 
 /// Run until the editor quits, the runtime ends the session or `stop` is set (SIGINT/SIGTERM).
 std::expected<void, std::string> runXr(const EditorFactory& make, const XrOpts& opts, const std::atomic<bool>& stop);
-/// The recenter (--recenter): the same session and input, the flow's prompts drawn in front of the head.
+/// The recenter (--recenter, --lh-stage): the same session and input, the flow's prompts drawn in front of the head.
+/// `extra` (optional) draws more into each frame (--lh-stage: the base stations).
 std::expected<void, std::string> runRecenterXr(RecenterFlow& flow, const XrOpts& opts, const std::atomic<bool>& stop,
-                                               const std::function<std::optional<RingSample>()>& readRing);
+                                               const std::function<std::optional<RingSample>()>& readRing,
+                                               const std::function<void(room::Batch&)>& extra = {});
 
 /// --map: the room mapping over the passthrough. The callbacks are main's: pibridge-roommap's state and answers, its
 /// exit, the head ring.

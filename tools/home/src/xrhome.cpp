@@ -67,7 +67,8 @@ XrState fromXr(XrSessionState s) {
 /// Grip and aim poses, the trigger, the stick, the grip button and the menu button: the Pimax controllers in Monado
 /// offer the Touch, Index and simple controller profiles; Vive for other headsets (its trackpad as the stick). The menu
 /// button: Touch's left menu (OpenXR has none on the right Touch; a long press of it is the driver's recenter,
-/// pimax_ctrl.c), Index's B (the Pimax driver maps the left Y and the right B to it), the simple and Vive menu.
+/// pimax_ctrl.c), the Valve Index controller's left system button (Lighthouse; the right one is the recenter, held,
+/// and never reaches the apps: steamvr_lh in PiBridge's Monado), the simple and Vive menu.
 std::expected<void, std::string> makeControls(xrkit::Session& x, Actions& c) {
     auto si = xr_make<XrActionSetCreateInfo>(XR_TYPE_ACTION_SET_CREATE_INFO);
     std::snprintf(si.actionSetName, sizeof si.actionSetName, "home");
@@ -101,7 +102,7 @@ std::expected<void, std::string> makeControls(xrkit::Session& x, Actions& c) {
     };
     for (const Prof& prof :
          {Prof{"/interaction_profiles/oculus/touch_controller", "trigger/value", "thumbstick", "squeeze/value", "menu/click", "system/click"},
-          Prof{"/interaction_profiles/valve/index_controller", "trigger/value", "thumbstick", "squeeze/value", "b/click", "b/click"},
+          Prof{"/interaction_profiles/valve/index_controller", "trigger/value", "thumbstick", "squeeze/value", "system/click", nullptr},
           Prof{"/interaction_profiles/khr/simple_controller", "select/click", nullptr, nullptr, "menu/click", "menu/click"},
           Prof{"/interaction_profiles/htc/vive_controller", "trigger/value", "trackpad", "squeeze/click", "menu/click", "menu/click"}}) {
         std::vector<XrActionSuggestedBinding> sb;

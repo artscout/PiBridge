@@ -59,10 +59,12 @@ fake mode). What each button does is in `core/actions.*`, tested with the FakeRu
 
 ### Dashboard (`pages/dashboard.*`)
 - Toolbar
-  - **OpenXR runtime** (`core/openxr_runtime.*`): SteamVR or Monado, the system's active OpenXR runtime
-    (`~/.config/openxr/1/active_runtime.json`, made a symlink to SteamVR's `steamxr_linux64.json` or the Monado build's
-    `openxr_monado-dev.json`; a foreign regular file is kept once as `active_runtime.json.pibridge-backup`). Games
-    started outside PiBridge (Steam) run on it; the Apps page's own launches always use the chosen backend.
+  - **VR backend** (`core/vr_backend.*`, `core/openxr_runtime.*`): SteamVR or Monado, one choice for both
+    `vr_backend` and the system's active OpenXR runtime (`~/.config/openxr/1/active_runtime.json`, made a symlink to
+    SteamVR's `steamxr_linux64.json` or the Monado build's `openxr_monado-dev.json`; a foreign regular file is kept once
+    as `active_runtime.json.pibridge-backup`). Changes only while VR is stopped. Games started outside PiBridge (Steam)
+    run on the active runtime; the Apps page's own launches always use the backend. When the active runtime is not the
+    backend's (SteamVR took it back, another tool set it), an **OpenXR → <backend>** button next to it points it back.
   - **Fix permissions**: shown while the Monado backend is chosen and `monado-service` lacks `cap_sys_nice` (every
     relink drops it): `pkexec setcap cap_sys_nice=ep monado-service`.
   - **Restart services**: `systemctl --user restart pibridge-keepalived pibridge-eyed`.
@@ -141,7 +143,8 @@ fake mode). What each button does is in `core/actions.*`, tested with the FakeRu
   - **Eye tracker** line: eyed.json `state`, `eyes_seen`, `samples_per_s`, the profile; a live gaze dot.
 - **Tracking**: LIGHTHOUSE chip; "N base stations, M tracking" (a station counts as tracking when its pose is
   valid) and one row per station ("Station 1  SteamVR Base Station 2.0  ok / not seen"). Without SteamVR: "Start
-  SteamVR to see the base stations."
+  SteamVR to see the base stations." **Show base stations in VR** (shown in Lighthouse mode on the Monado backend):
+  `show_base_stations=on|off`, PiBridge World draws the base stations where they stand ([world.md](world.md)).
 - **Sound settings**: **Default audio output** switch -> `audio_to_headset=on|off` + SIGHUP to `pibridge-keepalived`.
   **Headset sound test** (`core/sound_test.*`, `pages/sound_tests.*`), like Pimax Play / EVO; the default output and
   input are never changed. The headset's nodes come from `pactl list short sinks|sources` (the prefixes of
@@ -276,8 +279,8 @@ started"; nothing is run or written. Screenshots: `docs/app/06-apps.png` (SteamV
   the last game's status.
 
 ### Tracking: tracking mode and inside-out settings (`pages/tracking.*`, `core/inside_out.*`, `core/io_session.*`)
-The VR backend (**SteamVR** / **Monado**, `vr_backend`; chosen on the Dashboard's Tracking card, only while VR is
-stopped; `core/vr_backend.*`), the tracking mode (**Lighthouse** / **Inside-out**, `tracking_mode`) and every setting of
+The VR backend (**SteamVR** / **Monado**, `vr_backend`; chosen in the Dashboard's top bar together with the OpenXR
+runtime, only while VR is stopped; `core/vr_backend.*`), the tracking mode (**Lighthouse** / **Inside-out**, `tracking_mode`) and every setting of
 the inside-out session
 (`pibridge-headtrack`: the Pimax engine or Basalt, camera auto exposure, optical controllers), each with one line of
 help, the **RECOMMENDED** mark and the reason when it does not apply. All details, the sources and defaults of every

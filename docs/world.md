@@ -21,14 +21,23 @@ session: with OpenXR on and SteamVR as the system runtime, Godot would start Ste
 - **The world**: a sky with a low sun, a ring of mountains, and terrain around you: flat where you stand (12 m), then
   rolling hills of moss, stone and dry grass (shader noise, no textures). A soft grid shows only near you, so the floor
   reads as a floor. You stand on a dark metal disc with fine rings and a glowing edge at the play circle.
-- **Controllers**: the lasers start at the controller's aim point (the model's `openxr_aim` frame when the models are
-  there, else the OpenXR aim pose); the trigger clicks on the panel, the thumbstick scrolls. The controllers are drawn
-  with the headset's own render models when the kit has them (below), else as plain stand-ins.
-- **Dashboard** (the menu button on either controller: show / hide in front of you; hold a grip 0.5 s: bring it in
-  front of you; a recenter puts it back in front of you), opening on *Apps*:
+- **Controllers**: the lasers start at the controller's aim point (the model's aim frame when the models are there,
+  else the OpenXR aim pose); the trigger clicks on the panel, the thumbstick scrolls. The controllers are drawn with
+  their SteamVR render models when they are there (below), else as plain stand-ins: the Pimax Crystal controllers, or
+  the Valve Index controllers in the Lighthouse mode (the model follows the controller's OpenXR interaction profile,
+  `/interaction_profiles/valve/index_controller`, and changes when the other controllers are picked up).
+- **Base stations** (the Lighthouse mode, **Show base stations in VR** on the app's Tracking card,
+  `show_base_stations = on` in pibridge.conf): drawn where they stand, as SteamVR does. Monado's steamvr_lh writes
+  their poses in the stage to `$XDG_RUNTIME_DIR/pibridge/monado/basestations` (`<serial> px py pz qx qy qz qw` a line,
+  once a second; [monado.md](monado.md)); the world re-reads it and the setting once a second. The model is SteamVR's
+  `lh_basestation_valve_gen2` (else `lh_basestation_vive`, else a plain box).
+- **Dashboard** (the menu button: show / hide in front of you; hold a grip 0.5 s: bring it in front of you; a recenter
+  puts it back in front of you), opening on *Apps*. The menu button: the left menu or the right system button of the
+  Crystal controllers; on Valve Index controllers the **left** system button (the right one is the recenter button),
+  or the left B:
   - *Apps*: tiles with **Run** and **Edit**: your apps (PiBridge's `~/.config/pibridge/apps.toml`, the same list as
     the app's Apps page) and the Steam games that use OpenXR (games with only the SteamVR API cannot run on Monado and are not listed). A Steam game starts
-    through Steam, with the system's OpenXR runtime pointed at this Monado first (the app's Runtime switch shows it).
+    through Steam, with the system's OpenXR runtime pointed at this Monado first (the app's VR backend choice sets it).
     *Add an app*: a name and the program, typed with the keyboard on the panel (Shift lit while on, for one capital;
     the keyboard closes with the page).
   - *Headset*: IPD (the lens motors at once), volume, refresh rate and lens profile (after restart).
@@ -46,8 +55,9 @@ session: with OpenXR on and SteamVR as the system runtime, Godot would start Ste
   - *Passthrough* (top): the room through the tracking cameras over the world (pibridge-home --passthrough-overlay, a
     Monado overlay).
 - **Record** (top): a video of what you see (pibridge-record, through Monado's compositor tap); red while it records.
-- **Recenter**: hold the Pimax button (pibridge-xroverlay shows the ring over any app), or Recenter on the Tracking /
-  Room page. Forward becomes where you look and the centre where you stand; in games too, also seated ones that use
+- **Recenter**: hold the Pimax button, or on Valve Index controllers the **right** system button, ~0.8 s
+  (pibridge-xroverlay shows the ring over any app), or Recenter on the Tracking / Room page. With Lighthouse the
+  recenter moves the Index controllers, the trackers and the base stations with the head. Forward becomes where you look and the centre where you stand; in games too, also seated ones that use
   the LOCAL space ([monado.md](monado.md)).
 - **Passthrough**: the world's panel stays visible through a window in the passthrough (the world writes its pose to
   `$XDG_RUNTIME_DIR/pibridge/world-panel`); the menu button brings you back.
@@ -67,27 +77,38 @@ brings it back; a crash or a plain exit does not. `world_close_for_games = off` 
 running in the background instead. While the world starts again, `pibridge-xroverlay` shows three pulsing dots in
 front of you instead of a black screen ([xroverlay.md](xroverlay.md)).
 
-## Controller models
+## Controller and base station models
 
-From the Pimax client on Windows, copy the two folders
+All models go into one folder, `~/.local/share/pibridge/windata/steamvr/rendermodels/` (the Windows data kit,
+docs/WINBRIDGE.md; personal use, never in this repository), one sub-folder per model as SteamVR keeps them:
 
-    C:\Program Files\Pimax\SteamVRSupport\drivers\aapvr\resources\rendermodels\crystal_controller_left
-    C:\Program Files\Pimax\SteamVRSupport\drivers\aapvr\resources\rendermodels\crystal_controller_right
+| Model | Copy from | Used for |
+|---|---|---|
+| `crystal_controller_left`, `crystal_controller_right` | the Pimax client on Windows: `C:\Program Files\Pimax\SteamVRSupport\drivers\aapvr\resources\rendermodels\` | the Crystal controllers |
+| `valve_controller_knu_1_0_left`, `valve_controller_knu_1_0_right` | SteamVR on Linux: `<SteamVR>/drivers/indexcontroller/resources/rendermodels/` | the Valve Index controllers (Lighthouse) |
+| `lh_basestation_valve_gen2` (and `lh_basestation_vive` for 1.0 base stations) | SteamVR on Linux: `<SteamVR>/resources/rendermodels/` | the base stations (Lighthouse) |
 
-into `~/.local/share/pibridge/windata/steamvr/rendermodels/` (the Windows data kit, docs/WINBRIDGE.md; personal use,
-never in this repository). With the Windows drive mounted at `/mnt/c`:
+`<SteamVR>` is usually `~/.local/share/Steam/steamapps/common/SteamVR`. With the Windows drive mounted at `/mnt/c`:
 
     K=~/.local/share/pibridge/windata/steamvr/rendermodels; mkdir -p "$K"
     cp -r "/mnt/c/Program Files/Pimax/SteamVRSupport/drivers/aapvr/resources/rendermodels/crystal_controller_"{left,right} "$K/"
+    SV=~/.local/share/Steam/steamapps/common/SteamVR
+    cp -r "$SV/drivers/indexcontroller/resources/rendermodels/valve_controller_knu_1_0_"{left,right} "$K/"
+    cp -r "$SV/resources/rendermodels/lh_basestation_valve_gen2" "$SV/resources/rendermodels/lh_basestation_vive" "$K/"
 
-The world reads `crystal_controller_<side>.json` (the parts and the `openxr_grip` frame) and the OBJ parts with their
-textures at start, and puts the model on the OpenXR grip pose the way SteamVR does.
+The SteamVR ones are also found in the SteamVR install itself (`~/.local/share/Steam` or `~/.steam/steam`) when they
+are not copied; the copies win, and keep working when SteamVR moves or is updated.
+
+The world reads `<model>/<model>.json` (the parts and the pose frames) and the OBJ parts with their textures, and puts
+the model on the OpenXR grip pose the way SteamVR does: through the `openxr_grip` frame of the Crystal model, the
+`grip` frame of the Index model (the same offset Monado gives the Index grip pose); the laser leaves from
+`openxr_aim` / `tip`. The Index model's touch dot and its scroll-wheel variants are left out.
 
 ## Files
 
 `world/scripts/`: `main.gd` (XR, the scene, Passthrough, the self test), `environment.gd`, `dashboard.gd` (pages and
 every setting's receiver), `vr_panel.gd` (a SubViewport on a quad, its mouse driven by the lasers), `pointer.gd`,
-`keyboard.gd`, `apps_model.gd`, `controller_model.gd`, `obj_loader.gd`, `keyconf.gd` (key=value files, comments and
+`keyboard.gd`, `apps_model.gd`, `controller_model.gd`, `base_stations.gd`, `obj_loader.gd`, `keyconf.gd` (key=value files, comments and
 sections kept), `paths.gd`.
 
 The scripts reach each other with `const Name = preload("res://scripts/<file>.gd")`, never `class_name`: a global

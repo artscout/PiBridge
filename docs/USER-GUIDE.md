@@ -3,7 +3,7 @@
 **One app for your Pimax headset on Linux.** PiBridge wakes the headset, keeps it awake while you play, runs its eye
 tracker, switches the sound to it, and gives you one window where everything about the headset lives: the display, the
 controllers, the tracking, the room boundary, foveated rendering and recording. A VR runtime actually runs your
-games; PiBridge is the hub around it. You choose the runtime, the **VR backend**, on the Dashboard:
+games; PiBridge is the hub around it. You choose the runtime, the **VR backend**, at the top of the Dashboard:
 
 - **SteamVR**: games start through Steam and SteamVR, as on Windows. The default.
 - **Monado**: PiBridge's own OpenXR runtime. In the headset you are in **PiBridge World**, a small world with the
@@ -46,7 +46,9 @@ what they are doing.
 4. Press **STOP VR**. A few seconds later the sound returns to your speakers and the headset goes to standby.
 
 **Recenter** whenever forward is not where you look: hold the **Pimax button** on a controller (a ring fills up), or
-press **Recenter** on a dashboard in the headset. Forward becomes where you look and the centre where you stand.
+press **Recenter** on a dashboard in the headset. Forward becomes where you look and the centre where you stand. With
+Valve Index controllers on the Monado backend, hold the **right** controller's system button (the left one is the
+menu).
 
 The Dashboard shows the whole state at a glance, and the bar along the bottom of the window always shows whether
 SteamVR is running, whether the headset screen is on and whether the eye tracker is streaming. **HELP** at the bottom
@@ -101,11 +103,17 @@ when it is not tracked), the battery and the serial number with **COPY**. Under 
   On the original Crystal the slider is locked: set the IPD with the buttons on the headset.
 - The **EYE TRACKER** box shows whether it is streaming and which calibration it uses, with a live dot for your gaze.
 
+**VR BACKEND** at the top of the window: **STEAMVR** or **MONADO**, the one choice of who runs the headset and the
+apps. It also decides what OpenXR games started from Steam run on (the system's OpenXR runtime). It changes only while
+VR is stopped. Each backend keeps its own rooms. When something else took the OpenXR runtime (SteamVR does when it
+starts), an **OPENXR → …** button next to it gives it back.
+
 The **Tracking** card:
 
-- **VR BACKEND**: **STEAMVR** or **MONADO**. It changes only while VR is stopped. Each backend keeps its own rooms.
 - **LIGHTHOUSE / INSIDE-OUT** chooses how the headset is tracked. Switching restarts SteamVR when it is running.
 - In Lighthouse mode it lists your base stations, whether each one is seen, and **COPY SN** for each.
+- **SHOW BASE STATIONS IN VR** (Lighthouse on the Monado backend): PiBridge World draws the base stations where they
+  stand, as SteamVR does.
 - **SETTINGS** opens the tracking settings.
 
 The **Sound** card:
@@ -255,7 +263,12 @@ Record what you see in the headset to a video file.
 
 **PiBridge World** is where you are when no game runs ([world.md](world.md)).
 
-- **The menu button** shows or hides the dashboard in front of you; holding a grip brings it to where you look.
+- **The menu button** shows or hides the dashboard in front of you; holding a grip brings it to where you look. On
+  Valve Index controllers it is the **left** controller's system button; the right one, held, recenters.
+- **Controllers and base stations** are drawn as SteamVR draws them when their models are there
+  ([world.md](world.md#controller-and-base-station-models) says which folders to copy where).
+- **The floor above your head** (Lighthouse on the Monado backend): that room has no setup yet. Run **Room setup**
+  once in the headset (centre, forward, the floor); it is saved with the room.
 - **Dashboard pages**: Headset, Tracking, Controllers, Room (Recenter, Room setup), **Apps** (your apps as tiles with
   **Run** and **Edit**, a keyboard in VR for names and paths), **Quad views** (the foveated rendering settings),
   **Recording** (start and stop, and the video settings) and **World** (the background). The dashboard over a game

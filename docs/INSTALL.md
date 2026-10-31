@@ -551,15 +551,15 @@ it inside the Monado session with the right runtime. For a check without a heads
 ~/gamedev/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --xr-mode off --path ~/.local/share/pibridge/world -- --selftest
 ```
 
-Optional, for your controllers to look like Pimax's in the world: copy the Pimax controller models as described in
-[world.md](world.md#controller-models).
+Optional, for the controllers (Crystal or Valve Index) and the base stations to look as in SteamVR: copy their render
+models as described in [world.md](world.md#controller-and-base-station-models) (step 6 below).
 
 ### 7.2.3 Use
 
 1. Choose **Monado** under **VR backend** on the Dashboard and press **START VR**. Monado starts, then PiBridge World
    in the headset.
 2. Games started from the app's Apps page or from the world's Apps page run on Monado (`XR_RUNTIME_JSON`). Games
-   started elsewhere (Steam) use the system's active OpenXR runtime: the Dashboard's **OpenXR runtime** switch points
+   started elsewhere (Steam) use the system's active OpenXR runtime: the Dashboard's **VR backend** choice also points
    `~/.config/openxr/1/active_runtime.json` at SteamVR or at the Monado build (a symlink; a foreign regular file is
    kept once as `active_runtime.json.pibridge-backup`). OpenVR-only games always need SteamVR. Windows games that
    Steam runs through Proton do not find Monado yet, even with OpenXR: Proton sets up its OpenXR bridge only through
@@ -567,10 +567,19 @@ Optional, for your controllers to look like Pimax's in the world: copy the Pimax
 3. While a game runs, PiBridge World closes itself to leave the game its memory and comes back when the game ends.
    The menu button opens the dashboard over the game: settings, and in its bottom bar **Record video** / **Stop
    recording**, **Quick room setup**, **Recenter** and **Close app**.
-4. **Recenter** (the dashboard, or holding the Pimax button) turns forward to where you look and puts the centre where
-   you stand, for every app, also seated ones.
-5. **Room setup** for Monado runs from the world's or the overlay's dashboard and saves into the Monado rooms only.
-6. **The headset goes dark but the tracking goes on** (the app's view still follows your head): a game hung the GPU,
+4. **Recenter** (the dashboard, or holding the Pimax button; on Valve Index controllers the right system button, the
+   left one is the menu) turns forward to where you look and puts the centre where you stand, for every app, also
+   seated ones.
+5. **Room setup** for Monado runs from the world's or the overlay's dashboard and saves into the Monado rooms only. In
+   the Lighthouse mode run it once per room before anything else: until then Monado uses the raw Lighthouse space,
+   whose floor is somewhere else (often above your head). The setup shows the base stations where they stand.
+6. **Models** (optional): the controllers and the base stations are drawn with SteamVR's render models. Copy them into
+   `~/.local/share/pibridge/windata/steamvr/rendermodels/`: `crystal_controller_left` / `_right` from the Pimax client
+   on Windows, `valve_controller_knu_1_0_left` / `_right` from `<SteamVR>/drivers/indexcontroller/resources/rendermodels/`,
+   `lh_basestation_valve_gen2` (and `lh_basestation_vive`) from `<SteamVR>/resources/rendermodels/`; the commands are in
+   [world.md](world.md#controller-and-base-station-models). **Show base stations in VR** on the Dashboard's Tracking
+   card turns the base stations on.
+7. **The headset goes dark but the tracking goes on** (the app's view still follows your head): a game hung the GPU,
    and Monado gave the display back so that the hang cannot lock it for good. `journalctl -k` shows an NVIDIA `Xid`
    naming the game, and the session's `monado.log` says `Released the NVIDIA modeset permission`. The headset stays
    dark until the session restarts: press **STOP VR**, then **START VR**.

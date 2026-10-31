@@ -51,6 +51,20 @@ static func controller_models() -> String:
 	return windata() + "/steamvr/rendermodels"
 
 
+# The folder of a SteamVR render model (<name>/<name>.json or .obj): the copies in controller_models() first
+# (docs/world.md), else the SteamVR install itself (its own models and the Index controllers' driver); "" when none.
+static func render_model(model: String) -> String:
+	var roots := [controller_models()]
+	for base in [data_home() + "/Steam", home() + "/.steam/steam"]:
+		var sv: String = base + "/steamapps/common/SteamVR"
+		roots.append(sv + "/drivers/indexcontroller/resources/rendermodels")
+		roots.append(sv + "/resources/rendermodels")
+	for r in roots:
+		if DirAccess.dir_exists_absolute(r + "/" + model):
+			return r + "/" + model
+	return ""
+
+
 # A PiBridge tool: next to this project's install (…/share/pibridge/world -> …/bin), then ~/.local/bin, then PATH.
 static func tool(name: String) -> String:
 	var here := ProjectSettings.globalize_path("res://")

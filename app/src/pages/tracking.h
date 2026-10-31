@@ -54,7 +54,6 @@ private:
 
     QLabel* message_ = nullptr;
     pibridge::ui::Segmented* mode_ = nullptr;
-    pibridge::ui::Segmented* backend_ = nullptr; // vr_backend: SteamVR | Monado
     QLabel* modeText_ = nullptr;
     pibridge::ui::Card* modeCard_ = nullptr;
 

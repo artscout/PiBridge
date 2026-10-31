@@ -225,7 +225,8 @@ std::expected<void, std::string> runXr(const EditorFactory& make, const XrOpts& 
 }
 
 std::expected<void, std::string> runRecenterXr(RecenterFlow& flow, const XrOpts& opts, const std::atomic<bool>& stop,
-                                               const std::function<std::optional<RingSample>()>& readRing) {
+                                               const std::function<std::optional<RingSample>()>& readRing,
+                                               const std::function<void(room::Batch&)>& extra) {
     xrkit::Session x;
     Actions c;
     if (auto r = setup(x, c, opts); !r) {
@@ -236,7 +237,12 @@ std::expected<void, std::string> runRecenterXr(RecenterFlow& flow, const XrOpts&
         return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     };
     loop.frame = [&flow, &readRing, steady](const room::FrameInput& in) { flow.frame(in, steady(), readRing); };
-    loop.build = [&flow](Batch& b, double t) { flow.build(b, t); };
+    loop.build = [&flow, &extra](Batch& b, double t) {
+        flow.build(b, t);
+        if (extra) {
+            extra(b);
+        }
+    };
     loop.quit = [&flow] { return flow.finished(); };
     loop.status = [&flow] { return flow.lines().empty() ? std::string() : flow.lines().front(); };
     return runLoop(x, c, loop, stop);

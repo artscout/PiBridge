@@ -387,6 +387,19 @@ scripted controllers, the result text), `pibridge_steamvr_monado_tests` (offset 
 math, the writer's lease rules on made-up files), `pibridge_room_page_tests` (the gate). Not run live: the offset in
 pibridge-headtrack under SteamVR, the in-headset panel, the floor shift when no offset existed yet (the height then starts from 0).
 
+## The Monado backend in the Lighthouse mode
+
+`pibridge-roomsetup --lh-stage --backend monado` (the Room page, or Room setup on a dashboard in the headset): the
+recenter steps in the headset (stand at the centre and look forward, hold the trigger; touch the floor with a
+controller, or keep the eye height), then the room's stage (`stage_from_raw`) goes to `<room>/lh-stage` and to
+`$XDG_RUNTIME_DIR/pibridge/monado/lh-stage`, which steamvr_lh re-reads at once (`tools/roomsetup/src/lhstage.*`,
+[monado.md](monado.md)). Until a room has it, Monado uses the raw Lighthouse space: its origin and floor are where
+driver_lighthouse put them (the floor is often above your head), so run this setup once per room.
+
+While it runs, the base stations are drawn where they stand as small wire boxes with a cross on the front (the side
+that sweeps the room): steamvr_lh's `$XDG_RUNTIME_DIR/pibridge/monado/basestations`, re-read once a second, so they
+move with the stage as it changes (`parseBaseStations` / `drawBaseStations` in `lhstage.*`).
+
 ## Live tracing and pose sources
 
 `pibridge/room/pose.h`: a `PoseSource` gives the head and both controllers (stage space, with the trigger) at a time.

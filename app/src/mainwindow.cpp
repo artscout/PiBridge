@@ -155,7 +155,7 @@ MainWindow::MainWindow(StateSource& source, Runner& runner, Actions::ToolFinder 
         return source_.fake() ? IoSessionControl::fakeDeps(v, conf_, links) : IoSessionControl::realDeps(v, conf_, links);
     };
     // the VR backend (core/vr_backend.h): exported for every tool PiBridge starts; the main session (START TRACKING)
-    // is that backend's (the Tracking page changes both together)
+    // is that backend's (the Dashboard's top bar changes both together)
     const VrBackend backend = vrBackend(conf_);
     exportVrBackend(backend);
     io_ = std::make_unique<IoSessionControl>(deps(IoVariant::SteamVr));

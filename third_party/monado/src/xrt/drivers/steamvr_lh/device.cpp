@@ -29,6 +29,7 @@
 #include "xrt/xrt_prober.h"
 
 #include "vive/vive_poses.h"
+#include "vive/vive_bindings.h"
 
 #include "vp2/vp2_config.h"
 
@@ -828,6 +829,7 @@ ControllerDevice::get_hand_tracking(enum xrt_input_name name,
 		*out_timestamp_ns = desired_timestamp_ns;
 	}
 
+	pibridge_apply_world_offset(&out_value->hand_pose); // PiBridge: the manual recenter, as on the controller
 	return XRT_SUCCESS;
 }
 
@@ -917,11 +919,37 @@ HmdDevice::get_tracked_pose(xrt_input_name name, uint64_t at_timestamp_ns, xrt_s
 	return XRT_SUCCESS;
 }
 
+steamvr_lh_pibridge_hooks g_pibridge_hooks = {};
+
+void
+steamvr_lh_set_pibridge_hooks(const steamvr_lh_pibridge_hooks *hooks)
+{
+	g_pibridge_hooks = hooks != nullptr ? *hooks : steamvr_lh_pibridge_hooks{};
+}
+
+void
+pibridge_apply_world_offset(xrt_space_relation *rel)
+{
+	if (g_pibridge_hooks.world_offset == nullptr) {
+		return;
+	}
+	xrt_pose w = XRT_POSE_IDENTITY;
+	g_pibridge_hooks.world_offset(&w);
+	const xrt_pose id = XRT_POSE_IDENTITY;
+	if (memcmp(&w, &id, sizeof(w)) == 0) {
+		return;
+	}
+	math_pose_transform(&w, &rel->pose, &rel->pose);
+	math_quat_rotate_vec3(&w.orientation, &rel->linear_velocity, &rel->linear_velocity);
+	math_quat_rotate_vec3(&w.orientation, &rel->angular_velocity, &rel->angular_velocity);
+}
+
 xrt_result_t
 ControllerDevice::get_tracked_pose(xrt_input_name name, uint64_t at_timestamp_ns, xrt_space_relation *out_relation)
 {
 	xrt_space_relation rel = {};
 	Device::get_pose(at_timestamp_ns, &rel);
+	pibridge_apply_world_offset(&rel); // PiBridge: the manual recenter (the head gets it from the Pimax HMD)
 
 	xrt_pose pose_offset = XRT_POSE_IDENTITY;
 
@@ -1669,4 +1697,181 @@ ControllerDevice::handle_property_write(const vr::PropertyWrite_t &prop)
 	}
 	}
 	return handle_generic_property_write(prop);
+}
+
+/*
+ *
+ * PiBridge: the hand slots (device.hpp HandSlotDevice).
+ *
+ */
+
+HandSlotDevice::HandSlotDevice(std::shared_ptr<Context> context, xrt_hand h) : xrt_device({}), ctx(std::move(context)), hand(h)
+{
+	u_device_populate_function_pointers(this, &HandSlotDevice::get_tracked_pose, &HandSlotDevice::destroy);
+	this->xrt_device::update_inputs = &HandSlotDevice::update_inputs;
+	this->xrt_device::get_hand_tracking = &HandSlotDevice::get_hand_tracking;
+	this->xrt_device::set_output = &HandSlotDevice::set_output;
+	this->xrt_device::get_battery_status = &HandSlotDevice::get_battery_status;
+
+	const bool left = h == XRT_HAND_LEFT;
+	this->name = XRT_DEVICE_INDEX_CONTROLLER;
+	this->device_type = left ? XRT_DEVICE_TYPE_LEFT_HAND_CONTROLLER : XRT_DEVICE_TYPE_RIGHT_HAND_CONTROLLER;
+	std::snprintf(this->str, XRT_DEVICE_NAME_LEN, "Valve Index Controller %s (PiBridge hand)", left ? "Left" : "Right");
+	std::snprintf(this->serial, XRT_DEVICE_NAME_LEN, "pibridge-hand-%s", left ? "left" : "right");
+	this->tracking_origin = ctx.get();
+	this->supported.orientation_tracking = true;
+	this->supported.position_tracking = true;
+	this->supported.battery_status = true;
+
+	// the Index controller's inputs, as ControllerDevice::set_input_class makes them; never changed after this
+	const InputClass &ic = controller_classes.at("index_controller");
+	for (xrt_input_name n : ic.poses) {
+		inputs_vec.push_back({false, 0, n, {}});
+	}
+	for (const auto &[path, n] : ic.non_poses) {
+		inputs_vec.push_back({false, 0, n, {}});
+	}
+	this->inputs = inputs_vec.data();
+	this->input_count = inputs_vec.size();
+	this->outputs = &output;
+	this->output_count = 1;
+	this->binding_profiles = vive_binding_profiles_index;
+	this->binding_profile_count = vive_binding_profiles_index_count;
+	// the creator counts it in Context::hand_slots_alive (with `devices_mut` held)
+}
+
+ControllerDevice *
+HandSlotDevice::target_locked()
+{
+	// the Index controller with this hand's role; of two, the one with the newest tracked pose
+	const xrt_device_type want =
+	    hand == XRT_HAND_LEFT ? XRT_DEVICE_TYPE_LEFT_HAND_CONTROLLER : XRT_DEVICE_TYPE_RIGHT_HAND_CONTROLLER;
+	ControllerDevice *best = nullptr;
+	int64_t best_ts = -1;
+	for (ControllerDevice *c : ctx->controller) {
+		if (c == nullptr || c->name != XRT_DEVICE_INDEX_CONTROLLER || c->device_type != want) {
+			continue;
+		}
+		int64_t ts = 0;
+		xrt_space_relation rel = XRT_SPACE_RELATION_ZERO;
+		if (!m_relation_history_get_latest(c->relation_hist, &ts, &rel) ||
+		    (rel.relation_flags & XRT_SPACE_RELATION_ORIENTATION_VALID_BIT) == 0) {
+			ts = 0;
+		}
+		if (ts > best_ts) {
+			best = c;
+			best_ts = ts;
+		}
+	}
+	if (best != nullptr && bound_serial != best->serial) {
+		bound_serial = best->serial;
+		U_LOG_IFL_I(ctx->log_level, "PiBridge hand %s: now %s (%s)", hand == XRT_HAND_LEFT ? "left" : "right",
+		            best->str, best->serial);
+	}
+	return best;
+}
+
+ControllerDevice *
+HandSlotDevice::target()
+{
+	std::lock_guard lk(ctx->devices_mut);
+	return target_locked();
+}
+
+xrt_result_t
+HandSlotDevice::update_inputs(xrt_device *xdev)
+{
+	auto *s = static_cast<HandSlotDevice *>(xdev);
+	std::lock_guard lk(s->ctx->devices_mut);
+	ControllerDevice *t = s->target_locked();
+	for (xrt_input &in : s->inputs_vec) {
+		in.active = false;
+		if (t == nullptr) {
+			continue;
+		}
+		for (uint32_t i = 0; i < t->input_count; i++) {
+			if (t->inputs[i].name == in.name) {
+				in.active = t->inputs[i].active;
+				in.timestamp = t->inputs[i].timestamp;
+				in.value = t->inputs[i].value;
+				break;
+			}
+		}
+	}
+	return XRT_SUCCESS;
+}
+
+// The controllers' own functions are called without `devices_mut` held (the haptics wait for the driver's event
+// queue); a controller only goes away at the system's end, after the hands.
+xrt_result_t
+HandSlotDevice::get_tracked_pose(xrt_device *xdev, xrt_input_name name, int64_t at_timestamp_ns, xrt_space_relation *out)
+{
+	auto *s = static_cast<HandSlotDevice *>(xdev);
+	ControllerDevice *t = s->target();
+	if (t == nullptr) {
+		*out = XRT_SPACE_RELATION_ZERO;
+		return XRT_SUCCESS;
+	}
+	return xrt_device_get_tracked_pose(t, name, at_timestamp_ns, out);
+}
+
+xrt_result_t
+HandSlotDevice::get_hand_tracking(xrt_device *xdev,
+                                  xrt_input_name name,
+                                  int64_t desired_timestamp_ns,
+                                  xrt_hand_joint_set *out_value,
+                                  int64_t *out_timestamp_ns)
+{
+	auto *s = static_cast<HandSlotDevice *>(xdev);
+	ControllerDevice *t = s->target();
+	if (t == nullptr) {
+		out_value->is_active = false;
+		*out_timestamp_ns = desired_timestamp_ns;
+		return XRT_SUCCESS;
+	}
+	return t->get_hand_tracking(name, desired_timestamp_ns, out_value, out_timestamp_ns);
+}
+
+xrt_result_t
+HandSlotDevice::set_output(xrt_device *xdev, xrt_output_name name, const xrt_output_value *value)
+{
+	auto *s = static_cast<HandSlotDevice *>(xdev);
+	ControllerDevice *t = s->target();
+	return t == nullptr ? XRT_SUCCESS : t->set_output(name, value);
+}
+
+xrt_result_t
+HandSlotDevice::get_battery_status(xrt_device *xdev, bool *out_present, bool *out_charging, float *out_charge)
+{
+	auto *s = static_cast<HandSlotDevice *>(xdev);
+	ControllerDevice *t = s->target();
+	if (t == nullptr) {
+		*out_present = false;
+		*out_charging = false;
+		*out_charge = 0.0f;
+		return XRT_SUCCESS;
+	}
+	return t->get_battery_status(out_present, out_charging, out_charge);
+}
+
+void
+HandSlotDevice::destroy(xrt_device *xdev)
+{
+	auto *s = static_cast<HandSlotDevice *>(xdev);
+	std::vector<xrt_device *> orphans;
+	{
+		std::lock_guard lk(s->ctx->devices_mut);
+		if (--s->ctx->hand_slots_alive == 0) {
+			// the last hand: the controllers outside the system (behind the hands, or come after the setup)
+			for (ControllerDevice *c : s->ctx->controller) {
+				if (c != nullptr && !c->in_system) {
+					orphans.push_back(c);
+				}
+			}
+		}
+	}
+	for (xrt_device *d : orphans) {
+		xrt_device_destroy(&d); // takes `devices_mut` itself
+	}
+	delete s;
 }

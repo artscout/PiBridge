@@ -14,6 +14,8 @@
 #include "cache/render_shader_specialization_helpers.h"
 #include "render/render_interface.h"
 #include "util/comp_high_level_scratch.h"
+#include "util/comp_layer_accum.h"
+#include "util/comp_swapchain.h"
 #include "util/u_misc.h"
 #include "util/u_trace_marker.h"
 #include "os/os_time.h"
@@ -114,8 +116,26 @@ struct comp_recorder
 	VkPipelineCache driver_cache;
 	struct render_blit_pipeline_cache *pipeline_cache;
 	VkPipeline pipeline;
+	VkPipeline pipeline_quad; //!< the same blit, linear -> sRGB (a quad's view samples linear values)
 	struct rec_gpu_slot slots[REC_GPU_SLOTS];
 	bool leaked; //!< a fence never signalled: the resources are left alone
+
+	//! PIMAX_RECORD_QUAD (default on): record a frame with nothing but quads as its largest quad, filling the video.
+	bool quad_enabled;
+	//! Compositor thread: the last captured frame was a quad (logged when it changes).
+	bool quad_mode;
+};
+
+/*!
+ * A frame without 3D, e.g. a game's main menu (one quad straight ahead): the quad's own image, fitted into the whole
+ * output frame, instead of the eye images in which it is a small rectangle.
+ */
+struct rec_quad
+{
+	VkImageView view;                 //!< the sampled view (linear values)
+	struct xrt_normalized_rect src;   //!< the shown part of the image, flipped when the layer says so
+	VkOffset2D offset;                //!< where it goes in the output frame
+	VkExtent2D extent;
 };
 
 static _Atomic bool g_squash = false;
@@ -238,6 +258,7 @@ destroy_resources(struct comp_recorder *rec)
 	}
 	if (rec->pipeline_cache != NULL) {
 		rec->pipeline = VK_NULL_HANDLE;
+		rec->pipeline_quad = VK_NULL_HANDLE;
 		render_blit_pipeline_cache_destroy(&rec->pipeline_cache, vk);
 	}
 	if (rec->pipeline_layout != VK_NULL_HANDLE) {
@@ -349,6 +370,14 @@ create_resources(struct comp_recorder *rec)
 	const struct render_blit_spec spec = render_make_blit_spec(0);
 	if (render_blit_pipeline_cache_get(rec->pipeline_cache, vk, &spec, &rec->pipeline) != XRT_SUCCESS) {
 		REC_ERR("blit pipeline");
+		destroy_resources(rec);
+		return false;
+	}
+	// A quad's swapchain views sample linear values (an sRGB view decodes; a UNORM image holds linear by OpenXR's
+	// rules): encode them (blit.inc.glsl COLOR_TRANSFORM_MODE_LINEAR_IN_SRGB_FORMAT).
+	const struct render_blit_spec quad_spec = render_make_blit_spec(2);
+	if (render_blit_pipeline_cache_get(rec->pipeline_cache, vk, &quad_spec, &rec->pipeline_quad) != XRT_SUCCESS) {
+		REC_ERR("blit pipeline (quad)");
 		destroy_resources(rec);
 		return false;
 	}
@@ -548,6 +577,7 @@ try_attach(struct comp_recorder *rec)
 	REC_LOG("attached: %u eye(s) %ux%u from %ux%u at %u fps", rec->eyes, rec->out_extent.width,
 	        rec->out_extent.height, rec->src_extent.width, rec->src_extent.height, h->fps);
 	rec->next_due_ns = 0;
+	rec->quad_mode = false;
 	atomic_store(&g_squash, true);
 	atomic_store(&rec->state, REC_READY);
 }
@@ -658,8 +688,75 @@ worker(void *ptr)
  *
  */
 
+/*!
+ * The largest @p aspect rectangle that fits @p out, centred, even-sized (pure).
+ */
+static void
+fit_rect(double aspect, VkExtent2D out, VkOffset2D *out_offset, VkExtent2D *out_extent)
+{
+	uint32_t w = out.width;
+	uint32_t h = out.height;
+	if (aspect > 0.0 && (double)out.width / (double)out.height > aspect) {
+		w = even((uint32_t)((double)out.height * aspect + 0.5));
+	} else if (aspect > 0.0) {
+		h = even((uint32_t)((double)out.width / aspect + 0.5));
+	}
+	w = w > out.width ? out.width : (w == 0 ? 2 : w);
+	h = h > out.height ? out.height : (h == 0 ? 2 : h);
+	*out_extent = (VkExtent2D){w, h};
+	*out_offset = (VkOffset2D){(int32_t)((out.width - w) / 2), (int32_t)((out.height - h) / 2)};
+}
+
+/*!
+ * This frame's layers hold nothing but quads (no projection, no 3D): the largest one, fitted into the output frame.
+ * The layers are the merged ones of every client (a game's menu quad, an overlay's panel), still held for this frame.
+ */
 static bool
-record_and_submit(struct comp_recorder *rec, struct rec_gpu_slot *s, const struct chl_scratch_state *ss)
+find_frame_quad(struct comp_recorder *rec, struct rec_quad *out)
+{
+	const struct comp_layer_accum *la = &rec->c->base.layer_accum;
+	const struct comp_layer *best = NULL;
+	float best_area = 0.0f;
+	for (uint32_t i = 0; i < la->layer_count; i++) {
+		const struct comp_layer *l = &la->layers[i];
+		if (l->data.type != XRT_LAYER_QUAD) {
+			return false; // 3D in the frame: the eye images
+		}
+		const float area = l->data.quad.size.x * l->data.quad.size.y;
+		if (best == NULL || area > best_area) {
+			best = l;
+			best_area = area;
+		}
+	}
+	if (best == NULL) {
+		return false;
+	}
+	const struct xrt_layer_quad_data *q = &best->data.quad;
+	const struct comp_swapchain *sc = (const struct comp_swapchain *)comp_layer_get_swapchain(best, 0);
+	if (sc == NULL || q->sub.image_index >= sc->vkic.image_count ||
+	    q->sub.array_index >= sc->images[q->sub.image_index].array_size) {
+		return false;
+	}
+	out->view = sc->images[q->sub.image_index].views.no_alpha[q->sub.array_index];
+	out->src = q->sub.norm_rect;
+	if (best->data.flip_y) {
+		out->src.y += out->src.h;
+		out->src.h = -out->src.h;
+	}
+	// The quad's shape in the world (its size), so a menu shows as wide as in the headset.
+	double aspect = q->size.y > 0.0f ? (double)q->size.x / (double)q->size.y : 0.0;
+	if (aspect <= 0.0 && q->sub.rect.extent.h > 0) {
+		aspect = (double)q->sub.rect.extent.w / (double)q->sub.rect.extent.h;
+	}
+	fit_rect(aspect, rec->out_extent, &out->offset, &out->extent);
+	return out->view != VK_NULL_HANDLE;
+}
+
+static bool
+record_and_submit(struct comp_recorder *rec,
+                  struct rec_gpu_slot *s,
+                  const struct chl_scratch_state *ss,
+                  const struct rec_quad *quad)
 {
 	struct vk_bundle *vk = rec->vk;
 	struct comp_compositor *c = rec->c;
@@ -670,11 +767,12 @@ record_and_submit(struct comp_recorder *rec, struct rec_gpu_slot *s, const struc
 		return false;
 	}
 
-	for (uint32_t e = 0; e < rec->eyes; e++) {
-		struct comp_scratch_single_images *view = &c->scratch.views[e].cssi;
+	const uint32_t passes = quad != NULL ? 1 : rec->eyes;
+	for (uint32_t e = 0; e < passes; e++) {
 		VkDescriptorImageInfo src = {
 		    .sampler = c->nr.samplers.clamp_to_edge,
-		    .imageView = view->images[ss->views[e].index].unorm_view,
+		    .imageView = quad != NULL ? quad->view
+		                              : c->scratch.views[e].cssi.images[ss->views[e].index].unorm_view,
 		    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 		};
 		VkDescriptorImageInfo dst = {
@@ -730,8 +828,33 @@ record_and_submit(struct comp_recorder *rec, struct rec_gpu_slot *s, const struc
 	vk->vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb,
 	                         0, NULL, 1, &to_general);
 
-	vk->vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rec->pipeline);
-	for (uint32_t e = 0; e < rec->eyes; e++) {
+	if (quad != NULL) {
+		// Black around the fitted quad, then the quad: one blit into its rectangle.
+		const VkClearColorValue black = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}};
+		vk->vkCmdClearColorImage(cmd, rec->bounce, VK_IMAGE_LAYOUT_GENERAL, &black, 1, &range);
+		VkMemoryBarrier cleared = {
+		    .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+		    .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+		    .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+		};
+		vk->vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
+		                         &cleared, 0, NULL, 0, NULL);
+		vk->vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rec->pipeline_quad);
+		vk->vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rec->pipeline_layout, 0, 1, &s->sets[0], 0,
+		                            NULL);
+		struct render_compute_blit_push_data pc = {
+		    .source_rect = quad->src,
+		    .target_rect = {.offset = {quad->offset.x, quad->offset.y},
+		                    .extent = {(int32_t)quad->extent.width, (int32_t)quad->extent.height}},
+		};
+		vk->vkCmdPushConstants(cmd, rec->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+		vk->vkCmdDispatch(cmd, (quad->extent.width + 7) / 8, (quad->extent.height + 7) / 8, 1);
+	}
+
+	if (quad == NULL) {
+		vk->vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rec->pipeline);
+	}
+	for (uint32_t e = 0; quad == NULL && e < rec->eyes; e++) {
 		vk->vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rec->pipeline_layout, 0, 1, &s->sets[e],
 		                            0, NULL);
 		struct render_compute_blit_push_data pc = {
@@ -814,8 +937,20 @@ comp_recorder_capture(struct comp_recorder *rec,
 	                       ? rec->next_due_ns + rec->interval_ns
 	                       : t + rec->interval_ns;
 
+	struct rec_quad quad;
+	const bool is_quad = rec->quad_enabled && find_frame_quad(rec, &quad);
+	if (is_quad != rec->quad_mode) {
+		rec->quad_mode = is_quad;
+		if (is_quad) {
+			REC_LOG("now recording the quad layer (no 3D in the frame): %ux%u at %d,%d", quad.extent.width,
+			        quad.extent.height, quad.offset.x, quad.offset.y);
+		} else {
+			REC_LOG("now recording the eye images");
+		}
+	}
+
 	struct comp_compositor *c = rec->c;
-	for (uint32_t e = 0; e < rec->eyes; e++) {
+	for (uint32_t e = 0; !is_quad && e < rec->eyes; e++) {
 		if (!ss->views[e].used || c->scratch.views[e].cssi.info.width != rec->src_extent.width ||
 		    c->scratch.views[e].cssi.info.height != rec->src_extent.height) {
 			hdr_add64(&h->skipped, 1);
@@ -837,7 +972,7 @@ comp_recorder_capture(struct comp_recorder *rec,
 
 	slot->seq = rec->seq++;
 	slot->timestamp_ns = t;
-	if (record_and_submit(rec, slot, ss)) {
+	if (record_and_submit(rec, slot, ss, is_quad ? &quad : NULL)) {
 		atomic_store(&slot->state, GPU_SUBMITTED);
 	} else {
 		atomic_fetch_add(&rec->errors, 1);
@@ -872,6 +1007,8 @@ comp_recorder_create(struct comp_compositor *c)
 	rec->c = c;
 	rec->vk = &c->base.vk;
 	rec->fd = -1;
+	const char *quad_env = getenv("PIMAX_RECORD_QUAD");
+	rec->quad_enabled = quad_env == NULL || strcmp(quad_env, "0") != 0;
 
 	const char *p = getenv("PIMAX_RECORD_SHM");
 	if (p != NULL && p[0] != '\0') {

@@ -1052,8 +1052,8 @@ imu_update(struct pimax_controller *c, const pimax_controller_report *r, uint64_
 
 //! $XDG_RUNTIME_DIR/pibridge/recenter-progress (PiBridge's recenter ring): written atomically, only when the value moved
 //! by 1/40 (not a file write per report).
-static void
-recenter_progress_publish(double prog, int *last_q)
+void
+pimax_recenter_progress_publish(double prog, int *last_q)
 {
 	const int q = (int)(prog * 40.0 + 0.5);
 	if (q == *last_q) {
@@ -1115,7 +1115,7 @@ pimax_ctrl_on_report(struct pimax_ctrl_ctx *ctx, const pimax_controller_report *
 	// hold progress 0..1 of the holding hand, only on a change of 1/40, 0 at the release
 	if (sys || c->btn_system) {
 		const double prog = !sys ? 0.0 : (double)(now_ns - c->system_press_ns) / (800.0 * 1000 * 1000);
-		recenter_progress_publish(prog > 1.0 ? 1.0 : prog, &c->system_progress_q);
+		pimax_recenter_progress_publish(prog > 1.0 ? 1.0 : prog, &c->system_progress_q);
 	}
 	if (sys && !c->system_recentered && now_ns - c->system_press_ns > 800 * 1000 * 1000ULL) {
 		C_WARN(c, "PIMAX_RECENTER: Pimax button long-press (%s): recentering",

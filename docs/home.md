@@ -169,7 +169,8 @@ dashboard (1.9 m wide, a picture of 2400 x 1200 painted with QPainter, only when
 the room, the clock), the pages on the left, the page's rows in the middle, and a bottom bar with what the last click
 did, **PiBridge window** (the app's window as before, when the app is linked) and **Hide**. Point and pull the
 trigger to click (down and up on the same box). The **menu button** (Touch: the left menu and the right menu, which
-Touch names `system/click`; Index: B; simple / Vive: menu), a short press, hides the panel and brings the dashboard back in front of you (a long press stays the driver's
+Touch names `system/click`; Valve Index: the left system button, the right one is PiBridge's recenter and never
+reaches the apps; simple / Vive: menu), a short press, hides the panel and brings the dashboard back in front of you (a long press stays the driver's
 recenter); the grip held 0.5 s brings it in front too. Without Qt or without the panel pass the home behaves as
 before (the window or the text panel).
 

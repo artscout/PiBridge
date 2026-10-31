@@ -6,6 +6,7 @@
 extends Node3D
 
 const AppsModel = preload("res://scripts/apps_model.gd")
+const BaseStations = preload("res://scripts/base_stations.gd")
 const ControllerModel = preload("res://scripts/controller_model.gd")
 const Dashboard = preload("res://scripts/dashboard.gd")
 const KeyConf = preload("res://scripts/keyconf.gd")
@@ -21,6 +22,7 @@ var camera := XRCamera3D.new()
 var panel: VrPanel
 var dash: Dashboard
 var models: Array[ControllerModel] = []
+var _profile_check := 0.0
 var _passthrough_pid := 0
 var _grip_hold := {}
 # A game took the headset: Monado moved this session to SYNCHRONIZED (not shown, no input). After a moment the world
@@ -74,11 +76,9 @@ func _ready() -> void:
 		models.append(m)
 		# the laser from the model's aim frame (the drawn controller's nose); without a model, the runtime's aim pose
 		var ptr := Pointer.new(aim)
-		if m.found:
-			ptr.transform = m.aim_from_grip
-			grip.add_child(ptr)
-		else:
-			aim.add_child(ptr)
+		m.changed.connect(_place_pointer.bind(m, ptr, grip, aim))
+		_place_pointer(m, ptr, grip, aim)
+	origin.add_child(BaseStations.new())
 	dash = Dashboard.new()
 	dash.hide_requested.connect(func(): panel.visible = false)
 	dash.passthrough_toggled.connect(_set_passthrough)
@@ -91,6 +91,23 @@ func _ready() -> void:
 	_place_panel()
 
 
+func _place_pointer(m: ControllerModel, ptr: Node3D, grip: Node3D, aim: Node3D) -> void:
+	var parent := grip if m.found else aim
+	if ptr.get_parent() != parent:
+		if ptr.get_parent() != null:
+			ptr.get_parent().remove_child(ptr)
+		parent.add_child(ptr)
+	ptr.transform = m.aim_from_grip if m.found else Transform3D.IDENTITY
+
+
+# The model follows the controller in the hand: Valve Index controllers (Lighthouse) or the Crystal's.
+func _check_profiles() -> void:
+	for m in models:
+		var t := XRServer.get_tracker(StringName(m.side + "_hand")) as XRPositionalTracker
+		if t != null:
+			m.set_kind(ControllerModel.kind_for_profile(t.profile))
+
+
 func _exit_tree() -> void:
 	_set_passthrough(false)
 
@@ -99,6 +116,10 @@ var _panel_write := 0.0
 
 
 func _process(dt: float) -> void:
+	_profile_check -= dt
+	if _profile_check <= 0.0:
+		_profile_check = 0.5
+		_check_profiles()
 	if _yield_in >= 0.0:
 		_yield_in -= dt
 		if _yield_in < 0.0 and not _quitting:
@@ -329,6 +350,28 @@ func _selftest() -> void:
 	dash.show_page("Quad views")
 	await get_tree().process_frame
 	_check(dash.content.get_child(dash.content.get_child_count() - 1).name == "Quadviews", "pages: Quad views builds")
+
+	var bs := BaseStations.parse("LHB-1 1 2.5 -3 0 0 0 1\nbad line\nLHB-2 0 0 0 0 0 0 0\n")
+	_check(bs.size() == 1 and bs["LHB-1"].origin == Vector3(1, 2.5, -3), "base stations: the poses file")
+	_check(ControllerModel.kind_for_profile("/interaction_profiles/valve/index_controller") == "index"
+		and ControllerModel.kind_for_profile("/interaction_profiles/oculus/touch_controller") == "crystal"
+		and ControllerModel.kind_for_profile("") == "", "controller models: the kind from the interaction profile")
+	var mdir := tmp + "/data/pibridge/windata/steamvr/rendermodels/valve_controller_knu_1_0_left"
+	Paths.write_text(mdir + "/body.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n")
+	Paths.write_text(mdir + "/valve_controller_knu_1_0_left.json", JSON.stringify({"components": {
+		"body": {"filename": "body.obj", "component_local": {"origin": [0.005, 0.013, 0.107], "rotate_xyz": [93.8, 0, 0]}},
+		"grip": {"component_local": {"origin": [0, -0.015, 0.13], "rotate_xyz": [0, 0, 0]}},
+		"tip": {"component_local": {"origin": [0, -0.015, 0.02], "rotate_xyz": [0, 0, 0]}}}}))
+	var cm := ControllerModel.new("left")
+	add_child(cm)
+	cm.set_kind("index")
+	_check(cm.found and cm.aim_from_grip.origin.is_equal_approx(Vector3(0, 0, -0.11)),
+		"controller models: the Index model on its grip frame, the laser from its tip")
+	var body: MeshInstance3D = cm.get_child(0).get_child(0)
+	_check(body.transform == Transform3D.IDENTITY, "controller models: the parts in the model's space (no component_local)")
+	_check(ControllerModel._local({"component_local": {"origin": [0, 0, 0], "rotate_xyz": [15.392, 2.071, -0.303]}}).basis
+		.is_equal_approx(Basis(Vector3(0, 0, 1), deg_to_rad(-0.303)) * Basis(Vector3(0, 1, 0), deg_to_rad(2.071))
+		* Basis(Vector3(1, 0, 0), deg_to_rad(15.392))), "controller models: frames composed as Monado's (Rz Ry Rx)")
 
 	print("PiBridge World self test: %s" % ("ok" if _fails == 0 else "%d failed" % _fails))
 	get_tree().quit(1 if _fails > 0 else 0)

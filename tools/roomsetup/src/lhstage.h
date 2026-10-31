@@ -10,10 +10,13 @@
 
 #include "recenter.h"
 
+#include "pibridge/room/draw.h"
+
 #include <array>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace pibridge::roomsetup {
 
@@ -32,5 +35,14 @@ StagePose lhStageFromRecenter(const StagePose& oldStage, const RecenterResult& r
 std::string lhStageRuntimePath();
 /// <room dir>/lh-stage: the saved one, copied to the live file at every Monado start.
 std::string lhStageRoomPath(const std::string& roomDir);
+
+/// The base stations where they stand, in the live stage: Monado's steamvr_lh writes
+/// $XDG_RUNTIME_DIR/pibridge/monado/basestations, a line "<serial> px py pz qx qy qz qw" each, once a second.
+std::string baseStationsPath();
+/// The poses of that file; malformed lines are left out.
+std::vector<room::Mat34> parseBaseStations(std::string_view text);
+/// Each base station as a small wire box with a mark on its front (-Z, where it sweeps), so the room setup shows
+/// where they are.
+void drawBaseStations(room::Batch& b, const std::vector<room::Mat34>& stations);
 
 } // namespace pibridge::roomsetup
