@@ -19,6 +19,9 @@
  * recenters (as the Pimax button does), and the recenter moves the Lighthouse controllers with the head. The base
  * stations' poses go to $XDG_RUNTIME_DIR/pibridge/monado/basestations (PiBridge World draws them).
  *
+ * The original Crystal (PIMAX_MODEL=crystal-og PIMAX_NO_DEVICE=1, XRT_BUILDER=pibridge_lh) works the same way with its
+ * built-in Lighthouse module in place of the faceplate.
+ *
  * PIBRIDGE_LH_HEAD_OFFSET="px py pz qx qy qz qw": the Pimax head relative to the faceplate's pose (default identity:
  * driver_lighthouse already reports the head pose of the headset it knows).
  * LH_STAGE_FILE (steamvr_lh): PiBridge's stage of this backend ("px py pz qx qy qz qw" = stage_from_raw), re-read
@@ -48,6 +51,7 @@
 #include "steamvr_lh/steamvr_lh_interface.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if !defined(XRT_BUILD_DRIVER_PIMAX) || !defined(XRT_BUILD_DRIVER_STEAMVR_LIGHTHOUSE)
@@ -158,7 +162,11 @@ pibridge_lh_open_system_impl(struct xrt_builder *xb, cJSON *config, struct xrt_p
 		return XRT_ERROR_DEVICE_CREATION_FAILED;
 	}
 	struct xrt_device *ctrls[2] = {NULL, NULL};
-	struct xrt_device *hmd = pimax_hmd_create("Pimax Crystal Super", ctrls);
+	// the original Crystal (PIMAX_MODEL=crystal-og, with PIMAX_NO_DEVICE=1: its HID is pibridge-keepalived's) is posed
+	// by its built-in Lighthouse module the same way
+	const char *model = getenv("PIMAX_MODEL");
+	const bool og = model != NULL && strcmp(model, "crystal-og") == 0;
+	struct xrt_device *hmd = pimax_hmd_create(og ? "Pimax Crystal" : "Pimax Crystal Super", ctrls);
 	if (hmd == NULL) {
 		PLH_ERROR("the Pimax HMD could not be created");
 		return XRT_ERROR_DEVICE_CREATION_FAILED;

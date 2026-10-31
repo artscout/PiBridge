@@ -285,6 +285,12 @@ the inside-out session
 (`pibridge-headtrack`: the Pimax engine or Basalt, camera auto exposure, optical controllers), each with one line of
 help, the **RECOMMENDED** mark and the reason when it does not apply. All details, the sources and defaults of every
 knob are in [TRACKING.md](TRACKING.md) (also the **How tracking works** link).
+- The original Crystal on the Monado backend (`RecSetup::monadoCrystalOg`, USB `34a4:0012`): START VR runs
+  monado-service alone for it (`buildMonadoCrystalOgEnv`: the `pibridge_og` builder; or `buildMonadoLighthouseEnv`
+  with `PIMAX_MODEL=crystal-og PIMAX_NO_DEVICE=1` in its Lighthouse mode, which waits for its Lighthouse module on
+  USB). The mode is `crystal_tracking`, for `keep` the one keepalived reads from it. When the headset's mode
+  (keepalived's `crystal_lighthouse`) differs from the running session's, the Dashboard stops the session and starts
+  it again once it can (`followCrystalMode`, a minute at most). STOP VR also switches it off.
 - Cards: **Tracking mode**, **Head tracking (SLAM)**, **Cameras**, **Controllers**, **Advanced** (extra environment
   `rec_env`, the programs and files, what a start sets, **Reset to recommended**). START VR / STOP VR are on the
   Dashboard.

@@ -949,6 +949,14 @@ ControllerDevice::get_tracked_pose(xrt_input_name name, uint64_t at_timestamp_ns
 {
 	xrt_space_relation rel = {};
 	Device::get_pose(at_timestamp_ns, &rel);
+	// PiBridge: no pose from the driver for a while (switched off, out of range of the dongle): no pose, not the
+	// last one frozen in the air (the history would keep handing it out as tracked)
+	int64_t latest = 0;
+	xrt_space_relation last = {};
+	if (m_relation_history_get_latest(relation_hist, &latest, &last) &&
+	    chrono_timestamp_ns() - latest > 500 * U_TIME_1MS_IN_NS) {
+		rel = XRT_SPACE_RELATION_ZERO;
+	}
 	pibridge_apply_world_offset(&rel); // PiBridge: the manual recenter (the head gets it from the Pimax HMD)
 
 	xrt_pose pose_offset = XRT_POSE_IDENTITY;
@@ -1238,7 +1246,8 @@ Device::update_pose(const vr::DriverPose_t &newPose) const
 {
 	xrt_space_relation relation = {};
 
-	if (newPose.poseIsValid) {
+	// PiBridge: a controller switched off is no pose at all (else its last one would stay valid and tracked)
+	if (newPose.poseIsValid && newPose.deviceIsConnected) {
 		// The pose is known to be valid but that alone is not enough to say whether the data comes from
 		// inference or if it represents actively tracked position and orientation data. Furthermore we avoid
 		// assumptions regarding the validity of time-derivatives until we know that they're based on tracked

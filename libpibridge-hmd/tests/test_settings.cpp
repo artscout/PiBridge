@@ -60,6 +60,12 @@ TEST(booleans_and_numbers) {
     CHECK(Settings::parse("refresh_hz=72.0\n").refresh_hz == 72);
 }
 
+TEST(vr_backend) {
+    CHECK(Settings::parse("").vr_backend == "steamvr");
+    CHECK(Settings::parse("vr_backend=monado\n").vr_backend == "monado");
+    CHECK(Settings::parse("vr_backend=other\n").vr_backend == "steamvr");
+}
+
 TEST(bad_values_keep_the_default_with_a_warning) {
     const Settings s = Settings::parse("refresh_hz=120\naudio_to_headset=maybe\nno equals sign\nrefresh_hz=72,0\n");
     CHECK(s.refresh_hz == 90);

@@ -397,7 +397,8 @@ controller, or keep the eye height), then the room's stage (`stage_from_raw`) go
 driver_lighthouse put them (the floor is often above your head), so run this setup once per room.
 
 While it runs, the base stations are drawn where they stand as small wire boxes with a cross on the front (the side
-that sweeps the room): steamvr_lh's `$XDG_RUNTIME_DIR/pibridge/monado/basestations`, re-read once a second, so they
+that sweeps the room): steamvr_lh's `$XDG_RUNTIME_DIR/pibridge/monado/basestations`, re-read once a second (only while Monado writes it: a
+file older than 5 s is from an earlier session and not drawn), so they
 move with the stage as it changes (`parseBaseStations` / `drawBaseStations` in `lhstage.*`).
 
 ## Live tracing and pose sources

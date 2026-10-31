@@ -3,6 +3,8 @@
 
 #include <QDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <algorithm>
@@ -187,18 +189,29 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
     //   "chovr" (or the legacy "default") = crystal-chovr.conf (CHOVR's camera-calibrated default, FOV 98x88).
     // The chosen profile is tried first, then the other, so a missing file still resolves. An explicit rec_lens_conf
     // path still wins. crystal.conf (the raw PVR dump, inflated 101x97 port) stays last as a legacy fallback.
+    // The original Crystal has panels and lenses of its own: crystal-og.conf only (CHOVR's "Crystal OG Default"), never
+    // the Crystal Super's lens.conf or rec_lens_conf (rec_lens_conf_og names another file for it).
+    const bool og = usbDevicePresent(env.usbRoot, QStringLiteral("34a4"), QStringLiteral("0012"));
     QStringList lensNames;
-    if (isChovrLensProfile(conf.value(reckey::kLensProfile, QString()))) {
+    if (og) {
+        lensNames = {QStringLiteral("crystal-og.conf")};
+    } else if (isChovrLensProfile(conf.value(reckey::kLensProfile, QString()))) {
         lensNames = {QStringLiteral("crystal-chovr.conf"), QStringLiteral("crystal-pimax-native.conf")};
     } else {
         lensNames = {QStringLiteral("crystal-pimax-native.conf"), QStringLiteral("crystal-chovr.conf")};
     }
-    QStringList lensCandidates{env.configDir + QStringLiteral("/lens.conf")};
+    QStringList lensCandidates;
+    if (!og) {
+        lensCandidates << env.configDir + QStringLiteral("/lens.conf");
+    }
     for (const QString& n : lensNames) {
         lensCandidates << data + QStringLiteral("/lens/") + n << h + QStringLiteral("/gamedev/ext/lens/") + n;
     }
-    lensCandidates << data + QStringLiteral("/lens/crystal.conf") << h + QStringLiteral("/gamedev/ext/lens/crystal.conf");
-    s.lens = pick(conf, reckey::kLens, QStringLiteral("lens file"), false, lensCandidates, h, isFile);
+    if (lensNames.size() > 1) {
+        lensCandidates << data + QStringLiteral("/lens/crystal.conf") << h + QStringLiteral("/gamedev/ext/lens/crystal.conf");
+    }
+    s.lens = pick(conf, og ? "rec_lens_conf_og" : reckey::kLens, QStringLiteral("lens file"), false, lensCandidates, h,
+                  isFile);
     // the user's factory calibration first, then the installed default template
     s.calib = pick(conf, reckey::kCalib, QStringLiteral("camera calibration"), true,
                    {env.configDir + QStringLiteral("/headset-calibration.xml"),
@@ -227,6 +240,19 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
         }
     }
     s.headsetPresent = pimaxHeadsetPresent(env.usbRoot);
+    s.crystalOg = usbDevicePresent(env.usbRoot, QStringLiteral("34a4"), QStringLiteral("0012"));
+    s.lighthouseModule = usbDevicePresent(env.usbRoot, QStringLiteral("28de"), QStringLiteral("2300"));
+    {
+        const QString want = conf.value("crystal_tracking", QStringLiteral("lighthouse")).trimmed();
+        if (want == QLatin1String("slam")) {
+            s.crystalOgLighthouse = false;
+        } else if (want == QLatin1String("keep")) {
+            // the mode it runs, as pibridge-keepalived reads it from its head reports ("1" Lighthouse, "0" its own)
+            QFile f(env.runtimeDir + QStringLiteral("/pibridge/keepalived.json"));
+            const QJsonObject k = f.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(f.readAll()).object() : QJsonObject();
+            s.crystalOgLighthouse = k.value(QStringLiteral("crystal_lighthouse")).toString() != QLatin1String("0");
+        }
+    }
     s.io = ioSettings(conf);
     s.backend = vrBackend(conf);
     if (conf.value("vr_home", QString()).trimmed() != QLatin1String("classic")) {
@@ -256,7 +282,9 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
             s.worldDir.clear();
         }
     }
-    s.monadoLighthouse = s.backend == VrBackend::Monado && s.io.mode == TrackingMode::Lighthouse;
+    s.monadoCrystalOg = s.backend == VrBackend::Monado && s.crystalOg;
+    s.monadoLighthouse = s.backend == VrBackend::Monado &&
+                         (s.crystalOg ? s.crystalOgLighthouse : s.io.mode == TrackingMode::Lighthouse);
     s.lhStageFile = vrBackendRuntimeDir(VrBackend::Monado) + QStringLiteral("/lh-stage");
     s.lhStageSaved = vrBackendRoomsDir(VrBackend::Monado, h) + QLatin1Char('/') +
                      roomName(conf) + QStringLiteral("/lh-stage");
@@ -422,6 +450,17 @@ QString pimaxCameraDevice(const QString& v4lRoot, const QString& devRoot) {
     return {};
 }
 
+bool usbDevicePresent(const QString& usbRoot, const QString& vendor, const QString& product) {
+    const QDir d(usbRoot);
+    for (const QString& e : d.entryList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::System)) {
+        const QString base = usbRoot + QLatin1Char('/') + e;
+        if (readLine(base + QStringLiteral("/idVendor")) == vendor && readLine(base + QStringLiteral("/idProduct")) == product) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool pimaxHeadsetPresent(const QString& usbRoot) {
     const QDir d(usbRoot);
     for (const QString& e : d.entryList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::System)) {
@@ -467,8 +506,13 @@ RecReadiness recReadiness(const RecSetup& s, const RecSystem& sys, RecUse use) {
     if (!s.headsetPresent) {
         r.blocking << QStringLiteral("No headset found. Connect the headset and switch it on.");
     }
-    // Monado + the Lighthouse faceplate uses no tracking cameras (and so no calibration or camera tools)
-    const bool cams = !(use == RecUse::Monado && s.monadoLighthouse);
+    // Monado + the Lighthouse faceplate uses no tracking cameras (and so no calibration or camera tools); nor does the
+    // original Crystal (it tracks itself)
+    const bool cams = !(use == RecUse::Monado && (s.monadoLighthouse || s.monadoCrystalOg));
+    if (use == RecUse::Monado && s.monadoCrystalOg && s.monadoLighthouse && !s.lighthouseModule) {
+        r.blocking << QStringLiteral("The Crystal's Lighthouse module is not on USB yet (it comes up a few seconds after the "
+                                     "switch to Lighthouse).");
+    }
     if (cams && s.camDevice.isEmpty()) {
         r.blocking << (s.camDeviceFromConf
                            ? QStringLiteral("The camera device in rec_cam_device= (pibridge.conf) does not exist.")

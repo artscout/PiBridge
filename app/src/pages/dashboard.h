@@ -98,6 +98,11 @@ private:
     bool selectedInsideOut() const;
     /// START VR runs the Monado inside-out session (the saved inside-out mode, not the Crystal).
     bool monadoSession() const;
+    /// The original Crystal on the Monado backend: a switch of its tracking restarts the session (Monado's devices
+    /// are fixed at its start), then starts it again once it can.
+    void followCrystalMode();
+    bool ogRestart_ = false;
+    qint64 ogRestartSince_ = 0;
     // The Quick settings SteamVR-dashboard toggle: reflects the saved choice and shows the launcher's plain-words status.
     void updateOverlay();
 

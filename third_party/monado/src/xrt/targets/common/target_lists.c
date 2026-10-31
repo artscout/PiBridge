@@ -152,6 +152,10 @@ xrt_builder_create_func_t target_builder_list[] = {
     t_builder_pibridge_lh_create,
 #endif // T_BUILDER_PIBRIDGE_LH
 
+#ifdef T_BUILDER_PIBRIDGE_OG
+    t_builder_pibridge_og_create,
+#endif // T_BUILDER_PIBRIDGE_OG
+
 #ifdef T_BUILDER_STEAMVR
     t_builder_steamvr_create,
 #endif // T_BUILDER_STEAMVR

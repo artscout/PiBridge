@@ -92,6 +92,16 @@ struct RecSetup {
     // mode Lighthouse): then monado-service runs alone (the pibridge_lh builder), no cameras, SLAM or winbridge.
     VrBackend backend = VrBackend::SteamVr;
     bool monadoLighthouse = false;
+    // The original Crystal (P3B, 34a4:0012) is on USB: it tracks itself; pibridge-keepalived owns its HID and streams
+    // its poses to /dev/shm/pibridge-crystal-pose. On the Monado backend monado-service runs alone for it too
+    // (PIMAX_MODEL=crystal-og, PIMAX_NO_DEVICE=1): its own inside-out (the pibridge_og builder) or its Lighthouse
+    // module (pibridge_lh, monadoLighthouse). crystalOgLighthouse: the mode it is asked for (crystal_tracking), or for
+    // "keep" the one it runs (keepalived's crystal_lighthouse); lighthouseModule: its Lighthouse module (28de:2300)
+    // is on USB (steamvr_lh finds the headset only when it is).
+    bool crystalOg = false;
+    bool monadoCrystalOg = false;
+    bool crystalOgLighthouse = true;
+    bool lighthouseModule = false;
     QString lhStageFile;          // <runtime>/pibridge/monado/lh-stage (steamvr_lh LH_STAGE_FILE)
     QString lhStageSaved;         // <rooms>/monado/<room>/lh-stage: copied to lhStageFile at the start
     // The Monado backend's home in the headset: PiBridge World (world/, a Godot 4 project, docs/world.md) run by Godot,
@@ -166,6 +176,8 @@ QString pimaxConnector(const QString& drmRoot);
 QString pimaxCameraDevice(const QString& v4lRoot, const QString& devRoot);
 // A USB device with idVendor 34a4 other than the camera (idProduct 0014).
 bool pimaxHeadsetPresent(const QString& usbRoot);
+/// A USB device vendor:product (lower-case hex, "34a4" "0012") is under usbRoot.
+bool usbDevicePresent(const QString& usbRoot, const QString& vendor, const QString& product);
 
 // ---------------------------------------------------------------- can it start?
 

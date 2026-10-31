@@ -71,6 +71,10 @@ pimax_hmd_get_recenter(struct xrt_pose *out);
  * queries. Thread-safe. */
 void
 pimax_hmd_recenter_button(bool down);
+/*! The Pimax controllers' binding profiles (simple controller, Valve Index, hand interaction onto the Touch inputs),
+ * for another device with the same Touch inputs (the original Crystal's controllers, pimax_poseshm.c). */
+struct xrt_binding_profile *
+pimax_ctrl_binding_profiles(bool left, size_t *out_count);
 /*!
  * Lighthouse: take the head pose from @p source (the faceplate's HMD device of steamvr_lh, its
  * XRT_INPUT_GENERIC_HEAD_POSE) composed with @p offset (NULL = identity), and use its tracking origin. The display,

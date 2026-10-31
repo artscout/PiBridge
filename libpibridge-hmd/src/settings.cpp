@@ -137,6 +137,8 @@ Settings Settings::parse(std::string_view text) {
             }
         } else if (key == "crystal_autostart_steamvr") {
             boolean(s.crystal_autostart_steamvr);
+        } else if (key == "vr_backend") {
+            s.vr_backend = val == "monado" ? "monado" : "steamvr";
         }
         // unknown keys are ignored (other parts and newer apps add their own)
     }

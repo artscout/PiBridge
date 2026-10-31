@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // pibridge-xroverlay: the Monado backend's overlay (XR_EXTX_overlay), composited by Monado over whatever app runs - a
-// game, the home. Today it shows the recenter ring: while the Pimax button is held, the Pimax driver writes the hold
+// game, the home. It shows the volume indicator after a volume button press (volume.h), the loading dots, and the recenter ring: while the Pimax button is held, the Pimax driver writes the hold
 // progress 0..1 to $XDG_RUNTIME_DIR/pibridge/recenter-progress (as pibridge-headtrack does under SteamVR, where
 // pibridge-overlay draws the same ring); a ring filling to completion floats 0.7 m in front of the head.
 //
@@ -9,12 +9,14 @@
 #include "overlay_core.h"
 #include "pibridge/xrkit/xrkit.h"
 #include "loading.h"
+#include "volume.h"
 
 #include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -219,6 +221,13 @@ int main(int argc, char** argv) {
         return fail(dotsSc.error());
     }
     const XrSwapchain dots = *dotsSc;
+    const auto volSc = staticSwapchain(xo::drawVolumeSheet(), xo::kVolW, xo::kVolH * xo::kVolFrames, "volume");
+    if (!volSc) {
+        return fail(volSc.error());
+    }
+    const XrSwapchain vol = *volSc;
+    const std::string volumePath = xo::volumeHudPath();
+    std::optional<int> volume;
     const std::string loadingPath = xo::loadingRequestPath();
     std::printf("pibridge-xroverlay: overlay session on %s; the recenter ring is ready\n", x.runtimeName.c_str());
 
@@ -281,6 +290,8 @@ int main(int argc, char** argv) {
             }
             loading = want;
         }
+        // the volume indicator for a moment after a volume button (keepalived writes the new value)
+        volume = xo::volumeToShow(volumePath);
         auto d = xrkit::xr_make<XrCompositionLayerQuad>(XR_TYPE_COMPOSITION_LAYER_QUAD);
         d.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
         d.space = x.view;
@@ -300,10 +311,22 @@ int main(int argc, char** argv) {
         q.subImage.imageRect = {{(frame % kRingGrid) * cell, (frame / kRingGrid) * cell}, {cell, cell}};
         q.pose = {{0.0F, 0.0F, 0.0F, 1.0F}, {0.0F, -0.03F, -0.7F}};
         q.size = {0.22F, 0.22F};
-        const XrCompositionLayerBaseHeader* layers[2] = {};
+        auto v = xrkit::xr_make<XrCompositionLayerQuad>(XR_TYPE_COMPOSITION_LAYER_QUAD);
+        v.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+        v.space = x.view; // low in front of the head, out of the way
+        v.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        v.subImage.swapchain = vol;
+        v.subImage.imageRect = {{0, xo::volumeFrame(volume.value_or(0)) * static_cast<std::int32_t>(xo::kVolH)},
+                                {static_cast<std::int32_t>(xo::kVolW), static_cast<std::int32_t>(xo::kVolH)}};
+        v.pose = {{0.0F, 0.0F, 0.0F, 1.0F}, {0.0F, -0.22F, -0.9F}};
+        v.size = {0.32F, 0.06F};
+        const XrCompositionLayerBaseHeader* layers[3] = {};
         std::uint32_t layerCount = 0;
         if (fs.shouldRender && loading) {
             layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&d);
+        }
+        if (fs.shouldRender && volume) {
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&v);
         }
         if (fs.shouldRender && shown) {
             layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&q); // the ring on top
@@ -320,5 +343,6 @@ int main(int argc, char** argv) {
     }
     xrDestroySwapchain(sc);
     xrDestroySwapchain(dots);
+    xrDestroySwapchain(vol);
     return 0;
 }

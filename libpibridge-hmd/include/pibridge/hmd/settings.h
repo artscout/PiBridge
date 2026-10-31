@@ -37,6 +37,9 @@ struct Settings {
     std::string crystal_tracking = "lighthouse";
     /// The original Crystal: start SteamVR when the headset connects (it is switched on with its own button).
     bool crystal_autostart_steamvr = true;
+    /// The VR backend (the app's vr_backend: "steamvr" or "monado"); the original Crystal on Monado gets the PiBridge
+    /// app started, never SteamVR (its Lighthouse module would be SteamVR's then).
+    std::string vr_backend = "steamvr";
 
     /// Bad lines and values, in plain words with their line number.
     std::vector<std::string> warnings;

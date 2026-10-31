@@ -151,6 +151,32 @@ TEST(conf_round_trip_and_clamping) {
 
 // ---------------------------------------------------------------- the environment
 
+TEST(env_and_readiness_of_the_original_crystal_on_monado) {
+    RecSetup s = fakeRecSetup(QStringLiteral("/r"));
+    s.backend = VrBackend::Monado;
+    s.crystalOg = s.monadoCrystalOg = true;
+    s.camDevice.clear(); // it has no tracking cameras on USB
+    // its own inside-out: monado-service alone, its builder, its panels, its HID left to keepalived
+    s.monadoLighthouse = false;
+    const IoSessionEnv e = buildIoEnv(IoSettings::recommended(), s, 120, {}, {});
+    CHECK(!e.winbridge && !e.ctrltrack);
+    for (const char* want : {"XRT_BUILDER=pibridge_og", "PIMAX_MODEL=crystal-og", "PIMAX_NO_DEVICE=1", "PIMAX_FPS=120"}) {
+        CHECK(has(e.monado, want));
+    }
+    CHECK(!hasPrefix(e.monado, "PIMAX_SLAM=1") && !hasPrefix(e.monado, "PIMAX_CAM_SOURCE"));
+    CHECK(recReadiness(s, {}).blocking.filter(QStringLiteral("camera")).isEmpty()); // no cameras needed
+    // its Lighthouse module: the Lighthouse builder with its panels; started once the module is on USB
+    s.monadoLighthouse = true;
+    const IoSessionEnv lh = buildIoEnv(IoSettings::recommended(), s, 90, {}, {});
+    for (const char* want : {"XRT_BUILDER=pibridge_lh", "PIBRIDGE_LH=1", "PIMAX_MODEL=crystal-og", "PIMAX_NO_DEVICE=1"}) {
+        CHECK(has(lh.monado, want));
+    }
+    s.lighthouseModule = false;
+    CHECK(recReadiness(s, {}).blocking.join(QString()).contains(QStringLiteral("Lighthouse module")));
+    s.lighthouseModule = true;
+    CHECK(!recReadiness(s, {}).blocking.join(QString()).contains(QStringLiteral("Lighthouse module")));
+}
+
 TEST(env_of_the_recommended_settings) {
     RecSetup s = fakeRecSetup(QStringLiteral("/r"));
     s.io.slamEngine = SlamEngine::Basalt;
@@ -169,6 +195,11 @@ TEST(env_of_the_recommended_settings) {
                              "PIMAX_CTRL_TRACK_LOST_S", "PIMAX_CTRL_TRACK_HYST", "PIMAX_CAM_AE_LAW", "PIMAX_SLAM_RECORD"}) {
         CHECK(!hasPrefix(e.monado, none));
     }
+    // the builder of the mode, never Monado's guess from USB (a Lighthouse faceplate left on would take it)
+    CHECK(has(e.monado, "XRT_BUILDER=legacy") && !hasPrefix(e.driver, "XRT_BUILDER"));
+    RecSetup lh = s;
+    lh.monadoLighthouse = true;
+    CHECK(has(buildIoEnv(IoSettings::recommended(), lh, 90, {}, {}).monado, "XRT_BUILDER=pibridge_lh"));
     // the room anchor hook: on because the room-map tool is there (fakeRecSetup has one); off without it and the switch
     CHECK(has(e.driver, "PIMAX_ANCHOR=1"));
     RecSetup nr = s;

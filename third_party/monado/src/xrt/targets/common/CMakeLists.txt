@@ -219,6 +219,10 @@ if(XRT_BUILD_DRIVER_STEAMVR_LIGHTHOUSE AND XRT_BUILD_DRIVER_PIMAX)
 	target_sources(target_lists PRIVATE target_builder_pibridge_lh.c)
 endif()
 
+if(XRT_BUILD_DRIVER_PIMAX)
+	target_sources(target_lists PRIVATE target_builder_pibridge_og.c)
+endif()
+
 if(XRT_BUILD_DRIVER_ANDROID)
 	target_link_libraries(target_lists PRIVATE drv_android)
 endif()

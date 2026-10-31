@@ -248,8 +248,14 @@ int lhStage(const Options& o) {
         const auto now = std::chrono::steady_clock::now();
         if (now - stationsRead > std::chrono::seconds(1)) {
             stationsRead = now;
+            // only a file Monado is writing now (once a second), never one an earlier session left
+            std::error_code ec;
+            const auto age = std::filesystem::file_time_type::clock::now() -
+                             std::filesystem::last_write_time(baseStationsPath(), ec);
             std::ifstream f(baseStationsPath());
-            stations = parseBaseStations(std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()));
+            stations = ec || age > std::chrono::seconds(5)
+                           ? std::vector<room::Mat34>{}
+                           : parseBaseStations(std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()));
         }
         drawBaseStations(b, stations);
     };

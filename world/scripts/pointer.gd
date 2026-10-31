@@ -10,6 +10,7 @@ var dot := MeshInstance3D.new()
 var _down := false
 var _panel = null
 var active := true
+var tracked := true # main.gd: the controller is tracked (shown); a hidden one does not point or click
 
 
 func _init(c: XRController3D) -> void:
@@ -47,8 +48,12 @@ func _ready() -> void:
 
 
 func _process(_dt: float) -> void:
-	visible = active and controller.get_has_tracking_data()
+	visible = active and tracked and controller.get_has_tracking_data()
 	if not visible:
+		if _panel != null and _down:
+			_panel.pointer_button(false)
+		_down = false
+		_panel = null
 		return
 	ray.force_raycast_update()
 	var length := 2.5

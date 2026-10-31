@@ -32,6 +32,20 @@ inline constexpr double kGridRadius = 12.0;   // metres; the grid fades out towa
 inline constexpr double kHorizonRadius = 50.0;
 inline constexpr double kFarZ = 120.0;        // the far plane the renderer uses (beyond the horizon ring)
 
+/// Whether a controller is drawn (its marker and laser, and whether it points): while the runtime tracks its position,
+/// and kLostGraceS after that (a short occlusion does not blink). Never tracked yet (the Pimax controllers before the
+/// headset first sees them sit at a guessed rest pose), no pose (switched off), or lost longer: not drawn.
+struct HandShown {
+    static constexpr double kLostGraceS = 1.0;
+    double lastTrackedS = -1.0; // < 0: never tracked
+    bool update(bool located, bool tracked, double nowS) {
+        if (located && tracked) {
+            lastTrackedS = nowS;
+        }
+        return located && lastTrackedS >= 0.0 && nowS - lastTrackedS <= kLostGraceS;
+    }
+};
+
 /// The text panel: placed once in front of the first valid head pose (yaw only), then fixed in the room.
 struct Panel {
     room::Vec3 center;

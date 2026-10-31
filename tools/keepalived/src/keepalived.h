@@ -96,6 +96,7 @@ struct Options {
     /// The original Crystal (P3B): the tracking to switch it to, and whether to start SteamVR when it connects.
     std::string crystal_tracking = "lighthouse";
     bool crystal_autostart_steamvr = true;
+    bool monado = false; // vr_backend=monado: the original Crystal gets the PiBridge app, not SteamVR
 };
 
 /// $XDG_RUNTIME_DIR/pimax-rate (/tmp/pimax-rate without it): the file omarchyvr uses, so both stacks agree.
@@ -250,6 +251,9 @@ private:
     bool headset_serials_read_ = false;            // the headset's and the optical module's, this connection
     bool crystal_audio_ = false; // the sound moved to the original Crystal by it being on
     Clock::time_point crystal_audio_retry_{}; // its output is looked for again then (it comes with the display)
+    int crystal_volume_ = -1;                 // the original Crystal's own volume last seen (-1: none yet)
+    /// The volume indicator in the headset (pibridge-xroverlay): "<percent>" to $XDG_RUNTIME_DIR/pibridge/volume-hud.
+    void write_volume_hud(int percent);
     std::unique_ptr<Crystal> crystal_;
     std::string volume_sink_;          // the headset output node track_volume() last saw
     std::optional<Clock::time_point> volume_at_;

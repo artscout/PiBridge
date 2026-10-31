@@ -25,9 +25,14 @@ session: with OpenXR on and SteamVR as the system runtime, Godot would start Ste
   else the OpenXR aim pose); the trigger clicks on the panel, the thumbstick scrolls. The controllers are drawn with
   their SteamVR render models when they are there (below), else as plain stand-ins: the Pimax Crystal controllers, or
   the Valve Index controllers in the Lighthouse mode (the model follows the controller's OpenXR interaction profile,
-  `/interaction_profiles/valve/index_controller`, and changes when the other controllers are picked up).
-- **Base stations** (the Lighthouse mode, **Show base stations in VR** on the app's Tracking card,
-  `show_base_stations = on` in pibridge.conf): drawn where they stand, as SteamVR does. Monado's steamvr_lh writes
+  `/interaction_profiles/valve/index_controller`, and changes when the other controllers are picked up). A
+  controller is drawn, and points, only while the runtime tracks its position (OpenXR tracking confidence high), and
+  for 1 s after it loses it, so a short occlusion does not blink: one switched off, a Pimax controller the headset has
+  not seen yet (Monado holds it at a guessed rest pose for games) or one lost longer is hidden (`hand_shown` in
+  `main.gd`).
+- **Base stations** (the Lighthouse mode only, **Show base stations in VR** on the app's Tracking card,
+  `show_base_stations = on` in pibridge.conf): drawn where they stand, as SteamVR does; a file an earlier session left
+  (older than 5 s) is not shown. Monado's steamvr_lh writes
   their poses in the stage to `$XDG_RUNTIME_DIR/pibridge/monado/basestations` (`<serial> px py pz qx qy qz qw` a line,
   once a second; [monado.md](monado.md)); the world re-reads it and the setting once a second. The model is SteamVR's
   `lh_basestation_valve_gen2` (else `lh_basestation_vive`, else a plain box).

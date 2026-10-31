@@ -301,6 +301,14 @@ int Crystal::battery() const {
     return h ? h->battery : -1;
 }
 
+int Crystal::volume() const {
+    if (!link_) {
+        return -1;
+    }
+    const auto h = link_->last_head();
+    return h ? h->volume : -1;
+}
+
 int Crystal::ipd_x100() const {
     if (!link_) {
         return 0;
@@ -500,6 +508,14 @@ void Crystal::tick(Clock::time_point now) {
         }
         break;
     case Step::Ready:
+        if (!steamvr_started_ && settings_.autostart_steamvr && settings_.monado) {
+            steamvr_started_ = true; // once per connection
+            if (deps_.start_app && !(deps_.process_running && deps_.process_running("pibridge"))) {
+                deps_.say(deps_.start_app() ? "crystal: starting PiBridge (Monado: START VR there)"
+                                            : "crystal: could not start PiBridge");
+            }
+            break;
+        }
         if (!steamvr_started_ && settings_.autostart_steamvr && restart_ == Restart::None) {
             const bool slam = settings_.tracking == "slam" || (settings_.tracking == "keep" && lh_enable_ != "1");
             // watched from the first Ready tick: the module may come up during the settle time

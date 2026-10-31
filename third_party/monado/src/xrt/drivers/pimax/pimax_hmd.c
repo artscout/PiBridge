@@ -78,6 +78,33 @@ DEBUG_GET_ONCE_NUM_OPTION(pimax_bias_timeout_ms, "PIMAX_BIAS_TIMEOUT_MS", 3000)
 
 #define PIMAX_EYE_W 3552
 #define PIMAX_EYE_H 3840
+/*!
+ * PiBridge: PIMAX_MODEL=crystal-og, the original Pimax Crystal (P3B, 34a4:0012): one 5760x2880 output (EDID), 2880x2880
+ * per eye, the panels turned the other way round than the Crystal Super's (CustomHeadsetOpenVR displayRotation 1
+ * against 3: pre-rotate 270 / 90 instead of 90 / 270; PIMAX_ROT_LEFT / _RIGHT still override). Its HID belongs to
+ * pibridge-keepalived (it streams the headset's own poses to shared memory, pimax_poseshm.h), so it goes with
+ * PIMAX_NO_DEVICE=1: the head pose comes from a head source (the pibridge_og or pibridge_lh builder).
+ */
+DEBUG_GET_ONCE_OPTION(pimax_model, "PIMAX_MODEL", NULL)
+#define PIMAX_OG_EYE 2880
+
+static bool
+pimax_model_is_crystal_og(void)
+{
+	const char *m = debug_get_option_pimax_model();
+	return m != NULL && strcmp(m, "crystal-og") == 0;
+}
+
+//! PIMAX_ROT_LEFT / PIMAX_ROT_RIGHT when set, else this model's panel rotation.
+static long
+pimax_rot_default(const char *env, long super_value, long og_value)
+{
+	const char *v = getenv(env);
+	if (v != NULL && v[0] != '\0') {
+		return strtol(v, NULL, 10);
+	}
+	return pimax_model_is_crystal_og() ? og_value : super_value;
+}
 //! Refresh rate: 72 (default) or 90. Must match the mode Monado picks (XRT_COMPOSITOR_DESIRED_MODE).
 DEBUG_GET_ONCE_NUM_OPTION(pimax_fps, "PIMAX_FPS", 72)
 #define PIMAX_PUSH_DIV 4 // push every 4th IMU sample (250 Hz) into the relation history
@@ -1072,18 +1099,24 @@ pimax_hmd_create(const char *name, struct xrt_device *out_ctrls[2])
 	hmd->base.hmd->blend_modes[0] = XRT_BLEND_MODE_OPAQUE;
 	hmd->base.hmd->blend_mode_count = 1;
 
-	// Display: one 7104x3840 @ 72 Hz output, left half = left eye, right half = right eye.
+	// Display: one 7104x3840 @ 72 Hz output (the original Crystal: 5760x2880), left half = left eye, right half = right
+	// eye.
+	const bool og = pimax_model_is_crystal_og();
+	const uint32_t panel_w = og ? PIMAX_OG_EYE : PIMAX_EYE_W, panel_h = og ? PIMAX_OG_EYE : PIMAX_EYE_H;
+	if (og) {
+		HMD_INFO(hmd, "PIMAX_MODEL=crystal-og: 2880x2880 per eye, panels pre-rotated 270 / 90");
+	}
 	hmd->base.hmd->screens[0].nominal_frame_interval_ns = time_s_to_ns(1.0f / (float)debug_get_num_option_pimax_fps());
 	long div = debug_get_num_option_pimax_debug_div();
 	if (div < 1) {
 		div = 1;
 	}
-	const uint32_t eye_w = PIMAX_EYE_W / div, eye_h = PIMAX_EYE_H / div;
+	const uint32_t eye_w = panel_w / div, eye_h = panel_h / div;
 	hmd->base.hmd->screens[0].w_pixels = eye_w * 2;
 	hmd->base.hmd->screens[0].h_pixels = eye_h;
 
 	// Lens model + FOV from ~/.config/pibridge/lens.conf (or PIMAX_LENS_CONF), see analysis/lens-distortion.md.
-	pimax_lens_load(&hmd->lens, (float)PIMAX_EYE_H / (float)PIMAX_EYE_W);
+	pimax_lens_load(&hmd->lens, (float)panel_h / (float)panel_w);
 	hmd->base.hmd->distortion.fov[0] = pimax_lens_get_fov(&hmd->lens, 0);
 	hmd->base.hmd->distortion.fov[1] = pimax_lens_get_fov(&hmd->lens, 1);
 
@@ -1096,7 +1129,8 @@ pimax_hmd_create(const char *name, struct xrt_device *out_ctrls[2])
 	 * With 90/270 the user-facing display is eye_h x eye_w (3840x3552) while the framebuffer viewport stays
 	 * eye_w x eye_h (3552x3840).
 	 */
-	long rots[2] = {debug_get_num_option_pimax_rot_left(), debug_get_num_option_pimax_rot_right()};
+	long rots[2] = {pimax_rot_default("PIMAX_ROT_LEFT", debug_get_num_option_pimax_rot_left(), 270),
+	                pimax_rot_default("PIMAX_ROT_RIGHT", debug_get_num_option_pimax_rot_right(), 90)};
 	long legacy = debug_get_num_option_pimax_panel_rotation();
 	if (legacy != 0) {
 		rots[0] = rots[1] = legacy;

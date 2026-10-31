@@ -74,6 +74,9 @@ public:
     struct Settings {
         std::string tracking = "lighthouse"; // lighthouse | slam | keep
         bool autostart_steamvr = true;
+        /// The Monado backend: on connect only the PiBridge app is started (VR is its START VR there), never SteamVR
+        /// (it would take the Lighthouse module); a tracking change is followed by the app (it restarts Monado).
+        bool monado = false;
     };
 
     explicit Crystal(Deps deps);
@@ -93,6 +96,8 @@ public:
     bool tracked() const;
     /// The headset's battery in percent, -1 = not known.
     int battery() const;
+    /// The headset's own sound volume in percent (its volume buttons change it), -1 = not known.
+    int volume() const;
     /// The live lens IPD in mm x 100 (0 = not known).
     int ipd_x100() const;
 

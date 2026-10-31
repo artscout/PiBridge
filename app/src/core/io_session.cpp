@@ -972,8 +972,10 @@ void IoSessionControl::startRoom() {
     if (!setup_.roomSaved || setup_.roommap.isEmpty()) {
         return; // no saved room (or no tool): nothing changes; room() says so
     }
-    if (setup_.monadoLighthouse) {
-        return; // Monado + Lighthouse: no camera map; the room is the Lighthouse stage, put in place at the start
+    if (setup_.monadoLighthouse || setup_.monadoCrystalOg) {
+        // Monado + Lighthouse: no camera map; the room is the Lighthouse stage, put in place at the start. The
+        // original Crystal tracking itself: its own space, no PC room map
+        return;
     }
     RecProcSpec spec;
     spec.name = QStringLiteral("roommap");

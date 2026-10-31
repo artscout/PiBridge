@@ -401,8 +401,11 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
             }
             if (crystalOn() && !source_.fake()) {
                 // the original Crystal runs on its battery: STOP VR switches it off too (user 2026-10-22)
-                say(actions_.crystalShutdown(statusDir()) ? QStringLiteral("Closing SteamVR and switching the Crystal off...")
-                                                          : QStringLiteral("Could not write the request to pibridge-keepalived."),
+                ogRestart_ = false;
+                say(actions_.crystalShutdown(statusDir())
+                        ? (inside ? QStringLiteral("Stopping VR and switching the Crystal off...")
+                                  : QStringLiteral("Closing SteamVR and switching the Crystal off..."))
+                        : QStringLiteral("Could not write the request to pibridge-keepalived."),
                     false);
             }
             return;
@@ -1162,9 +1165,48 @@ bool DashboardPage::selectedInsideOut() const {
 }
 
 bool DashboardPage::monadoSession() const {
-    // START VR runs PiBridge's session (io_): inside-out with SteamVR, or the Monado backend in either mode;
-    // only SteamVR with Lighthouse is a plain SteamVR launch
-    return !crystalOn() && (ioSettings(conf_).mode == TrackingMode::InsideOut || vrBackend(conf_) == VrBackend::Monado);
+    // START VR runs PiBridge's session (io_): inside-out with SteamVR, or the Monado backend in either mode (the
+    // original Crystal too); only SteamVR with Lighthouse, and the original Crystal on SteamVR, are a plain SteamVR launch
+    if (crystalOn()) {
+        return vrBackend(conf_) == VrBackend::Monado;
+    }
+    return ioSettings(conf_).mode == TrackingMode::InsideOut || vrBackend(conf_) == VrBackend::Monado;
+}
+
+void DashboardPage::followCrystalMode() {
+    // The original Crystal on the Monado backend: Monado's device list is fixed when it starts, so a switch of the
+    // headset's tracking (the selector, or the headset's own menu) restarts the session with the builder of the mode
+    // the headset now runs, as SteamVR is restarted for it. "1" Lighthouse, "0" its own inside-out, "" not known.
+    const KeepaliveStatus& k = source_.state().keepalive;
+    const bool og = crystalOn() && vrBackend(conf_) == VrBackend::Monado && !source_.fake();
+    if (!og) {
+        ogRestart_ = false;
+        return;
+    }
+    if (io_.active() && io_.setup().monadoCrystalOg && !ogRestart_ && k.crystalStage == QLatin1String("ready") &&
+        !k.crystalLighthouse.isEmpty() &&
+        (k.crystalLighthouse == QLatin1String("1")) != io_.setup().monadoLighthouse) {
+        ogRestart_ = true;
+        ogRestartSince_ = QDateTime::currentMSecsSinceEpoch();
+        say(QStringLiteral("The Crystal switched to %1: restarting VR...")
+                .arg(k.crystalLighthouse == QLatin1String("1") ? QStringLiteral("Lighthouse") : QStringLiteral("its own tracking")));
+        io_.stop();
+        return;
+    }
+    if (!ogRestart_ || io_.active() || io_.state() != RecState::Idle) {
+        return;
+    }
+    // stopped: start again once it can (in Lighthouse mode its Lighthouse module must be on USB), for a minute at most
+    io_.refresh();
+    if (io_.readiness().ready()) {
+        ogRestart_ = false;
+        startVr();
+    } else if (QDateTime::currentMSecsSinceEpoch() - ogRestartSince_ > 60000) {
+        ogRestart_ = false;
+        say(QStringLiteral("VR could not start again after the Crystal's switch: %1")
+                .arg(io_.readiness().blocking.join(QLatin1Char(' '))),
+            true);
+    }
 }
 
 void DashboardPage::updateVrStatus() {
@@ -1217,8 +1259,9 @@ void DashboardPage::updateMode() {
     }
     const bool active = io_.active();
     if (crystalOn()) {
-        trMode_->setText(inside ? QStringLiteral("Mode: Inside-out, tracked by the Crystal itself (SteamVR).")
-                                : QStringLiteral("Mode: Lighthouse (SteamVR and the base stations)."));
+        const QString rt = vrBackendWord(vrBackend(conf_));
+        trMode_->setText(inside ? QStringLiteral("Mode: Inside-out, tracked by the Crystal itself (%1).").arg(rt)
+                                : QStringLiteral("Mode: Lighthouse (%1 and the base stations).").arg(rt));
     } else if (direct_.active()) {
         trMode_->setText(QStringLiteral("\"Monado directly\" runs (Development page). %1").arg(direct_.message()));
     } else if (!inside) {
@@ -1239,8 +1282,9 @@ void DashboardPage::updateMode() {
         ioStart_->setStyleSheet(QStringLiteral("QPushButton { background: #c0392b; color: #ffffff; border: none; "
                                                "border-radius: 4px; } QPushButton:hover { background: #d64533; }"));
         ioStart_->setEnabled(session ? io_.state() != RecState::Stopping : true);
-        ioStart_->setToolTip(session      ? QStringLiteral("Stops the inside-out tracking session.")
-                             : crystalOn() ? QStringLiteral("Closes SteamVR and switches the Crystal off.")
+        ioStart_->setToolTip(session && crystalOn() ? QStringLiteral("Stops Monado and switches the Crystal off.")
+                             : session                ? QStringLiteral("Stops the inside-out tracking session.")
+                             : crystalOn()            ? QStringLiteral("Closes SteamVR and switches the Crystal off.")
                                            : QStringLiteral("Closes SteamVR (the Reset flow)."));
     } else {
         ioStart_->setText(QStringLiteral("START VR"));
@@ -1333,6 +1377,7 @@ void DashboardPage::updateOverlay() {
 
 void DashboardPage::applyState() {
     updateFixCaps();
+    followCrystalMode();
     if (isVisible() && !io_.active()) {
         io_.refresh(); // SteamVR started or stopped: START TRACKING's reasons follow
         updateMode();

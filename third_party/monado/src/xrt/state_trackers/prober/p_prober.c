@@ -56,6 +56,10 @@
  *
  */
 
+// PiBridge: the builder by its identifier (XRT_BUILDER=legacy | pibridge_lh, from the PiBridge app per tracking mode),
+// over the config file and the USB guess: a Lighthouse faceplate left on in the inside-out mode made the FLOSS
+// lighthouse builder take the session (it is certain of a head when Valve's devices are on USB) and fail
+DEBUG_GET_ONCE_OPTION(xrt_builder, "XRT_BUILDER", NULL)
 DEBUG_GET_ONCE_LOG_OPTION(prober_log, "PROBER_LOG", U_LOGGING_INFO)
 DEBUG_GET_ONCE_BOOL_OPTION(qwerty_enable, "QWERTY_ENABLE", false)
 DEBUG_GET_ONCE_BOOL_OPTION(qwerty_combine, "QWERTY_COMBINE", false)
@@ -1038,6 +1042,17 @@ p_create_system(struct xrt_prober *xp,
 	 */
 
 	u_config_json_get_active(&p->json, &active);
+
+	const char *forced = debug_get_option_xrt_builder();
+	if (forced != NULL && forced[0] != '\0') {
+		select = find_builder_by_identifier(p, forced);
+		if (select == NULL) {
+			P_ERROR(p, "XRT_BUILDER=%s: no such builder", forced);
+			return XRT_ERROR_DEVICE_CREATION_FAILED;
+		}
+		u_pp(dg, "\n\tXRT_BUILDER selected %s", select->identifier);
+		active = U_ACTIVE_CONFIG_NONE;
+	}
 
 	switch (active) {
 	case U_ACTIVE_CONFIG_NONE: break;

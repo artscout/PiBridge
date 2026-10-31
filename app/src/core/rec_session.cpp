@@ -511,6 +511,13 @@ bool RecSession::start(Mode mode, std::vector<RecStep> steps, qint64 nowMs, cons
         : mode == Mode::LiveSteamVr ? QStringLiteral("inside-out session (SteamVR + Monado), logs in %1").arg(folder_)
                                     : QStringLiteral("recording into %1 (%2)").arg(folder_, record_.mode));
     state_ = RecState::Starting;
+    if (mode == Mode::Live && setup_.monadoCrystalOg && !setup_.monadoLighthouse) {
+        // the original Crystal tracking itself: monado-service alone (its poses come from pibridge-keepalived)
+        phase_ = Phase::Monado;
+        phaseStartMs_ = nowMs;
+        message_ = QStringLiteral("Starting Monado (the Crystal tracks itself)...");
+        return startProc(monadoSpec(setup_, QString(), logDir() + QStringLiteral("/monado.log")), nowMs);
+    }
     if (mode == Mode::Live && setup_.monadoLighthouse) {
         // Monado + the Lighthouse faceplate: no cameras; monado-service alone, on the room's own Lighthouse stage
         // (the saved one into the live file steamvr_lh reads; none = the Lighthouse origin)
@@ -706,11 +713,15 @@ bool RecSession::tick(qint64 nowMs) {
                 dataSeen_ = true;
                 state_ = RecState::Recording;
                 record_.recordStartMs = nowMs;
-                log(setup_.monadoLighthouse ? QStringLiteral("Monado is up: the Lighthouse session runs")
-                                            : QStringLiteral("Monado is up: the inside-out session runs"));
+                log(setup_.monadoLighthouse  ? QStringLiteral("Monado is up: the Lighthouse session runs")
+                    : setup_.monadoCrystalOg ? QStringLiteral("Monado is up: the Crystal tracks itself")
+                                             : QStringLiteral("Monado is up: the inside-out session runs"));
                 message_ = setup_.monadoLighthouse
                                ? QStringLiteral("Tracking runs (Monado, Lighthouse). Start an app on the Apps page; "
                                                 "Stop ends Monado.")
+                           : setup_.monadoCrystalOg
+                               ? QStringLiteral("Tracking runs (Monado, the Crystal's own inside-out). Start an app on "
+                                                "the Apps page; Stop ends Monado.")
                                : QStringLiteral("Tracking runs. Start an app on the Apps page; Stop ends Monado, the "
                                                 "controller tracker and the camera broker.");
             }

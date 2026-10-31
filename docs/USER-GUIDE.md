@@ -83,7 +83,9 @@ The **Headset** card:
 - The headset's **STATE** and **SERIAL**, how long VR has been running, and the resolution.
 - **REFRESH RATE**: **72 / 90 Hz**. It takes effect the next time the headset wakes.
 - On the original Crystal: **72 / 90 / 120 Hz** instead (a running SteamVR is restarted for the change), its battery
-  level, and a **SWITCH OFF** button. The Crystal is switched on with its own power button.
+  level, and a **SWITCH OFF** button. The Crystal is switched on with its own power button. On the Monado backend
+  PiBridge starts by itself when the Crystal is switched on; press **START VR** there. Switching **Lighthouse /
+  Inside-out** restarts VR by itself (not tried on the headset yet).
 
 The **Controllers** card shows each controller: its model, a **CONNECTED** / **NOT TRACKED** chip (with the reason
 when it is not tracked), the battery and the serial number with **COPY**. Under each one:

@@ -53,6 +53,7 @@ struct FakePactl {
     std::atomic<bool> headset_sink{true}; // the headset's output node exists (the original Crystal: once it is driven)
     std::string sink = "desk-speakers";
     std::string source = "desk-mic";
+    int volume = 50; // the headset output's volume, percent
     std::vector<std::string> calls;
     audio::Runner runner() {
         return [this](const std::vector<std::string>& a) -> std::optional<std::string> {
@@ -71,6 +72,10 @@ struct FakePactl {
             if (c == "list short sources") return std::string("3\tdesk-mic\tPipeWire\n4\talsa_input.usb-Pimax_Corporation_CS.pro-input-0\tPipeWire\n");
             if (a.size() == 2 && a[0] == "set-default-sink") return sink = a[1], std::string{};
             if (a.size() == 2 && a[0] == "set-default-source") return source = a[1], std::string{};
+            if (a.size() == 2 && a[0] == "get-sink-volume") {
+                return "Volume: front-left: 32768 /  " + std::to_string(volume) + "% / -18.06 dB";
+            }
+            if (a.size() == 3 && a[0] == "set-sink-volume") return volume = std::atoi(a[2].c_str()), std::string{};
             return std::nullopt;
         };
     }
@@ -249,6 +254,35 @@ TEST(inside_out_pauses_releases_the_headset_and_resumes) {
     }
     r.d->tick(t0 + seconds(6));
     CHECK(r.d->status().headset_present && r.d->status().state != "paused");
+    r.d->stop();
+}
+
+TEST(paused_volume_buttons_from_monado_count_from_the_first_press) {
+    const auto file = g_tmp / "volume-button-paused";
+    std::filesystem::remove(file);
+    Rig r(true, crystal_opts(), "crystal-super", [&](Deps& d) { d.volume_button_file = file; });
+    const auto t0 = steady_clock::now();
+    wait_connected(r, t0);
+    r.d->tick(t0 + milliseconds(2100));
+    r.d->pause(t0 + milliseconds(2200));
+    CHECK(r.d->paused());
+    const auto volume_calls = [&r] {
+        std::lock_guard g(r.pactl.mu);
+        return std::count_if(r.pactl.calls.begin(), r.pactl.calls.end(),
+                             [](const std::string& c) { return c.starts_with("get-sink-volume"); });
+    };
+    const auto before = volume_calls();
+    // Monado's first entry of the session (no file at the pause): a press, not an old entry
+    std::ofstream(file) << "1 1 1\n";
+    r.d->tick(t0 + seconds(3));
+    CHECK(volume_calls() == before + 1);
+    // the volume indicator for the headset (pibridge-xroverlay)
+    CHECK(r.pactl.volume > 50 && slurp(pibridge::status::runtime_dir() / "volume-hud") ==
+                                     std::to_string(r.pactl.volume) + "\n");
+    std::ofstream(file) << "2 1 0\n";
+    r.d->tick(t0 + milliseconds(3050));
+    r.d->tick(t0 + milliseconds(3100));
+    CHECK(volume_calls() == before + 1); // the release, no more steps
     r.d->stop();
 }
 
@@ -864,6 +898,48 @@ TEST(crystal_in_slam_switches_lighthouse_off_and_starts_steamvr) {
     r.c->tick(t += std::chrono::seconds(3));
     CHECK(r.steamvr == 1 && r.app == 1); // CustomHeadsetOpenVR's SLAM headset reads the pose file
     CHECK(std::find(r.link->sent.begin(), r.link->sent.end(), "LighthouseTakeEffect 1") == r.link->sent.end());
+}
+
+TEST(crystal_on_monado_starts_the_app_never_steamvr) {
+    CrystalRig r("slam");
+    r.c->set({"slam", true, true}); // vr_backend=monado
+    r.lhr = false;
+    auto t = CClock::time_point{} + std::chrono::hours(1);
+    r.c->tick(t);
+    r.c->tick(t += std::chrono::seconds(2));
+    r.c->tick(t += std::chrono::seconds(1));
+    r.link->pending = {{0x3b, "persist.sys.pmx.lighthouse.enable", "0"}};
+    for (int i = 0; i < 20; i++) {
+        r.c->tick(t += std::chrono::seconds(1));
+    }
+    CHECK(r.steamvr == 0 && r.app == 1); // the app's START VR runs Monado for it
+}
+
+TEST(crystal_volume_change_shows_the_indicator) {
+    FakeP3b* link = nullptr;
+    Rig r(true, crystal_opts(), "crystal-super", [&link](Deps& d) {
+        d.crystal_find = [] { return std::optional<std::filesystem::path>("/dev/hidraw9"); };
+        d.crystal_open = [&link](const std::filesystem::path&, std::string*) {
+            auto l = std::make_unique<FakeP3b>();
+            link = l.get();
+            return std::unique_ptr<pibridge::keepalived::P3bLink>(std::move(l));
+        };
+    });
+    const auto hud = pibridge::status::runtime_dir() / "volume-hud";
+    std::filesystem::remove(hud);
+    const auto t0 = steady_clock::now();
+    r.d->tick(t0);
+    CHECK(link != nullptr);
+    pibridge::hmd::p3b::Head h;
+    h.volume = 40;
+    link->head = h;
+    r.d->tick(t0 + milliseconds(100));
+    CHECK(!std::filesystem::exists(hud)); // the first value: no change to show
+    h.volume = 45;
+    link->head = h;
+    r.d->tick(t0 + milliseconds(200));
+    CHECK(slurp(hud) == "45\n"); // its volume button: the indicator in the headset
+    r.d->stop();
 }
 
 TEST(crystal_already_in_lighthouse_sends_no_switch) {

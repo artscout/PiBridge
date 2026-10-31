@@ -368,6 +368,23 @@ Notes:
   soon as it appears.
 - Controller models: Pimax's own (`crystal_controller_*`) when copied into the CHOVR driver's resources (step 5.3),
   else Oculus Touch.
+
+On the **Monado backend** (section 7.2; NOT tried on the headset yet) the same daemon connects it, switches its mode
+and switches it off, but starts only the PiBridge app (not SteamVR); **START VR** there runs Monado for it:
+- Its own inside-out: the `pibridge_og` builder: its head and controllers from `/dev/shm/pibridge-crystal-pose` (the
+  Pimax button held recenters, the menu button is the menu).
+- Lighthouse: the `pibridge_lh` builder with its built-in Lighthouse module; Index controllers. VR starts once the
+  module is on USB.
+- A tracking switch (the Dashboard, or the headset's own) restarts the Monado session by itself: Monado's devices are
+  fixed at its start, as SteamVR's headset is.
+- Its lens profile: `crystal-og.conf` + `crystal-og-lut.bin` in `~/.local/share/pibridge/lens/` or
+  `~/gamedev/ext/lens/` (`rec_lens_conf_og=` names another; the Crystal Super's `lens.conf` / `rec_lens_conf` are never
+  used for it). Made from CustomHeadsetOpenVR's "Crystal OG Default" with its own code, offline
+  (`~/gamedev/ext/lens/og/`: `chovr_profile.py`, `chovr_sample.cpp`, `og2lut.py`), each eye's axis turned outward by
+  CHOVR's 5 deg; if the world looks too small or too large, turn the axis with
+  `pibridge-lens turn og/crystal-og-lut-unturned.bin crystal-og-lut.bin -LEFT RIGHT` (the Crystal Super needed its own,
+  4.4 to 4.7 deg).
+- Its volume buttons change its own volume; the indicator shows it in the headset.
 - Not yet: controller vibration, the floor height in
   inside-out (its origin is where its tracking started).
 

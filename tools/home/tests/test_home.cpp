@@ -128,6 +128,16 @@ TEST(panel_and_controllers) {
     CHECK(all.lines.size() / 2 < 3000);
 }
 
+TEST(controllers_shown_only_while_tracked) {
+    HandShown h;
+    CHECK(!h.update(true, false, 0.0));  // a pose, never tracked: the rest pose before the headset saw it
+    CHECK(h.update(true, true, 1.0));    // seen
+    CHECK(h.update(true, false, 1.8));   // a short occlusion: still drawn
+    CHECK(!h.update(true, false, 2.2));  // lost longer: gone
+    CHECK(h.update(true, true, 3.0));    // seen again
+    CHECK(!h.update(false, false, 3.1)); // switched off: no pose, gone at once
+}
+
 TEST(session_rules_keep_a_game_in_front) {
     Loop l;
     CHECK(l.status() == "starting" && !l.running());

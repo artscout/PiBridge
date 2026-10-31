@@ -171,7 +171,9 @@ did, **PiBridge window** (the app's window as before, when the app is linked) an
 trigger to click (down and up on the same box). The **menu button** (Touch: the left menu and the right menu, which
 Touch names `system/click`; Valve Index: the left system button, the right one is PiBridge's recenter and never
 reaches the apps; simple / Vive: menu), a short press, hides the panel and brings the dashboard back in front of you (a long press stays the driver's
-recenter); the grip held 0.5 s brings it in front too. Without Qt or without the panel pass the home behaves as
+recenter); the grip held 0.5 s brings it in front too. A controller is drawn and points only while the runtime
+tracks its position, and 1 s after it loses it (`HandShown`, scene.h): one switched off, a Pimax controller not seen
+by the headset yet (its rest pose) or one lost longer is hidden. Without Qt or without the panel pass the home behaves as
 before (the window or the text panel).
 
 Every row has a real receiver (`dash_settings.h`); its tag says when it takes effect:

@@ -95,6 +95,15 @@ struct xrt_builder *
 t_builder_pibridge_lh_create(void);
 #endif
 
+#ifdef XRT_BUILD_DRIVER_PIMAX
+#define T_BUILDER_PIBRIDGE_OG
+/*!
+ * PiBridge: the original Pimax Crystal tracking itself, its poses from pibridge-keepalived (XRT_BUILDER=pibridge_og).
+ */
+struct xrt_builder *
+t_builder_pibridge_og_create(void);
+#endif
+
 #ifdef T_BUILDER_STEAMVR
 /*!
  * Builder for SteamVR proprietary wrapper (vive, index, tundra trackers, etc.)

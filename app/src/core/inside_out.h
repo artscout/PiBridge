@@ -140,8 +140,13 @@ struct IoSessionEnv {
 IoSessionEnv buildIoEnv(const IoSettings& io, const RecSetup& s, int refreshHz, const QString& slamConfig,
                         const QString& recordDir, const QString& driverEnvFile = {}, const QString& preload = {});
 // The Monado backend with the Lighthouse faceplate (s.monadoLighthouse): monado-service alone, the pibridge_lh builder
-// (PIBRIDGE_LH=1), PiBridge's lens profile, the backend's Lighthouse stage file; buildIoEnv returns this for it.
+// (PIBRIDGE_LH=1), PiBridge's lens profile, the backend's Lighthouse stage file; buildIoEnv returns this for it. The
+// original Crystal's Lighthouse module the same way, with PIMAX_MODEL=crystal-og PIMAX_NO_DEVICE=1.
 IoSessionEnv buildMonadoLighthouseEnv(const RecSetup& s, int refreshHz);
+// The original Crystal tracking itself on the Monado backend (s.monadoCrystalOg, not Lighthouse): monado-service
+// alone, the pibridge_og builder, PIMAX_MODEL=crystal-og with PIMAX_NO_DEVICE=1 (keepalived keeps its HID and streams
+// its poses); buildIoEnv returns this for it.
+IoSessionEnv buildMonadoCrystalOgEnv(const RecSetup& s, int refreshHz);
 // The Pimax SLAM engine can run: winbridge.exe, libpibridge_vit_winbridge.so, Wine and the Pimax kit (core/rec_setup.h
 // RecSetup::win*) are all there. `why`: what is missing, in plain words ("" when ready).
 bool pimaxSlamReady(const RecSetup& s, QString* why = nullptr);

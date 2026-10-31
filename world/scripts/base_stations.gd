@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # The Lighthouse base stations where they stand, as SteamVR shows them (the Monado backend in the Lighthouse mode,
-# pibridge.conf show_base_stations = on, the PiBridge app's Tracking card). Monado's steamvr_lh writes their poses in
+# pibridge.conf show_base_stations = on, the PiBridge app's Tracking card; never in the inside-out mode, never from a
+# file an earlier session left). Monado's steamvr_lh writes their poses in
 # the stage, the space of this world's origin, to $XDG_RUNTIME_DIR/pibridge/monado/basestations ("<serial> px py pz
 # qx qy qz qw" a line, once a second); the model is SteamVR's lh_basestation_valve_gen2 (Paths.render_model), else a
 # plain box.
@@ -25,8 +26,15 @@ static func file_path() -> String:
 	return Paths.status_dir() + "/monado/basestations"
 
 
+# The setting, and only in the Lighthouse mode (the inside-out mode has no base stations to show).
 static func wanted() -> bool:
-	return KeyConf.new(Paths.pibridge_conf()).value("show_base_stations", "off") == "on"
+	var conf := KeyConf.new(Paths.pibridge_conf())
+	return conf.value("show_base_stations", "off") == "on" and conf.value("tracking_mode", "") == "lighthouse"
+
+
+# Monado rewrites the file once a second; one left from an earlier Lighthouse session is older and not shown.
+static func fresh(path: String, now_unix: float) -> bool:
+	return FileAccess.file_exists(path) and now_unix - float(FileAccess.get_modified_time(path)) < 5.0
 
 
 # "<serial> px py pz qx qy qz qw" lines -> {serial: Transform3D}; malformed lines are left out.
@@ -48,7 +56,8 @@ func _process(dt: float) -> void:
 	if _next > 0.0:
 		return
 	_next = 1.0
-	var poses := parse(Paths.read_text(file_path())) if wanted() else {}
+	var path := file_path()
+	var poses := parse(Paths.read_text(path)) if wanted() and fresh(path, Time.get_unix_time_from_system()) else {}
 	for serial in _stations.keys():
 		if not poses.has(serial):
 			_stations[serial].queue_free()

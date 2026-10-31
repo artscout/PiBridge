@@ -65,6 +65,7 @@ std::expected<Options, std::string> parse_args(const std::vector<std::string>& a
     o.audio = o.audio_output || o.audio_input;
     o.crystal_tracking = settings.crystal_tracking;
     o.crystal_autostart_steamvr = settings.crystal_autostart_steamvr;
+    o.monado = settings.vr_backend == "monado";
     o.settings_path = settings_path_of(args);
     bool follow_flag = false;
     bool audio_flag = false;
@@ -305,7 +306,7 @@ Daemon::Daemon(Options opts, Deps deps) : opts_(std::move(opts)), deps_(std::mov
     cd.say = deps_.say;
     cd.request = pibridge::status::runtime_dir() / "crystal-request";
     crystal_ = std::make_unique<Crystal>(std::move(cd));
-    crystal_->set({opts_.crystal_tracking, opts_.crystal_autostart_steamvr});
+    crystal_->set({opts_.crystal_tracking, opts_.crystal_autostart_steamvr, opts_.monado});
 }
 
 Daemon::~Daemon() { stop(); }
@@ -451,33 +452,57 @@ void Daemon::track_volume(Clock::time_point now) {
     }
 }
 
-void Daemon::read_volume_button_file() {
-    std::filesystem::path p = deps_.volume_button_file;
+namespace {
+
+struct ButtonEntry {
+    unsigned long seq = 0;
+    int dir = 0;
+    int pressed = 0;
+};
+
+std::optional<ButtonEntry> read_button_entry(std::filesystem::path p) {
     if (p.empty()) {
         const char* rt = std::getenv("XDG_RUNTIME_DIR");
         p = std::filesystem::path(rt != nullptr && rt[0] != '\0' ? rt : "/tmp") / "pibridge/volume-button";
     }
     std::ifstream f(p);
-    unsigned long seq = 0;
-    int dir = 0;
-    int pressed = 0;
-    if (!(f >> seq >> dir >> pressed) || (dir != 1 && dir != -1)) {
+    ButtonEntry e;
+    if (!(f >> e.seq >> e.dir >> e.pressed) || (e.dir != 1 && e.dir != -1)) {
+        return std::nullopt;
+    }
+    return e;
+}
+
+} // namespace
+
+void Daemon::read_volume_button_file() {
+    // every entry after the one there at the pause (pause() keeps its number, 0 = none: Monado's driver counts from
+    // 1 in each session), the first press of a session included
+    const auto e = read_button_entry(deps_.volume_button_file);
+    if (!e || (button_seq_ && e->seq == *button_seq_)) {
         return;
     }
-    const bool first = !button_seq_;
-    if (!first && seq == *button_seq_) {
-        return;
-    }
-    button_seq_ = seq;
-    if (first) {
-        return; // an entry from before this daemon looked: not a press now
-    }
+    button_seq_ = e->seq;
+    const int dir = e->dir;
+    const int pressed = e->pressed;
     std::lock_guard g(ev_->mu);
     if (pressed != 0) {
         ev_->volume_steps += dir;
         ev_->volume_held = dir;
     } else if (ev_->volume_held == dir) {
         ev_->volume_held = 0;
+    }
+}
+
+void Daemon::write_volume_hud(int percent) {
+    // pibridge-xroverlay under Monado shows it for a moment after it changes
+    const auto hud = pibridge::status::runtime_dir() / "volume-hud";
+    const auto tmp = hud.string() + ".tmp";
+    if (std::ofstream f(tmp); f) {
+        f << percent << "\n";
+        f.close();
+        std::error_code ec;
+        std::filesystem::rename(tmp, hud, ec);
     }
 }
 
@@ -506,9 +531,15 @@ void Daemon::volume_buttons(Clock::time_point now) {
         say("audio: volume button, but no headset output");
         return;
     }
-    if (const auto v = audio::step_sink_volume(*sink, steps, deps_.pactl); v && held == 0) {
-        say("audio: headset volume " + *v + " (button)");
+    const auto v = audio::step_sink_volume(*sink, steps, deps_.pactl);
+    if (!v) {
+        say("audio: volume button, but the headset output's volume could not be changed");
+        return;
     }
+    if (held == 0 || now == hold_since_) {
+        say("audio: headset volume " + *v + " (button)"); // a press and a click; not every repeat while held
+    }
+    write_volume_hud(std::atoi(v->c_str()));
 }
 
 std::chrono::milliseconds Daemon::poll_timeout() const {
@@ -552,6 +583,15 @@ void Daemon::read_controller_serials(Clock::time_point now) {
 
 void Daemon::tick(Clock::time_point now) {
     crystal_->tick(now); // the original Crystal: its own life, apart from the Crystal Super / Dream Air session
+    // its volume buttons change its own volume (the DisplayPort sound is played at it): the indicator follows a change
+    if (const int v = crystal_->volume(); v < 0) {
+        crystal_volume_ = -1;
+    } else if (v != crystal_volume_) {
+        if (crystal_volume_ >= 0) {
+            write_volume_hud(v);
+        }
+        crystal_volume_ = v;
+    }
     // its sound (DisplayPort) and microphone are the defaults while it is on, as the Crystal Super's during VR
     const bool crystal_on = crystal_->stage() == "ready" && opts_.audio;
     if (crystal_on && !crystal_audio_) {
@@ -657,7 +697,7 @@ void Daemon::tick(Clock::time_point now) {
 }
 
 void Daemon::reload(Options o, Clock::time_point now) {
-    crystal_->set({o.crystal_tracking, o.crystal_autostart_steamvr});
+    crystal_->set({o.crystal_tracking, o.crystal_autostart_steamvr, o.monado});
     if (o.rate_file != opts_.rate_file || o.wake != opts_.wake) {
         say("settings: the rate file and the wake change at the next start");
         o.rate_file = opts_.rate_file;
@@ -763,6 +803,9 @@ void Daemon::pause(Clock::time_point now) {
         audio_on(); // the sound stays on the headset during inside-out tracking (pactl only, no HID)
     }
     paused_ = true;
+    // the volume button entry there now is from before this session: only the ones after it are presses
+    const auto entry = read_button_entry(deps_.volume_button_file);
+    button_seq_ = entry ? entry->seq : 0;
     say(std::string(pibridge::pause::kWords) + ": the headset is left to Monado's Pimax driver");
     write_status(now, true);
 }

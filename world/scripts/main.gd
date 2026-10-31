@@ -22,6 +22,8 @@ var camera := XRCamera3D.new()
 var panel: VrPanel
 var dash: Dashboard
 var models: Array[ControllerModel] = []
+var _hands := [] # per side: {grip, pointer, shown state}: a controller is drawn and points only while tracked
+const LOST_GRACE_S := 1.0
 var _profile_check := 0.0
 var _passthrough_pid := 0
 var _grip_hold := {}
@@ -78,6 +80,7 @@ func _ready() -> void:
 		var ptr := Pointer.new(aim)
 		m.changed.connect(_place_pointer.bind(m, ptr, grip, aim))
 		_place_pointer(m, ptr, grip, aim)
+		_hands.append({"grip": grip, "pointer": ptr, "state": {}})
 	origin.add_child(BaseStations.new())
 	dash = Dashboard.new()
 	dash.hide_requested.connect(func(): panel.visible = false)
@@ -115,7 +118,30 @@ func _exit_tree() -> void:
 var _panel_write := 0.0
 
 
+# Whether a controller is drawn: while the runtime tracks its position (confidence HIGH: the Pimax engine sees it, the
+# base stations track it), and LOST_GRACE_S after that so a short occlusion does not blink. Never tracked yet (the
+# Pimax controllers sit at a guessed rest pose until the headset first sees them), no pose (switched off) or lost
+# longer: hidden. `state` keeps the last tracked time.
+static func hand_shown(state: Dictionary, located: bool, tracked: bool, now: float) -> bool:
+	if located and tracked:
+		state["last"] = now
+	return located and state.has("last") and now - float(state["last"]) <= LOST_GRACE_S
+
+
+func _update_hands() -> void:
+	var now := Time.get_ticks_msec() / 1000.0
+	for h in _hands:
+		var grip: XRController3D = h["grip"]
+		var pose := grip.get_pose()
+		var located := grip.get_has_tracking_data()
+		var tracked := pose != null and pose.tracking_confidence == XRPose.XR_TRACKING_CONFIDENCE_HIGH
+		var shown := hand_shown(h["state"], located, tracked, now)
+		grip.visible = shown
+		h["pointer"].tracked = shown
+
+
 func _process(dt: float) -> void:
+	_update_hands()
 	_profile_check -= dt
 	if _profile_check <= 0.0:
 		_profile_check = 0.5
@@ -351,6 +377,19 @@ func _selftest() -> void:
 	await get_tree().process_frame
 	_check(dash.content.get_child(dash.content.get_child_count() - 1).name == "Quadviews", "pages: Quad views builds")
 
+	var hs := {}
+	_check(not hand_shown(hs, true, false, 0.0) and hand_shown(hs, true, true, 1.0) and hand_shown(hs, true, false, 1.8)
+		and not hand_shown(hs, true, false, 2.2) and not hand_shown(hs, false, false, 3.0),
+		"controllers: drawn only while tracked (a second's grace), never at the rest pose before the first sight")
+	var bsf := tmp + "/run/pibridge/monado/basestations"
+	Paths.write_text(bsf, "LHB-1 0 2 0 0 0 0 1\n")
+	KeyConf.new(Paths.pibridge_conf()).set_value("show_base_stations", "on")
+	KeyConf.new(Paths.pibridge_conf()).set_value("tracking_mode", "inside-out")
+	_check(not BaseStations.wanted(), "base stations: never in the inside-out mode")
+	KeyConf.new(Paths.pibridge_conf()).set_value("tracking_mode", "lighthouse")
+	var now_unix := Time.get_unix_time_from_system()
+	_check(BaseStations.wanted() and BaseStations.fresh(bsf, now_unix) and not BaseStations.fresh(bsf, now_unix + 60),
+		"base stations: in the Lighthouse mode, only from a file Monado is writing")
 	var bs := BaseStations.parse("LHB-1 1 2.5 -3 0 0 0 1\nbad line\nLHB-2 0 0 0 0 0 0 0\n")
 	_check(bs.size() == 1 and bs["LHB-1"].origin == Vector3(1, 2.5, -3), "base stations: the poses file")
 	_check(ControllerModel.kind_for_profile("/interaction_profiles/valve/index_controller") == "index"

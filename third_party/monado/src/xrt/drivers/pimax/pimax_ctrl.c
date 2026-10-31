@@ -17,8 +17,8 @@
  * camera LED frames -> pose in the head frame, seqlock file pimax_ctrltrack_shm.h). The pose is composed with the head
  * pose at the LED frame's time and handed to the fuser in rust/pimax-hands (fuse.rs, pimax_ctrlfuse.h): gyro
  * orientation between fixes (calibration learned online from the optical poses, ~/.config/pibridge/ctrl-imu.json), short
- * extrapolation, then an arm-model hold relative to the head, the synthesized pose above only after
- * PIMAX_CTRL_TRACK_LOST_S (4 s); reacquire blends over 100 ms, optical outliers are dropped. The optical grip is
+ * extrapolation, then an arm-model hold relative to the head, then (after PIMAX_CTRL_TRACK_LOST_S, 4 s) no pose
+ * (PiBridge; PIMAX_CTRL_REST_POSE=1: the synthesized pose above); reacquire blends over 100 ms, optical outliers are dropped. The optical grip is
  * aim * the Quest 2 Touch openxr_aim -> openxr_grip transform (PIMAX_TOUCH_GRIP), so SteamVR's aim equals ours.
  * Also offered as /interaction_profiles/ext/hand_interaction_ext (pinch = trigger, grasp = squeeze) for apps that
  * only suggest hand-interaction bindings; apps with Touch bindings keep the Touch profile.
@@ -101,6 +101,10 @@ DEBUG_GET_ONCE_BOOL_OPTION(pimax_ctrl_engine, "PIMAX_CTRL_ENGINE", false)
 // The aim frame in the LED model frame: rot_x(-pitch), as pimax-ctrltrack publishes its aim (live.cpp, 52 deg)
 DEBUG_GET_ONCE_FLOAT_OPTION(pimax_ctrl_engine_aim_pitch, "PIMAX_CTRLTRACK_AIM_PITCH_DEG", 52.0f)
 DEBUG_GET_ONCE_FLOAT_OPTION(pimax_ctrl_engine_lost_s, "PIMAX_CTRL_TRACK_LOST_S", 4.0f)
+// PiBridge: with the cameras tracking the controllers (PIMAX_CTRL_ENGINE / PIMAX_CTRL_TRACK), a controller they do
+// not see (not yet since the start, lost past PIMAX_CTRL_TRACK_LOST_S, switched off) has no pose, instead of the
+// synthesized rest pose by the head that hung in the air; 1 = the rest pose as before
+DEBUG_GET_ONCE_BOOL_OPTION(pimax_ctrl_rest_pose, "PIMAX_CTRL_REST_POSE", false)
 
 #define CTRL_ANGLE_MIN_DEG (-20.0f)
 #define CTRL_ANGLE_MAX_DEG (70.0f)
@@ -350,6 +354,13 @@ static struct xrt_binding_profile profiles_right[3] = {
 /*
  * Device functions.
  */
+
+struct xrt_binding_profile *
+pimax_ctrl_binding_profiles(bool left, size_t *out_count)
+{
+	*out_count = ARRAY_SIZE(profiles_left);
+	return left ? profiles_left : profiles_right;
+}
 
 static void
 ctx_unref(struct pimax_ctrl_ctx *ctx)
@@ -818,6 +829,12 @@ pimax_ctl_get_tracked_pose(struct xrt_device *xdev,
 
 	if (c->ctx->track && optical_pose(c, at_timestamp_ns, name, out_relation)) {
 		apply_ctrl_angle(c->ctx, &out_relation->pose);
+		return XRT_SUCCESS;
+	}
+
+	if ((c->ctx->engine || c->ctx->track) && !debug_get_bool_option_pimax_ctrl_rest_pose()) {
+		// the cameras do not see it: no pose (apps hide it), not a guess hanging in the air
+		*out_relation = (struct xrt_space_relation)XRT_SPACE_RELATION_ZERO;
 		return XRT_SUCCESS;
 	}
 

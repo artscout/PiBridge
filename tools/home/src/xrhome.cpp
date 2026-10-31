@@ -444,6 +444,7 @@ std::expected<void, std::string> runHome(const RunOpts& opts, const std::atomic<
     enum class OnPanel { None, Dash, Window } onPanel = OnPanel::None;
     bool menuWas = false;
     double menuSince = 0;
+    std::array<HandShown, 2> handShown;
 
     Frame frameIn;
     std::optional<Panel> textPanel;
@@ -637,8 +638,13 @@ std::expected<void, std::string> runHome(const RunOpts& opts, const std::atomic<
             room::Mat34 m;
             frameIn.head = xrkit::locate(x.view, x.stage, t, m) ? std::optional(m) : std::nullopt;
             for (std::size_t i = 0; i < 2; i++) {
-                frameIn.grip[i] = loop.focused() && xrkit::locate(x.hands[i].grip, x.stage, t, m) ? std::optional(m) : std::nullopt;
-                frameIn.aim[i] = loop.focused() && xrkit::locate(x.hands[i].aim, x.stage, t, m) ? std::optional(m) : std::nullopt;
+                // a controller the runtime does not track (switched off, never seen yet, lost) is not drawn and
+                // does not point (HandShown)
+                bool tracked = false;
+                const bool located = loop.focused() && xrkit::locate(x.hands[i].grip, x.stage, t, m, tracked);
+                const bool shown = handShown[i].update(located, tracked, t0);
+                frameIn.grip[i] = shown ? std::optional(m) : std::nullopt;
+                frameIn.aim[i] = shown && xrkit::locate(x.hands[i].aim, x.stage, t, m) ? std::optional(m) : std::nullopt;
             }
             if (!textPanel && frameIn.head) {
                 textPanel = placePanel(*frameIn.head, world.floorY);

@@ -294,6 +294,9 @@ IoSessionEnv buildIoEnv(const IoSettings& io, const RecSetup& s, int refreshHz, 
     if (s.monadoLighthouse) {
         return buildMonadoLighthouseEnv(s, refreshHz);
     }
+    if (s.monadoCrystalOg) {
+        return buildMonadoCrystalOgEnv(s, refreshHz);
+    }
     // The Pimax driver's settings of crystal-6dof.sh (SETTINGS=...), in its order.
     d << QStringLiteral("PIMAX_FPS=%1").arg(refreshHz == 72 ? 72 : 90) << QStringLiteral("PIMAX_LOG=info")
       << QStringLiteral("PIMAX_BIAS_TIMEOUT_MS=200");
@@ -436,6 +439,8 @@ IoSessionEnv buildIoEnv(const IoSettings& io, const RecSetup& s, int refreshHz, 
 
     // monado-service: the driver plus the direct-mode compositor of crystal-6dof.sh, the recorder, rec_env last
     e.monado = d;
+    // the builder of this mode, never Monado's guess from USB (a Lighthouse faceplate left on would win it)
+    e.monado << QStringLiteral("XRT_BUILDER=legacy");
     e.monado << QStringLiteral("XRT_COMPOSITOR_FORCE_WAYLAND_DIRECT=1")
              << QStringLiteral("XRT_COMPOSITOR_WAYLAND_CONNECTOR=") + s.connector
              << QStringLiteral("XRT_COMPOSITOR_FORCE_NVIDIA=0") << QStringLiteral("XRT_COMPOSITOR_LOG=info")
@@ -460,6 +465,14 @@ IoSessionEnv buildIoEnv(const IoSettings& io, const RecSetup& s, int refreshHz, 
     return e;
 }
 
+// The panel rate Monado's Pimax driver paces at: 72 or 90; the original Crystal also 120 (its EDID modes).
+static int ogRefresh(const RecSetup& s, int refreshHz) {
+    if (s.monadoCrystalOg && refreshHz == 120) {
+        return 120;
+    }
+    return refreshHz == 72 ? 72 : 90;
+}
+
 IoSessionEnv buildMonadoLighthouseEnv(const RecSetup& s, int refreshHz) {
     // The Monado backend with the Lighthouse faceplate (PiBridge's Monado fork, builder pibridge_lh): the Pimax HMD
     // shows the picture through PiBridge's lens profile and serves the eye gaze; Valve's driver_lighthouse (steamvr_lh)
@@ -468,8 +481,12 @@ IoSessionEnv buildMonadoLighthouseEnv(const RecSetup& s, int refreshHz) {
     e.ctrltrack = false;
     e.winbridge = false;
     QStringList& d = e.driver;
-    d << QStringLiteral("PIMAX_FPS=%1").arg(refreshHz == 72 ? 72 : 90) << QStringLiteral("PIMAX_LOG=info")
+    d << QStringLiteral("PIMAX_FPS=%1").arg(ogRefresh(s, refreshHz)) << QStringLiteral("PIMAX_LOG=info")
       << QStringLiteral("PIMAX_BIAS_TIMEOUT_MS=200");
+    if (s.monadoCrystalOg) {
+        // the original Crystal: its own panels; its HID is pibridge-keepalived's (it is posed by its Lighthouse module)
+        d << QStringLiteral("PIMAX_MODEL=crystal-og") << QStringLiteral("PIMAX_NO_DEVICE=1");
+    }
     if (!s.lens.path.isEmpty()) {
         d << QStringLiteral("PIMAX_LENS_CONF=") + s.lens.path;
     }
@@ -489,6 +506,7 @@ IoSessionEnv buildMonadoLighthouseEnv(const RecSetup& s, int refreshHz) {
         d << QStringLiteral("PIMAX_EYE_SHM=/dev/shm/pibridge-eye-gaze");
     }
     e.monado = d;
+    e.monado << QStringLiteral("XRT_BUILDER=pibridge_lh"); // the builder of this mode, never Monado's guess
     e.monado << QStringLiteral("XRT_COMPOSITOR_FORCE_WAYLAND_DIRECT=1")
              << QStringLiteral("XRT_COMPOSITOR_WAYLAND_CONNECTOR=") + s.connector
              << QStringLiteral("XRT_COMPOSITOR_FORCE_NVIDIA=0") << QStringLiteral("XRT_COMPOSITOR_LOG=info")
@@ -500,6 +518,37 @@ IoSessionEnv buildMonadoLighthouseEnv(const RecSetup& s, int refreshHz) {
         e.notes << QStringLiteral("No room set up for Monado + Lighthouse yet: the play area starts at the Lighthouse "
                                   "origin. Run Room setup in the headset.");
     }
+    return e;
+}
+
+IoSessionEnv buildMonadoCrystalOgEnv(const RecSetup& s, int refreshHz) {
+    // The original Crystal tracking itself on the Monado backend (builder pibridge_og): pibridge-keepalived keeps its
+    // HID (the connection, the tracking mode, the poses into /dev/shm/pibridge-crystal-pose); the Pimax HMD shows the
+    // picture through the Crystal's lens profile, posed by that file, and its controllers come from it too. No
+    // cameras, no SLAM on the PC, no winbridge.
+    IoSessionEnv e;
+    e.ctrltrack = false;
+    e.winbridge = false;
+    QStringList& d = e.driver;
+    d << QStringLiteral("PIMAX_FPS=%1").arg(ogRefresh(s, refreshHz)) << QStringLiteral("PIMAX_LOG=info")
+      << QStringLiteral("PIMAX_MODEL=crystal-og") << QStringLiteral("PIMAX_NO_DEVICE=1");
+    if (!s.lens.path.isEmpty()) {
+        d << QStringLiteral("PIMAX_LENS_CONF=") + s.lens.path;
+    }
+    d << QStringLiteral("OXR_DEBUG_IPD_MM=%1").arg(s.ipdMm, 0, 'f', 1);
+    d << QStringLiteral("PIBRIDGE_BACKEND=monado");
+    if (s.eyeTracking) {
+        d << QStringLiteral("PIMAX_EYE_SHM=/dev/shm/pibridge-eye-gaze");
+    }
+    e.monado = d;
+    e.monado << QStringLiteral("XRT_BUILDER=pibridge_og"); // the builder of this mode, never Monado's guess
+    e.monado << QStringLiteral("XRT_COMPOSITOR_FORCE_WAYLAND_DIRECT=1")
+             << QStringLiteral("XRT_COMPOSITOR_WAYLAND_CONNECTOR=") + s.connector
+             << QStringLiteral("XRT_COMPOSITOR_FORCE_NVIDIA=0") << QStringLiteral("XRT_COMPOSITOR_LOG=info")
+             << QStringLiteral("XRT_NO_STDIN=1") << QStringLiteral("IPC_IGNORE_VERSION=1");
+    e.monado << QStringLiteral("PIMAX_RECORD=1") << QStringLiteral("PIMAX_RECORD_SHM=") + recordShmPath();
+    e.monado << s.extraEnv;
+    e.driver << s.extraEnv;
     return e;
 }
 

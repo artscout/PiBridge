@@ -46,6 +46,12 @@ switched on with its power button and speaks another protocol (1024-byte RPC fra
 - **Sound**: while it is on, its microphone and its DisplayPort sound (the GPU audio card's port whose monitor is
   "Pimax", the card profile switched to it and back) are the defaults; the output is looked for every 3 s until
   SteamVR drives its display.
+- **The Monado backend** (`vr_backend=monado` in `pibridge.conf`): on connect only the PiBridge app is started (its
+  **START VR** runs Monado for the headset), never SteamVR, which would take its Lighthouse module. The poses keep going
+  to the shared memory above (Monado's `pibridge_og` builder reads them); the app restarts its Monado session when the
+  tracking changes. Its HID stays with this daemon also while it is paused for a Monado session.
+- **Volume**: its buttons change its own volume (it plays the DisplayPort sound at it, head report byte 132); a change
+  is written to `$XDG_RUNTIME_DIR/pibridge/volume-hud` for the indicator in the headset (`pibridge-xroverlay`).
 - **Requests** from the app (`$XDG_RUNTIME_DIR/pibridge/crystal-request`): `shutdown`, `restart-steamvr`.
 - **Status**: `crystal_present`, `crystal_stage`, `crystal_lighthouse`, `crystal_tracked`, `crystal_battery`, and its live
   IPD as `lens_ipd_x100`.
@@ -106,6 +112,11 @@ While `$XDG_RUNTIME_DIR/pibridge/inside-out.active` names a running owner (writt
 `common/pibridge_pause.h`), pibridge-keepalived leaves the headset to `pibridge-headtrack`: it closes the device, reports
 `"state": "paused"` and `"paused": "paused: inside-out tracking"`, and takes it again when the marker is gone (checked
 twice a second; a stale marker of a crashed app does not count). Tests: the pause / resume cases of its test.
+
+While paused for a Monado session, the Crystal Super's volume buttons come from Monado's Pimax driver
+(`$XDG_RUNTIME_DIR/pibridge/volume-button`, `<seq> <dir> <pressed>`): every entry after the one there at the pause
+counts, the session's first press too (the driver counts from 1 in each session). Each step of the volume, by a button
+in either way, also goes to `volume-hud` (the indicator in the headset).
 
 ## Controllers
 Pair, Unpair and Test vibration of the Dashboard's Controllers card run here, on the daemon's own session (the only process that
