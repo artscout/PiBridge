@@ -65,10 +65,15 @@ static func render_model(model: String) -> String:
 	return ""
 
 
-# A PiBridge tool: next to this project's install (…/share/pibridge/world -> …/bin), then ~/.local/bin, then PATH.
+# A PiBridge tool: next to this install (the project …/share/pibridge/world, or the exported …/lib/pibridge/pibridge-world:
+# both -> …/bin), then ~/.local/bin, then PATH.
 static func tool(name: String) -> String:
 	var here := ProjectSettings.globalize_path("res://")
-	for c in [here + "/../../../bin/" + name, home() + "/.local/bin/" + name, here + "/../build/tools/" + name]:
+	var bin := here + "/../../../bin/"
+	if OS.has_feature("template"):
+		here = OS.get_executable_path().get_base_dir()
+		bin = here + "/../../bin/"
+	for c in [bin + name, home() + "/.local/bin/" + name, here + "/../build/tools/" + name]:
 		if FileAccess.file_exists(c):
 			return c
 	var out := []

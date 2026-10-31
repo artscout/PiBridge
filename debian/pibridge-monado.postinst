@@ -1,0 +1,19 @@
+#!/bin/sh
+# pibridge-monado postinst: monado-service raises its compositor threads to realtime priority (cap_sys_nice). A
+# package upgrade unpacks a new binary without it, so it is set again on every configure.
+set -e
+
+case "$1" in
+    configure)
+        if command -v setcap >/dev/null 2>&1; then
+            setcap cap_sys_nice=ep /usr/lib/pibridge/monado/bin/monado-service || \
+                echo "pibridge-monado: setcap failed; the app's Fix permissions button sets it later." >&2
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

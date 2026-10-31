@@ -11,3 +11,9 @@ winbridge/vit/*                 usr/share/pibridge/winbridge-src/vit/
 
 # The `pibridge-build-winbridge` command postinst and the docs name: runs the shipped build-winbridge.sh.
 debian/pibridge-build-winbridge usr/bin/
+
+# The Crystal Super's sound rule (pro-audio profile, plain names): WirePlumber (a dependency) reads it from here for
+# every user.
+patches/audio/51-pimax-crystal-super.conf usr/share/wireplumber/wireplumber.conf.d/
+# The patches the manual steps name (CustomHeadsetOpenVR, the NVIDIA module, the sound rule) with their README.
+patches                         usr/share/pibridge/

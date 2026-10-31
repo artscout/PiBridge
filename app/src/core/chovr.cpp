@@ -10,6 +10,7 @@
 #include <QSaveFile>
 #include <QStandardPaths>
 
+#include "paths.h"
 #include "steamvr.h"
 
 namespace pibridge::app {
@@ -89,11 +90,10 @@ QString chovrGuiPath(const QString& confPath, const QString& home) {
     if (const QString p = QStandardPaths::findExecutable(kGui); !p.isEmpty()) {
         return p;
     }
-    const QString candidates[] = {
-        home + QStringLiteral("/.local/bin/") + kGui,
-        confPath.startsWith(QLatin1String("~/")) ? home + confPath.mid(1) : confPath,
-        home + QStringLiteral("/gamedev/ext/CustomHeadsetOpenVR/output/CustomHeadsetGUI/release/") + kGui,
-    };
+    const QStringList candidates =
+        QStringList{home + QStringLiteral("/.local/bin/") + kGui,
+                    confPath.startsWith(QLatin1String("~/")) ? home + confPath.mid(1) : confPath}
+        << devPath(home, QStringLiteral("/gamedev/ext/CustomHeadsetOpenVR/output/CustomHeadsetGUI/release/") + kGui);
     for (const QString& c : candidates) {
         if (executable(c)) {
             return QFileInfo(c).absoluteFilePath();

@@ -6,11 +6,19 @@ The Monado backend's home in the headset: the world around you, the dashboard, y
 
 ## Running
 
-The app finds Godot (`rec_godot=` in pibridge.conf, else the newest `~/gamedev/godot/Godot_v4*_linux.x86_64`, else
-`godot4` / `godot` on PATH) and the project (`<prefix>/share/pibridge/world`, else the source tree's `world/`) and runs
-`godot --path <world>` with the session's `XR_RUNTIME_JSON` once Monado is up. Godot itself: download the official
-Linux build (`Godot_v4.7.2-stable_linux.x86_64.zip` from github.com/godotengine/godot/releases, check it against
-`SHA512-SUMS.txt`) and unpack it into `~/gamedev/godot/`; nothing is installed system-wide.
+The app runs the exported world when there is one, `<prefix>/lib/pibridge/pibridge-world` (what the package ships:
+Godot's Linux release template with this project embedded, made by `-DPIBRIDGE_EXPORT_WORLD=ON -DPIBRIDGE_GODOT=<godot>`
+with `export_presets.cfg`; it needs that Godot version's export templates, docs/PACKAGING.md). It takes the same
+arguments as Godot running the project (`pibridge-world --headless --xr-mode off -- --selftest`). `rec_godot=` in
+pibridge.conf skips it, for working on the world.
+
+Without the exported world, the app finds Godot (`rec_godot=` in pibridge.conf, else the newest `Godot_v4*_linux.x86_64` in
+`~/.local/share/pibridge/godot/`, then in `~/gamedev/godot/`, else `godot4` / `godot` on PATH) and the project
+(`<prefix>/share/pibridge/world`, else the source tree's `world/`) and runs `godot --path <world>` with the session's
+`XR_RUNTIME_JSON` once Monado is up. Godot itself: `pibridge-get-godot` downloads the official Linux build
+(`Godot_v4.7.2-stable_linux.x86_64.zip` from github.com/godotengine/godot/releases), checks it against the SHA-512 of
+the release's `SHA512-SUMS.txt` (kept in the script) and unpacks it into `~/.local/share/pibridge/godot/`; nothing is
+installed system-wide.
 
 By hand (desktop view without a headset): `godot --path world --xr-mode off`. Self test (no headset, no runtime, temporary
 files only): `godot --headless --xr-mode off --path world -- --selftest`. Always pass `--xr-mode off` without the Monado

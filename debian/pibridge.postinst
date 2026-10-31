@@ -19,16 +19,17 @@ case "$1" in
 
         cat <<'EOF'
 
-PiBridge is installed. The rest is per-user and is done by the app on first run:
-  enabling the systemd *user* services (no system daemon-reload needed).
-Just launch "PiBridge" (or run `pibridge`). SteamVR is the runtime.
+PiBridge is installed. Its user services (pibridge-keepalived, pibridge-eyed) are
+enabled for every user and start at the next login; to start them now, as your user:
+  systemctl --user daemon-reload && systemctl --user start pibridge-keepalived pibridge-eyed
+Then launch "PiBridge" (or run `pibridge`).
 
-Optional (inside-out / Pimax-engine tracking): as your user (not root), build
-winbridge once with
-  pibridge-build-winbridge
-(needs mingw-w64; wine at run time). You never start it yourself: the app runs
-it at each START VR in inside-out. The proprietary Pimax kit is a separate manual step,
-see /usr/share/doc/pibridge/INSTALL.md section 7.
+Still to do by hand, once (see /usr/share/doc/pibridge/INSTALL.md, "Installing from the package"):
+  - SteamVR backend: CustomHeadsetOpenVR, the headset's SteamVR display driver.
+  - NVIDIA: the EDID override (/usr/share/pibridge/edid/pibridge-headset-edid).
+  - Optional, inside-out on the Pimax engine: as your user
+      pibridge-build-winbridge
+    (needs mingw-w64; wine at run time) and the proprietary Pimax kit.
 
 EOF
         ;;

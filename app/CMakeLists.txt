@@ -26,6 +26,7 @@ add_library(pibridge_app_core STATIC
     src/core/controllers.cpp src/core/controllers.h
     src/qv/settings.cpp src/qv/fovmath.cpp)
 target_include_directories(pibridge_app_core PUBLIC src)
+target_compile_definitions(pibridge_app_core PUBLIC PIBRIDGE_DEV_PATHS=$<BOOL:${PIBRIDGE_DEV_PATHS}>)
 target_include_directories(pibridge_app_core SYSTEM PUBLIC ${PIBRIDGE_OPENXR_INCLUDE_DIR})
 # OpenVR: the SDK header only (third_party/openvr, BSD-3); libopenvr_api.so of the installed SteamVR is loaded with
 # dlopen at run time, so there is no link-time dependency on it.

@@ -298,7 +298,7 @@ knob are in [TRACKING.md](TRACKING.md) (also the **How tracking works** link).
   config in `~/.config/pibridge/slam/`, generated at every start. **Hands from the controllers** (`io_ctrl_hands`,
   off) passes `PIMAX_CTRL_HANDS`: off, games that enable hand tracking (Falcon BMS) show the controllers.
 - START VR on the **Monado** backend (`IoVariant::MonadoDirect`): `monado-service` of PiBridge's fork with the
-  driver's settings, then `pibridge-xroverlay` (the recenter ring, the loading dots), `pibridge-home
+  driver's settings, then `pibridge-xroverlay` (the recenter ring, the loading dots, the volume indicator), `pibridge-home
   --dashboard-overlay` (the dashboard over games) and the home: PiBridge World under Godot (`rec_godot`, the world
   project; [world.md](world.md)) or `pibridge-home` (`vr_home=classic`, or no Godot). When the world exits with code
   75 (`kHomeYieldCode`: it gave a game its memory), the session starts it again once the dashboard overlay writes

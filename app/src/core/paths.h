@@ -8,6 +8,20 @@
 
 namespace pibridge::app {
 
+// The development machine's folders (~/gamedev/...): the last fallback of a lookup, so an uninstalled checkout runs.
+// Off in the package (-DPIBRIDGE_DEV_PATHS=OFF): the app looks only in the user's own folders and its prefix.
+#ifndef PIBRIDGE_DEV_PATHS
+#define PIBRIDGE_DEV_PATHS 1
+#endif
+inline constexpr bool kDevPaths = PIBRIDGE_DEV_PATHS != 0;
+// {home + rel} with the development folders on, {} without (rel starts with "/gamedev/").
+inline QStringList devPath(const QString& home, const QString& rel) {
+    if constexpr (kDevPaths) {
+        return {home + rel};
+    }
+    return {};
+}
+
 // The install prefix PiBridge was installed under, derived from the running binary (<prefix>/bin/pibridge -> <prefix>),
 // so the layout is relocatable. $PIBRIDGE_PREFIX overrides it (tests, a non-standard install); the fallback is ~/.local.
 QString installPrefix();

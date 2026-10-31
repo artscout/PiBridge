@@ -1,3 +1,34 @@
+pibridge (2.0.2) unstable; urgency=medium
+
+  * The Monado backend is back, as PiBridge's own Monado fork in the source
+    tree (third_party/monado), now packaged as pibridge-monado under
+    /usr/lib/pibridge/monado (cap_sys_nice set at install). One "VR backend"
+    choice in the Dashboard's top bar also points the system's OpenXR runtime
+    (active_runtime.json) at SteamVR or Monado.
+  * PiBridge World: the Monado backend's home in the headset, a Godot 4
+    project, shipped exported into one executable (pibridge-world): no
+    Godot needed. From source, pibridge-get-godot fetches the official
+    Godot 4.7.2 and checks it against its published checksum.
+  * The packaged app looks only in the user's folders and /usr, never in
+    the development folders (PIBRIDGE_DEV_PATHS=OFF).
+  * Monado + Lighthouse: Valve Index controllers (left system button = menu,
+    right one held = recenter), controllers switched on or off during the
+    session (hand slots), base stations drawn in VR (optional) and in the
+    room setup, the builder pinned to the tracking mode.
+  * Monado inside-out: controllers the cameras do not see are hidden, not
+    left hanging in the air.
+  * Packages: pibridge-monado (the Monado fork); pibridge installs the
+    Crystal Super's WirePlumber rule and depends on wireplumber and
+    pulseaudio-utils.
+  * Volume buttons on Monado for the Crystal Super, with a volume indicator
+    in the in-headset overlay (pibridge-xroverlay).
+  * The original Crystal (P3B) on Monado: its own inside-out (poses from
+    pibridge-keepalived), its Lighthouse module, volume, power and the
+    Lighthouse / inside-out switch during a session. Not yet tried on the
+    headset.
+
+ -- Albert Valiev <artscout@gmail.com>  Sat, 31 Oct 2026 04:59:26 +0100
+
 pibridge (2.0.1) unstable; urgency=medium
 
   * Inside-out tracking of the Crystal Super / Dream Air without Monado:

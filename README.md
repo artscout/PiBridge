@@ -152,11 +152,23 @@ Status on the Crystal Super (no faceplate), as of 2026-10-19:
 | SteamVR | Steam's SteamVR for Linux | the SteamVR backend: PiBridge starts it with START VR; the Monado backend with the Lighthouse faceplate only loads its Lighthouse driver |
 | CustomHeadsetOpenVR | upstream `4f25826` + `patches/chovr/` | or the `linux-crystal-super` branch of artscout/CustomHeadsetOpenVR |
 | Build | CMake 3.22+, Ninja, GCC 13+ or Clang 17+, Qt 6 Widgets, OpenXR headers, Vulkan headers and glslang | libjpeg (the Motion-JPEG camera profile), zlib and IBM Plex fonts optional |
-| Monado backend | optional | Monado's build dependencies; PiBridge's fork is in `third_party/monado` (docs/INSTALL.md 7.2) |
-| Godot 4.7 | optional, for PiBridge World | the official Linux build from godotengine.org; not shipped with PiBridge |
+| Monado backend | optional | the `pibridge-monado` package, or from source: Monado's build dependencies, the fork is in `third_party/monado` (docs/INSTALL.md 7.2) |
+| Godot 4.7 | optional, for PiBridge World | the official Linux build, fetched and checked by `pibridge-get-godot`; not shipped with PiBridge |
 
 ## Quick start (Ubuntu)
 
+From the packages (`pibridge` and, for the Monado backend, `pibridge-monado`; built with `dpkg-buildpackage`,
+[docs/PACKAGING.md](docs/PACKAGING.md)):
+```
+sudo apt install ./pibridge_2.0.2_amd64.deb ./pibridge-monado_2.0.2_amd64.deb
+systemctl --user daemon-reload && systemctl --user start pibridge-keepalived pibridge-eyed
+pibridge
+```
+The packages set up the udev rule, the services, the sound rule and Monado's realtime priority; what is left by hand
+(EDID override, CustomHeadsetOpenVR, models, lens profile, eye profile) is listed in
+[docs/INSTALL.md](docs/INSTALL.md#installing-from-the-package-ubuntu--debian).
+
+From source:
 ```
 sudo apt install cmake ninja-build g++ qt6-base-dev libopenxr-dev libvulkan-dev glslang-tools zlib1g-dev libjpeg-dev fonts-ibm-plex
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/.local

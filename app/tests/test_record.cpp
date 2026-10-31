@@ -224,6 +224,46 @@ TEST(setup_lookup_order) {
     CHECK(s.camDevice.isEmpty() && s.camDeviceFromConf);
 }
 
+TEST(packaged_monado_and_fetched_godot_are_found) {
+    QTemporaryDir d;
+    RecEnv env = envFor(d);
+    Conf none(d.path() + QStringLiteral("/none.conf"));
+    // a distribution's monado-service on PATH (no Pimax driver), the development build, the package's fork
+    const QString onPath = d.path() + QStringLiteral("/usr/bin/monado-service");
+    const QString dev = env.home + QStringLiteral("/gamedev/pibridge-monado-build/src/xrt/targets/service/monado-service");
+    const QString pkg = env.prefix + QStringLiteral("/lib/pibridge/monado/bin/monado-service");
+    makeExec(onPath);
+    makeExec(dev);
+    env.which = [&onPath](const QString& n) { return n == QLatin1String("monado-service") ? onPath : QString(); };
+    CHECK(resolveRecSetup(none, env).monado.path == onPath); // PATH before the development build, as before
+    makeExec(pkg);
+    CHECK(resolveRecSetup(none, env).monado.path == pkg); // the package's fork before anything on PATH
+
+    // Godot: pibridge-get-godot's folder before the development one; the world from the prefix
+    writeAll(env.prefix + QStringLiteral("/share/pibridge/world/project.godot"), "");
+    makeExec(env.home + QStringLiteral("/gamedev/godot/Godot_v4.6.1-stable_linux.x86_64"));
+    CHECK(resolveRecSetup(none, env).worldGodot.endsWith(QStringLiteral("/gamedev/godot/Godot_v4.6.1-stable_linux.x86_64")));
+    const QString fetched = env.dataHome + QStringLiteral("/pibridge/godot/Godot_v4.7.2-stable_linux.x86_64");
+    makeExec(fetched);
+    const RecSetup s = resolveRecSetup(none, env);
+    CHECK(s.worldGodot == fetched && s.worldDir == env.prefix + QStringLiteral("/share/pibridge/world"));
+    // the exported world (the package's) wins: no Godot, no project folder; rec_godot= still picks a Godot
+    const QString exported = env.prefix + QStringLiteral("/lib/pibridge/pibridge-world");
+    makeExec(exported);
+    const RecSetup e = resolveRecSetup(none, env);
+    CHECK(e.worldGodot == exported && e.worldDir.isEmpty());
+    const QString cp = d.path() + QStringLiteral("/godot.conf");
+    writeAll(cp, "rec_godot=" + fetched.toUtf8() + "\n");
+    const RecSetup g = resolveRecSetup(Conf(cp), env);
+    CHECK(g.worldGodot == fetched && g.worldDir == env.prefix + QStringLiteral("/share/pibridge/world"));
+    writeAll(cp, "vr_home=classic\n");
+    CHECK(resolveRecSetup(Conf(cp), env).worldGodot.isEmpty());
+    // a lens profile in the user's own data folder is found with any prefix
+    const QString lens = env.dataHome + QStringLiteral("/pibridge/lens/crystal-pimax-native.conf");
+    writeAll(lens, "lut = crystal-pimax-native-lut.bin\n");
+    CHECK(resolveRecSetup(none, env).lens.path == lens);
+}
+
 TEST(lens_profile_native_is_the_default) {
     QTemporaryDir d;
     const RecEnv env = envFor(d);

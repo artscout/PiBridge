@@ -14,6 +14,8 @@
 #include <cerrno>
 #include <sys/xattr.h>
 
+#include "paths.h"
+
 namespace pibridge::app {
 
 QStringList requiredMonadoMarkers() {
@@ -227,8 +229,11 @@ QString buildBlockingReason(const MonadoBuildInfo& b) {
 
 std::vector<MonadoBuildChoice> monadoBuildChoices(const QString& home) {
     const QString svc = QStringLiteral("/src/xrt/targets/service/monado-service");
-    return {{QStringLiteral("auto"), QStringLiteral("Auto"), QString()},
-            {QStringLiteral("pibridge"), QStringLiteral("C++ (PiBridge)"), home + QStringLiteral("/gamedev/pibridge-monado-build") + svc}};
+    std::vector<MonadoBuildChoice> c{{QStringLiteral("auto"), QStringLiteral("Auto"), QString()}};
+    for (const QString& build : devPath(home, QStringLiteral("/gamedev/pibridge-monado-build"))) {
+        c.push_back({QStringLiteral("pibridge"), QStringLiteral("C++ (PiBridge)"), build + svc});
+    }
+    return c;
 }
 
 QString monadoBuildChoiceOf(const QString& confValue, const QString& home) {

@@ -21,6 +21,59 @@ the commands its official Pimax client sends, so a model is added from a recordi
 and a Windows PC with the Pimax client, please record it with the guided kit in [`windows/`](../windows/) (about 15
 minutes, read only towards the headset) and send us the bundle privately: [HEADSET-DATA.md](HEADSET-DATA.md).
 
+## Installing from the package (Ubuntu / Debian)
+
+The quickest way: the two `.deb` packages, built from this source tree ([PACKAGING.md](PACKAGING.md)) for amd64 and
+tested on Ubuntu 26.04. Skip sections 1 and 2 then; the rest of this guide still applies where it says so below.
+
+| Package | What |
+|---|---|
+| `pibridge_2.0.2_amd64.deb` | the app and every `pibridge-*` tool, the user services, the udev rule, the sound rule, the video record layer, the quad views layer, PiBridge World (one executable, no Godot needed), the EDID scripts, the patches for CustomHeadsetOpenVR and NVIDIA, the winbridge sources |
+| `pibridge-monado_2.0.2_amd64.deb` | PiBridge's Monado fork, the Monado backend's OpenXR runtime (optional; the SteamVR backend does not need it) |
+
+Install both with apt, from the folder that holds them (apt pulls Qt 6, OpenCV, ffmpeg and the rest):
+```
+sudo apt install ./pibridge_2.0.2_amd64.deb ./pibridge-monado_2.0.2_amd64.deb
+```
+
+What the packages set up on their own, so you do not:
+
+- The udev rule (section 3) is copied to `/lib/udev/rules.d/` and loaded: the headset is yours at once.
+- The Crystal Super's sound rule (5.4) goes to `/usr/share/wireplumber/wireplumber.conf.d/` (WirePlumber is a
+  dependency), for every user: it takes effect at the next login, or now with `systemctl --user restart wireplumber`.
+- The video record layer's manifest is in the system path (`/usr/share/vulkan/implicit_layer.d/`), so games under
+  Proton find it with no root step (4.2).
+- The user services (section 4): `pibridge-keepalived` and `pibridge-eyed` are enabled for every user and start at the
+  next login. To start them at once, as your user:
+  `systemctl --user daemon-reload && systemctl --user start pibridge-keepalived pibridge-eyed`.
+- `pibridge-monado` installs Monado under `/usr/lib/pibridge/monado/`, apart from any Monado of your distribution, and
+  gives `monado-service` realtime priority (`cap_sys_nice`) at every install and upgrade. The app finds it there first.
+
+Had PiBridge installed from source into `~/.local` before? Remove that first (section 9, "Installed from source"):
+the files in `~/.local` come first on your `PATH` and in systemd's user search path, so the old programs and units
+would still run instead of the package's.
+
+Then start **PiBridge** from the application menu. What no package can carry, and you do once by hand:
+
+| What | Why it is not in the package | How |
+|---|---|---|
+| The EDID override for the NVIDIA driver (root) | it changes your system's display setup | 5.2; the script is `/usr/share/pibridge/edid/pibridge-headset-edid` |
+| The patched NVIDIA module (only driver branches older than 615.71.09 with the Crystal Super on RTX 50) | a kernel module of your own driver version | 5.2; the patches are in `/usr/share/pibridge/patches/nvidia/` |
+| Steam and SteamVR | Valve's | from Steam. The Monado backend's Lighthouse mode also uses SteamVR's `driver_lighthouse` from there (SteamVR itself does not run) |
+| CustomHeadsetOpenVR (the SteamVR backend's display driver) | a separate project (GPL-2) | 5.3; the patches are in `/usr/share/pibridge/patches/chovr/` (use them where it says `/path/to/pibridge/patches`) |
+| The Pimax controller models (`crystal_controller_*`) | Pimax's files | from a Windows Pimax install: 5.3 (SteamVR) and [world.md](world.md#controller-and-base-station-models) (PiBridge World). Valve's Index and base station models are taken from your SteamVR install by themselves |
+| The lens profile for the Monado backend (recommended) | made from your own Pimax install's data | [libpibridge-lens.md](libpibridge-lens.md#the-crystal-super-profile): put `crystal-pimax-native.conf` and its LUT (the original Crystal: `crystal-og.conf` and its LUT) into `~/.local/share/pibridge/lens/` |
+| Eye tracking's start list and your calibration | made from your headset under Windows | section 6 |
+| Inside-out on the Pimax engine (optional): winbridge and the Pimax kit | winbridge is built for your user; the kit is Pimax's | as your user `pibridge-build-winbridge` (needs `mingw-w64`; `wine` to run), then the kit: 7.1 |
+| Basalt (optional, the open SLAM engine) | not a distribution package | 7.1 |
+
+The paths in the rest of this guide name the per-user install (`~/.local/...`); with the package the same files are
+under `/usr` (`/usr/bin`, `/usr/share/pibridge/...`, the docs in `/usr/share/doc/pibridge/`). Your own files (settings,
+rooms, lens profiles, models, the Pimax kit) stay in your home folder either way.
+
+Upgrade: install the newer `.deb` files the same way. Remove: `sudo apt remove pibridge pibridge-monado` (your files in
+your home folder stay; section 9 says how to remove them too).
+
 ## 1. Build dependencies
 
 You need CMake 3.22 or newer, Ninja, a C++23 compiler with `std::expected` (GCC 13 or newer, or Clang 17 or newer),
@@ -324,7 +377,7 @@ Default".
 
 ### 5.4 Sound
 The speakers are ALSA device 1 of the headset's card, and the stock profiles only look at device 0. The rule picks the
-pro-audio profile and gives the devices plain names:
+pro-audio profile and gives the devices plain names (installed from the package: already in place, skip this step):
 ```
 mkdir -p ~/.config/wireplumber/wireplumber.conf.d
 cp /path/to/pibridge/patches/audio/51-pimax-crystal-super.conf ~/.config/wireplumber/wireplumber.conf.d/
@@ -517,6 +570,9 @@ Under Monado:
 
 ### 7.2.1 Build the Monado fork
 
+With the `pibridge-monado` package installed there is nothing to build, and the `pibridge` package carries PiBridge
+World ready to run (no Godot): skip to 7.2.3. 7.2.1 and 7.2.2 are for an install from source.
+
 The fork is in this repository (`third_party/monado`) and is built on its own, out of tree. Its Pimax driver links
 PiBridge's `libpibridge_pimax.a` (monado-abi, [monado-abi.md](monado-abi.md)), so build PiBridge first (section 2).
 
@@ -534,7 +590,7 @@ the Development page):
 ```
 cmake --build build --target pibridge_pimax_archive
 cmake -S third_party/monado -B ~/gamedev/pibridge-monado-build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-    -DXRT_BUILD_DRIVER_PIMAX=ON -DXRT_BUILD_DRIVER_STEAMVR_LIGHTHOUSE=ON \
+    -DXRT_BUILD_DRIVER_PIMAX=ON -DXRT_BUILD_DRIVER_STEAMVR_LIGHTHOUSE=ON -DPIMAX_CAM=ON \
     -DPIMAX_USE_PIBRIDGE=ON -DPIMAX_PIBRIDGE_LIB=$PWD/build/monado-abi/libpibridge_pimax.a \
     -DPIMAX_PIBRIDGE_INCLUDE=$PWD/monado-abi/include
 nice -n 19 ninja -C ~/gamedev/pibridge-monado-build
@@ -547,12 +603,21 @@ capability is missing: it sets it through a pkexec prompt.
 
 ### 7.2.2 Godot, for PiBridge World
 
-PiBridge World (`world/` in the source tree, installed to `~/.local/share/pibridge/world/`) is a Godot 4 project, run
-by Godot. PiBridge does not ship Godot. Download the official Linux build of **Godot 4.7** (standard, not .NET) from
-<https://godotengine.org/download/linux/> and verify it against the published checksums, then put it where the app
-finds it:
+PiBridge World (`world/` in the source tree, installed to `~/.local/share/pibridge/world/`, by the package to
+`/usr/share/pibridge/world/`) is a Godot 4 project, run by Godot. PiBridge does not ship Godot. The simplest way, as
+your user (not root):
+```
+pibridge-get-godot
+```
+It downloads the official Linux build of **Godot 4.7.2** (standard, not .NET) from Godot's GitHub releases, checks it
+against the SHA-512 Godot published for it and puts it into `~/.local/share/pibridge/godot/`. Already downloaded the
+zip yourself: `pibridge-get-godot --from Godot_v4.7.2-stable_linux.x86_64.zip`.
 
-- `~/gamedev/godot/Godot_v4.7.2-stable_linux.x86_64` (any `Godot_v4*_linux.x86_64` in that folder; the newest wins), or
+Or download it from <https://godotengine.org/download/linux/>, verify it against the published checksums, and put it
+where the app finds it (the first that has one):
+
+- `~/.local/share/pibridge/godot/` (any `Godot_v4*_linux.x86_64`; the newest wins),
+- `~/gamedev/godot/Godot_v4.7.2-stable_linux.x86_64` (the same, in that folder), or
 - `godot4` or `godot` on your `PATH`, or
 - any path, named as `rec_godot=` in `pibridge.conf`.
 
@@ -623,7 +688,10 @@ page shows the same). "Permission denied" on a hidraw or USB device means the ud
 
 ## 9. Uninstall or go back
 
-Stop the services and remove what `cmake --install` installed (it keeps a list):
+Installed from the package: `systemctl --user disable --now pibridge-keepalived pibridge-eyed`, then
+`sudo apt remove pibridge pibridge-monado` (the udev rule goes with it). Your own files stay, as below.
+
+Installed from source: stop the services and remove what `cmake --install` installed (it keeps a list):
 ```
 systemctl --user disable --now pibridge-keepalived pibridge-eyed
 xargs rm -f < build/install_manifest.txt

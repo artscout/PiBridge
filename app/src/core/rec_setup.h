@@ -106,8 +106,8 @@ struct RecSetup {
     QString lhStageSaved;         // <rooms>/monado/<room>/lh-stage: copied to lhStageFile at the start
     // The Monado backend's home in the headset: PiBridge World (world/, a Godot 4 project, docs/world.md) run by Godot,
     // unless vr_home=classic (pibridge-home). Both "" when not found: pibridge-home then.
-    QString worldGodot;           // the Godot binary: rec_godot=, else ~/gamedev/godot/Godot_v4*_linux.x86_64, else PATH
-    QString worldDir;             // the project: <prefix>/share/pibridge/world, else the source tree's world/
+    QString worldGodot;           // the exported <prefix>/lib/pibridge/pibridge-world (unless rec_godot=), else the Godot binary: rec_godot=, else ~/.local/share/pibridge/godot/Godot_v4*_linux.x86_64 (pibridge-get-godot), else PATH
+    QString worldDir;             // the project Godot runs: <prefix>/share/pibridge/world, else the source tree's world/; "" for the exported world
     // The Pimax SLAM engine (io_slam_engine=pimax, docs/WINBRIDGE.md): the server, Monado's VIT library for it, Wine,
     // and the kit copied from Pimax Play ($XDG_DATA_HOME/pibridge/windata: dlls/ + slam/ with a device_calibration_*.xml).
     RecPath winbridge, vitBridge;

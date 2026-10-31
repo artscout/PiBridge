@@ -1,0 +1,56 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# pibridge-get-godot: download the official Godot 4 build PiBridge World is made for, check it against the checksum
+# Godot publishes for that release (kept here), and put it where the app finds it:
+#   ${XDG_DATA_HOME:-~/.local/share}/pibridge/godot/Godot_v<version>-stable_linux.x86_64
+# Godot (MIT, godotengine.org) is not shipped in the PiBridge package; this fetches it for your user only.
+# Usage: pibridge-get-godot [--from <Godot_v...linux.x86_64.zip>]   (--from: a zip you downloaded yourself)
+set -eu
+
+VERSION=4.7.2
+ZIP="Godot_v${VERSION}-stable_linux.x86_64.zip"
+URL="https://github.com/godotengine/godot/releases/download/${VERSION}-stable/${ZIP}"
+# from the release's SHA512-SUMS.txt
+SHA512=9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65
+
+DEST="${XDG_DATA_HOME:-$HOME/.local/share}/pibridge/godot"
+BIN="$DEST/Godot_v${VERSION}-stable_linux.x86_64"
+
+if [ "$(id -u)" = 0 ]; then
+    echo "Run it as your user, not root: Godot goes to your own ~/.local/share/pibridge/godot." >&2
+    exit 1
+fi
+if [ -x "$BIN" ] && [ "${1:-}" != "--from" ]; then
+    echo "Godot $VERSION is already there: $BIN"
+    exit 0
+fi
+for t in unzip sha512sum; do
+    command -v "$t" >/dev/null 2>&1 || { echo "Needs $t (sudo apt install unzip coreutils)." >&2; exit 1; }
+done
+
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+if [ "${1:-}" = "--from" ]; then
+    [ -n "${2:-}" ] && [ -f "$2" ] || { echo "Usage: pibridge-get-godot --from <$ZIP>" >&2; exit 1; }
+    cp "$2" "$TMP/$ZIP"
+else
+    echo "Downloading $URL"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --progress-bar -o "$TMP/$ZIP" "$URL"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --show-progress -O "$TMP/$ZIP" "$URL"
+    else
+        echo "Needs curl or wget." >&2
+        exit 1
+    fi
+fi
+
+echo "$SHA512  $TMP/$ZIP" | sha512sum -c --quiet - || {
+    echo "The download does not match Godot $VERSION's published checksum: not installed." >&2
+    exit 1
+}
+unzip -q -o "$TMP/$ZIP" -d "$TMP/x"
+mkdir -p "$DEST"
+install -m 755 "$TMP/x/Godot_v${VERSION}-stable_linux.x86_64" "$BIN"
+echo "Godot $VERSION installed: $BIN"
+echo "PiBridge World runs with it on the Monado backend (the app finds it there; restart the app if it is open)."

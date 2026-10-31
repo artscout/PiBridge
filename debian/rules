@@ -1,21 +1,75 @@
 #!/usr/bin/make -f
-# PiBridge Debian packaging. One binary package `pibridge`, prefix /usr.
-# Build with:  dpkg-buildpackage -us -uc -b        (binary .deb, this machine)
+# PiBridge Debian packaging. Two binary packages: `pibridge` (prefix /usr) and `pibridge-monado` (PiBridge's Monado
+# fork, third_party/monado, prefix /usr/lib/pibridge/monado: where the app looks first, apart from a distribution's
+# Monado). The fork links the libpibridge_pimax.a this build makes, so it is built after PiBridge.
+# Build with:  dpkg-buildpackage -us -uc -b        (binary .debs, this machine)
 #              dpkg-buildpackage -us -uc -S        (source package)
 # Heavy build should run at:  DEB_BUILD_OPTIONS="parallel=8" nice -n 19 dpkg-buildpackage -us -uc -b
 
-export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+# No LTO: libpibridge_pimax.a is merged from several archives (monado-abi), and LTO objects in it do not link into
+# Monado ("undefined reference to `calib.cpp.a0e4aa67'" from the debug info).
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all optimize=-lto
 
-DESTDIR     = $(CURDIR)/debian/pibridge
+# PiBridge World is exported into one executable (lib/pibridge/pibridge-world), so the package needs no Godot. The build
+# machine needs Godot 4.7.2 and its export templates (docs/PACKAGING.md); PIBRIDGE_GODOT=<binary> names another.
+PIBRIDGE_GODOT ?= $(firstword $(wildcard $(HOME)/.local/share/pibridge/godot/Godot_v4.7.2-stable_linux.x86_64 \
+                                         $(HOME)/gamedev/godot/Godot_v4.7.2-stable_linux.x86_64))
+
+MONADO_BUILD  = build-deb-monado
+MONADO_PREFIX = /usr/lib/pibridge/monado
+MONADO_DEST   = $(CURDIR)/debian/pibridge-monado
 
 %:
 	dh $@ --buildsystem=cmake+ninja --builddirectory=build-deb
 
+# The package looks only in the user's folders and /usr, never in the development folders (~/gamedev/...).
 override_dh_auto_configure:
+	@test -x "$(PIBRIDGE_GODOT)" || { echo "Godot 4.7.2 not found: run pibridge-get-godot (tools/get-godot) or set PIBRIDGE_GODOT=<binary>" >&2; exit 1; }
 	dh_auto_configure -- \
 	    -DCMAKE_INSTALL_PREFIX=/usr \
 	    -DPIBRIDGE_SYSTEMD_USER_UNIT_DIR=lib/systemd/user \
-	    -DPIBRIDGE_BUILD_TESTS=OFF
+	    -DPIBRIDGE_BUILD_TESTS=OFF \
+	    -DPIBRIDGE_DEV_PATHS=OFF \
+	    -DPIBRIDGE_EXPORT_WORLD=ON -DPIBRIDGE_GODOT=$(PIBRIDGE_GODOT)
+
+# The Monado fork, configured as docs/INSTALL.md 7.2.1 says, without what PiBridge never uses (samples, tests, ONNX
+# hand tracking, Monado's SteamVR plugin and its own systemd units: the app starts monado-service itself).
+override_dh_auto_build:
+	dh_auto_build
+	cmake -S third_party/monado -B $(MONADO_BUILD) -G Ninja \
+	    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+	    -DCMAKE_INSTALL_PREFIX=$(MONADO_PREFIX) \
+	    -DXRT_BUILD_DRIVER_PIMAX=ON -DXRT_BUILD_DRIVER_STEAMVR_LIGHTHOUSE=ON -DPIMAX_CAM=ON \
+	    -DPIMAX_USE_PIBRIDGE=ON \
+	    -DPIMAX_PIBRIDGE_LIB=$(CURDIR)/build-deb/monado-abi/libpibridge_pimax.a \
+	    -DPIMAX_PIBRIDGE_INCLUDE=$(CURDIR)/monado-abi/include \
+	    -DXRT_BUILD_SAMPLES=OFF -DBUILD_TESTING=OFF -DXRT_HAVE_ONNXRUNTIME=OFF \
+	    -DXRT_FEATURE_STEAMVR_PLUGIN=OFF -DXRT_INSTALL_SYSTEMD_UNIT_FILES=OFF \
+	    -DXRT_OPENXR_INSTALL_ABSOLUTE_RUNTIME_PATH=ON
+	cmake --build $(MONADO_BUILD) $(if $(filter parallel=%,$(DEB_BUILD_OPTIONS)),-j$(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS))))
+
+# Each package straight into its own folder (no debian/tmp).
+override_dh_auto_install:
+	dh_auto_install --destdir=debian/pibridge
+	DESTDIR=$(MONADO_DEST) cmake --install $(MONADO_BUILD)
+	# only the runtime: no headers, no Monado units, no OpenVR client shim
+	rm -rf $(MONADO_DEST)$(MONADO_PREFIX)/include $(MONADO_DEST)$(MONADO_PREFIX)/lib/systemd \
+	       $(MONADO_DEST)$(MONADO_PREFIX)/share/st-openvr
+
+# pibridge-world carries the world's pack inside the executable: never stripped (Godot's template is stripped already).
+override_dh_strip:
+	dh_strip -Xpibridge-world
+
+override_dh_dwz:
+	dh_dwz -Xpibridge-world
+
+# Monado's private libraries live in its own prefix.
+override_dh_shlibdeps:
+	dh_shlibdeps -l$(MONADO_DEST)$(MONADO_PREFIX)/lib
+
+override_dh_auto_clean:
+	dh_auto_clean
+	rm -rf $(MONADO_BUILD)
 
 # Tests are not built in the package.
 override_dh_auto_test:

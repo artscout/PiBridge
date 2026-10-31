@@ -904,7 +904,9 @@ void IoSessionControl::startHome() {
     if (!setup_.worldGodot.isEmpty()) {
         // PiBridge World (Godot): the world, the dashboard, apps; pibridge-home stays for vr_home=classic
         spec.program = setup_.worldGodot;
-        spec.args = {QStringLiteral("--path"), setup_.worldDir};
+        if (!setup_.worldDir.isEmpty()) {
+            spec.args = {QStringLiteral("--path"), setup_.worldDir}; // a Godot running the project; none: the exported world
+        }
     }
     spec.env << QStringLiteral("XR_RUNTIME_JSON=") + runtimeJson_;
     spec.env << QStringLiteral("PIBRIDGE_BACKEND=monado"); // the home is the Monado backend's dashboard

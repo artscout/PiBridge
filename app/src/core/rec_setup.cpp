@@ -132,11 +132,12 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
         return c;
     };
     RecSetup s;
-    s.monado = pick(conf, reckey::kMonado, QStringLiteral("monado-service"), true,
-                    tool(env, QStringLiteral("monado-service"),
-                         {lib + QStringLiteral("/monado/bin"),
-                          h + QStringLiteral("/gamedev/pibridge-monado-build/src/xrt/targets/service")}),
-                    h, isExec);
+    // the fork the package ships (<prefix>/lib/pibridge/monado, pibridge-monado) before any monado-service on PATH: a
+    // distribution's Monado has no Pimax driver
+    QStringList monadoAt{lib + QStringLiteral("/monado/bin/monado-service")};
+    monadoAt << tool(env, QStringLiteral("monado-service"),
+                     devPath(h, QStringLiteral("/gamedev/pibridge-monado-build/src/xrt/targets/service")));
+    s.monado = pick(conf, reckey::kMonado, QStringLiteral("monado-service"), true, monadoAt, h, isExec);
     s.cam = pick(conf, reckey::kCam, QStringLiteral("pibridge-cam"), true, ownTool(QStringLiteral("pibridge-cam")), h,
                  isExec);
     s.ctrl = pick(conf, reckey::kCtrl, QStringLiteral("pibridge-ctrltrack"), true,
@@ -144,20 +145,21 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
     s.headtrack = pick(conf, reckey::kHeadtrack, QStringLiteral("pibridge-headtrack"), true,
                        ownTool(QStringLiteral("pibridge-headtrack")), h, isExec);
     s.basalt = pick(conf, reckey::kBasalt, QStringLiteral("Basalt library (libbasalt.so)"), false,
-                    {lib + QStringLiteral("/libbasalt.so"), h + QStringLiteral("/gamedev/ovr-build/basalt/lib/libbasalt.so"),
-                     QStringLiteral("/usr/local/lib/libbasalt.so"), QStringLiteral("/usr/lib/libbasalt.so")},
+                    QStringList{lib + QStringLiteral("/libbasalt.so")}
+                        << devPath(h, QStringLiteral("/gamedev/ovr-build/basalt/lib/libbasalt.so"))
+                        << QStringLiteral("/usr/local/lib/libbasalt.so") << QStringLiteral("/usr/lib/libbasalt.so"),
                     h, isFile);
     // the Pimax SLAM engine (not redistributable: copied from Pimax Play at install): the installed plugin, else the
     // user's data dir, else the build in the source tree
     s.winbridge = pick(conf, reckey::kWinbridge, QStringLiteral("winbridge.exe"), false,
-                       {lib + QStringLiteral("/winbridge/winbridge.exe"),
-                        env.dataHome + QStringLiteral("/pibridge/winbridge/winbridge.exe"),
-                        h + QStringLiteral("/gamedev/pibridge/winbridge/winbridge.exe")},
+                       QStringList{lib + QStringLiteral("/winbridge/winbridge.exe"),
+                                   env.dataHome + QStringLiteral("/pibridge/winbridge/winbridge.exe")}
+                           << devPath(h, QStringLiteral("/gamedev/pibridge/winbridge/winbridge.exe")),
                        h, isFile);
     s.vitBridge = pick(conf, reckey::kVitBridge, QStringLiteral("VIT library (libpibridge_vit_winbridge.so)"), false,
-                       {lib + QStringLiteral("/winbridge/libpibridge_vit_winbridge.so"),
-                        env.dataHome + QStringLiteral("/pibridge/winbridge/libpibridge_vit_winbridge.so"),
-                        h + QStringLiteral("/gamedev/pibridge/winbridge/libpibridge_vit_winbridge.so")},
+                       QStringList{lib + QStringLiteral("/winbridge/libpibridge_vit_winbridge.so"),
+                                   env.dataHome + QStringLiteral("/pibridge/winbridge/libpibridge_vit_winbridge.so")}
+                           << devPath(h, QStringLiteral("/gamedev/pibridge/winbridge/libpibridge_vit_winbridge.so")),
                        h, isFile);
     s.wine = env.which ? env.which(QStringLiteral("wine")) : QString();
     {
@@ -178,9 +180,9 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
         }
     }
     s.slamConfig = pick(conf, reckey::kSlamConfig, QStringLiteral("SLAM config (pimax-basalt.toml)"), false,
-                        {env.configDir + QStringLiteral("/pimax-basalt.toml"),
-                         data + QStringLiteral("/slam/pimax-basalt.toml"),
-                         h + QStringLiteral("/gamedev/ext/slam/pimax-basalt.toml")},
+                        QStringList{env.configDir + QStringLiteral("/pimax-basalt.toml"),
+                                    data + QStringLiteral("/slam/pimax-basalt.toml")}
+                            << devPath(h, QStringLiteral("/gamedev/ext/slam/pimax-basalt.toml")),
                         h, isFile);
     // The lens profile (lens_profile, the Display page's selector):
     //   "native" (and unset) = crystal-pimax-native.conf: PiBridge's Crystal Super profile (pibridge-lens
@@ -205,18 +207,22 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
         lensCandidates << env.configDir + QStringLiteral("/lens.conf");
     }
     for (const QString& n : lensNames) {
-        lensCandidates << data + QStringLiteral("/lens/") + n << h + QStringLiteral("/gamedev/ext/lens/") + n;
+        // the user's own folder (the package's prefix is /usr, not ~/.local), the prefix, the development folder
+        lensCandidates << env.dataHome + QStringLiteral("/pibridge/lens/") + n << data + QStringLiteral("/lens/") + n
+                       << devPath(h, QStringLiteral("/gamedev/ext/lens/") + n);
     }
     if (lensNames.size() > 1) {
-        lensCandidates << data + QStringLiteral("/lens/crystal.conf") << h + QStringLiteral("/gamedev/ext/lens/crystal.conf");
+        lensCandidates << env.dataHome + QStringLiteral("/pibridge/lens/crystal.conf")
+                       << data + QStringLiteral("/lens/crystal.conf")
+                       << devPath(h, QStringLiteral("/gamedev/ext/lens/crystal.conf"));
     }
     s.lens = pick(conf, og ? "rec_lens_conf_og" : reckey::kLens, QStringLiteral("lens file"), false, lensCandidates, h,
                   isFile);
     // the user's factory calibration first, then the installed default template
     s.calib = pick(conf, reckey::kCalib, QStringLiteral("camera calibration"), true,
-                   {env.configDir + QStringLiteral("/headset-calibration.xml"),
-                    data + QStringLiteral("/calib/crystal-calibration.xml"),
-                    h + QStringLiteral("/gamedev/ext/calib/crystal-calibration.xml")},
+                   QStringList{env.configDir + QStringLiteral("/headset-calibration.xml"),
+                               data + QStringLiteral("/calib/crystal-calibration.xml")}
+                       << devPath(h, QStringLiteral("/gamedev/ext/calib/crystal-calibration.xml")),
                    h, isFile);
 
     const QString conn = conf.value(reckey::kConnector, QString()).trimmed();
@@ -255,22 +261,36 @@ RecSetup resolveRecSetup(const Conf& conf, const RecEnv& env) {
     }
     s.io = ioSettings(conf);
     s.backend = vrBackend(conf);
-    if (conf.value("vr_home", QString()).trimmed() != QLatin1String("classic")) {
-        QString godot = conf.value("rec_godot", QString()).trimmed();
-        if (godot.isEmpty()) {
-            const QDir gd(h + QStringLiteral("/gamedev/godot"));
+    const QString exportedWorld = lib + QStringLiteral("/pibridge-world");
+    if (conf.value("vr_home", QString()).trimmed() == QLatin1String("classic")) {
+        // pibridge-home on purpose
+    } else if (conf.value("rec_godot", QString()).trimmed().isEmpty() && isExec(exportedWorld)) {
+        // the world exported into one executable (the package's): no Godot, no project folder
+        s.worldGodot = exportedWorld;
+    } else {
+        QString godot = expand(conf.value("rec_godot", QString()).trimmed(), h);
+        // pibridge-get-godot's folder, then the development one: the newest Godot 4 in the first that has one
+        for (const QString& folder :
+             QStringList{env.dataHome + QStringLiteral("/pibridge/godot")} << devPath(h, QStringLiteral("/gamedev/godot"))) {
+            if (!godot.isEmpty()) {
+                break;
+            }
+            const QDir gd(folder);
             const QStringList found =
                 gd.entryList({QStringLiteral("Godot_v4*_linux.x86_64")}, QDir::Files | QDir::Executable, QDir::Name);
             if (!found.isEmpty()) {
                 godot = gd.filePath(found.last());
-            } else if (env.which) {
+            }
+        }
+        if (godot.isEmpty()) {
+            if (env.which) {
                 godot = env.which(QStringLiteral("godot4"));
                 if (godot.isEmpty()) {
                     godot = env.which(QStringLiteral("godot"));
                 }
             }
         }
-        for (const QString& d : {data + QStringLiteral("/world"), h + QStringLiteral("/gamedev/pibridge/world")}) {
+        for (const QString& d : QStringList{data + QStringLiteral("/world")} << devPath(h, QStringLiteral("/gamedev/pibridge/world"))) {
             if (QFileInfo::exists(d + QStringLiteral("/project.godot"))) {
                 s.worldDir = d;
                 break;

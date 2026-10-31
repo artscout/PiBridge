@@ -15,9 +15,10 @@ it is kept.
 
 ## Where it lives
 
-The sources are plain files in this repository, `third_party/monado`. The build is out of tree:
-`~/gamedev/pibridge-monado-build` is where the app looks for `monado-service`. Another build folder works with
-`rec_monado_service=` in `pibridge.conf`.
+The sources are plain files in this repository, `third_party/monado`. The app looks for `monado-service` in this
+order: `rec_monado_service=` in `pibridge.conf`; the installed fork, `<prefix>/lib/pibridge/monado/bin/` (the
+`pibridge-monado` package puts it into `/usr/lib/pibridge/monado/`, [PACKAGING.md](PACKAGING.md)); `PATH`; the
+development build, `~/gamedev/pibridge-monado-build` (out of tree).
 
 The fork's own git history is kept outside PiBridge's tree, so PiBridge's repository sees plain files and no nested
 repository. On the development machine it is a separate git folder whose work tree is `third_party/monado`:
