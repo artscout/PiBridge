@@ -196,6 +196,9 @@ private:
     pibridge::ui::Toggle* passthrough_ = nullptr;
     pibridge::ui::Toggle* dashOverlay_ = nullptr; // Quick settings: the SteamVR dashboard panel on/off
     QLabel* dashOverlayLine_ = nullptr;           // its plain-words status
+    QPushButton* deskAllow_ = nullptr;            // Quick settings: Desktop in VR, KDE's permission (pibridge-desktop allow)
+    QLabel* deskState_ = nullptr;                 // "Allowed" / "Not allowed yet"
+    void updateDesktopPermission();
     pibridge::ui::Toggle* eyeToggle_ = nullptr;
     QPushButton* calibrate_ = nullptr;
     QPushButton* importEye_ = nullptr; // calibration.setpm from Pimax Play / EVO (Windows)

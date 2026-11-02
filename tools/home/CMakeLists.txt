@@ -10,7 +10,7 @@ find_package(Threads REQUIRED)
 add_library(pibridge_home_backgrounds STATIC src/backgrounds.cpp)
 target_include_directories(pibridge_home_backgrounds PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_library(pibridge_home_core STATIC src/scene.cpp src/loop.cpp src/options.cpp src/selftest.cpp src/sky.cpp src/panel.cpp
-    src/plan.cpp src/dash_settings.cpp src/dash_view.cpp src/dash_sys.cpp)
+    src/plan.cpp src/dash_settings.cpp src/dash_view.cpp src/dash_sys.cpp src/desk.cpp src/frame_layout.cpp)
 target_include_directories(pibridge_home_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # the self test draws the passthrough of the synthetic room (tools/xrkit ptsynth.h) with the CPU reference; the
 # dashboard's receivers use libpibridge-hmd (the headset volume through pactl, the vibration request's format)

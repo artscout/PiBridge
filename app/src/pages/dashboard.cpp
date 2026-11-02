@@ -594,6 +594,40 @@ DashboardPage::DashboardPage(StateSource& source, Actions& actions, Conf& conf, 
         updateOverlay();
     });
     connect(&overlay_, &OverlayControl::changed, this, &DashboardPage::updateOverlay);
+    // Desktop in VR (docs/desktop.md): KDE asks once, on the desktop, whether PiBridge may show the screens in the
+    // headset and move the pointer; the answer is kept (pibridge-desktop's restore token), so in the headset it is
+    // never asked again. The button runs `pibridge-desktop allow`; while KDE's question is open it waits.
+    deskState_ = pibridge::ui::dimLabel(QString());
+    deskAllow_ = pibridge::ui::linkButton(QStringLiteral("Allow"));
+    const QString deskTip = QStringLiteral("Lets the headset show your monitors (the Desktop button in the dashboard "
+                                           "over games, in PiBridge World and in SteamVR's dashboard) and the "
+                                           "controller move the mouse. KDE asks once here on the desktop; allow it.");
+    deskAllow_->setToolTip(deskTip);
+    quick->body()->addWidget(pibridge::ui::settingRow(QStringLiteral("Desktop in VR"), deskState_, deskAllow_, false, deskTip));
+    connect(deskAllow_, &QPushButton::clicked, this, [this] {
+        const QString tool = QStandardPaths::findExecutable(QStringLiteral("pibridge-desktop"),
+                                                            {QCoreApplication::applicationDirPath(),
+                                                             QCoreApplication::applicationDirPath() + QStringLiteral("/../tools/desktop")});
+        const QString found = tool.isEmpty() ? QStandardPaths::findExecutable(QStringLiteral("pibridge-desktop")) : tool;
+        if (found.isEmpty()) {
+            say(QStringLiteral("pibridge-desktop was not found: install PiBridge again."), true);
+            return;
+        }
+        deskAllow_->setEnabled(false);
+        say(QStringLiteral("KDE asks on the desktop whether PiBridge may share the screens and the pointer: allow it."));
+        auto* p = new QProcess(this);
+        connect(p, &QProcess::finished, this, [this, p](int code, QProcess::ExitStatus) {
+            const QString out = QString::fromUtf8(p->readAllStandardError()).trimmed();
+            say(code == 0 ? QStringLiteral("Desktop in VR is allowed.")
+                          : QStringLiteral("Desktop in VR not allowed: %1").arg(out.isEmpty() ? QStringLiteral("no answer") : out),
+                code != 0);
+            p->deleteLater();
+            deskAllow_->setEnabled(true);
+            updateDesktopPermission();
+        });
+        p->start(found, {QStringLiteral("allow")});
+    });
+    updateDesktopPermission();
     eyeToggle_ = new pibridge::ui::Toggle;
     const QString eyeTip = QStringLiteral("Eye tracking on or off (eye_tracking in pibridge.conf; starts or stops "
                                           "the pibridge-eyed service).");
@@ -1357,6 +1391,20 @@ void DashboardPage::applyConf() {
     }
     io_.refresh();
     updateMode();
+}
+
+void DashboardPage::updateDesktopPermission() {
+    if (deskState_ == nullptr) {
+        return;
+    }
+    // pibridge-desktop's restore token ($XDG_STATE_HOME/pibridge/desktop-token): KDE's kept permission
+    QString state = qEnvironmentVariable("XDG_STATE_HOME");
+    if (state.isEmpty()) {
+        state = QDir::homePath() + QStringLiteral("/.local/state");
+    }
+    const bool allowed = QFileInfo::exists(state + QStringLiteral("/pibridge/desktop-token"));
+    deskState_->setText(allowed ? QStringLiteral("Allowed") : QStringLiteral("Not allowed yet"));
+    deskAllow_->setText(allowed ? QStringLiteral("Ask again") : QStringLiteral("Allow"));
 }
 
 void DashboardPage::updateOverlay() {

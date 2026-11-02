@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <fstream>
 #include <sstream>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace pibridge::headtrack {
@@ -750,26 +751,7 @@ void Daemon::on_controller(const hmd::ControllerReport& r) {
         }
         if (down && !hd.recentered && now - hd.pimax_down_ns > 800'000'000) {
             hd.recentered = true;
-            // A recenter needs BOTH parts, because SteamVR splits them:
-            //  - the LIVE pose shift (our anchor), which a RUNNING game sees -- a game keeps the tracking origin it got
-            //    at launch, and only the live pose stream (as SteamVR's own recenter does) moves it; the chaperone
-            //    config does not reach it. This is the in-game recenter.
-            //  - the chaperone commit (pibridge-roomsetup --vr-standing, a client -- a driver cannot), which sets the
-            //    forward/centre SteamVR Home shows and persists it. It reads the already-anchor-recentered raw head
-            //    ~1 s later, so it captures the same recentre (no double shift). Without --radius it keeps the boundary.
-            if (world_) {
-                world_->request_recenter();
-            }
-            // --keep-floor: the recenter moves centre / forward ONLY. The floor is the room setup's (its saved plane,
-            // put into this session's raw space when the room was recognised) and must never be re-derived from the
-            // head at the press: head y - a default eye height at an arbitrary posture put the floor below the real one.
-            say_(std::string("Pimax button long press (") + (side == 0 ? "left" : "right") +
-                 "): recenter -> anchor (live, in-game) + chaperone (--vr-standing --keep-floor)");
-            std::thread([] {
-                if (std::system("pibridge-roomsetup --vr-standing --keep-floor >/dev/null 2>&1") != 0) {
-                    // best-effort: a failed commit only misses the Home-side update; the live anchor recentre still took
-                }
-            }).detach();
+            recenter_now(std::string("Pimax button long press (") + (side == 0 ? "left" : "right") + ")");
         }
     }
     if (vit_) {
@@ -784,6 +766,56 @@ void Daemon::on_controller(const hmd::ControllerReport& r) {
         char line[96];
         std::snprintf(line, sizeof line, "controller %s buttons 0x%02x", side == 0 ? "left" : "right", r.buttons);
         say_(line);
+    }
+}
+
+void Daemon::recenter_now(const std::string& why) {
+    {
+        {
+            // A recenter needs BOTH parts, because SteamVR splits them:
+            //  - the LIVE pose shift (our anchor), which a RUNNING game sees -- a game keeps the tracking origin it got
+            //    at launch, and only the live pose stream (as SteamVR's own recenter does) moves it; the chaperone
+            //    config does not reach it. This is the in-game recenter.
+            //  - the chaperone commit (pibridge-roomsetup --vr-standing, a client -- a driver cannot), which sets the
+            //    forward/centre SteamVR Home shows and persists it. It reads the already-anchor-recentered raw head
+            //    ~1 s later, so it captures the same recentre (no double shift). Without --radius it keeps the boundary.
+            if (world_) {
+                world_->request_recenter();
+            }
+            // --keep-floor: the recenter moves centre / forward ONLY. The floor is the room setup's (its saved plane,
+            // put into this session's raw space when the room was recognised) and must never be re-derived from the
+            // head at the press: head y - a default eye height at an arbitrary posture put the floor below the real one.
+            say_(why + ": recenter -> anchor (live, in-game) + chaperone (--vr-standing --keep-floor)");
+            std::thread([] {
+                if (std::system("pibridge-roomsetup --vr-standing --keep-floor >/dev/null 2>&1") != 0) {
+                    // best-effort: a failed commit only misses the Home-side update; the live anchor recentre still took
+                }
+            }).detach();
+        }
+    }
+}
+
+void Daemon::recenter_request_poll(std::int64_t now_ns) {
+    // the dashboards' Recenter (PiBridge's SteamVR overlay bar): $XDG_RUNTIME_DIR/pibridge/recenter-request changes, as
+    // the Pimax driver under Monado takes it
+    if (now_ns < recenter_poll_at_) {
+        return;
+    }
+    recenter_poll_at_ = now_ns + 300'000'000;
+    struct stat st{};
+    const std::string path = (status::runtime_dir() / "recenter-request").string();
+    const std::int64_t m = ::stat(path.c_str(), &st) == 0
+                               ? static_cast<std::int64_t>(st.st_mtim.tv_sec) * 1'000'000'000LL + st.st_mtim.tv_nsec
+                               : -1;
+    if (!recenter_stamp_) {
+        recenter_stamp_ = m; // what was there before this session is no request
+        return;
+    }
+    if (m != *recenter_stamp_) {
+        recenter_stamp_ = m;
+        if (m >= 0) {
+            recenter_now("recenter request (the dashboard)");
+        }
     }
 }
 
@@ -1150,6 +1182,7 @@ void Daemon::output_loop() {
             std::ofstream(status::runtime_dir().parent_path() / "pimax-rate") << int(o_.fps) << "\n";
         }
         const std::int64_t now = monotonic_ns();
+        recenter_request_poll(now);
         if (ht_) {
             std::uint32_t tracking = 0;
             st.devices[0] = basalt_head(now, tracking);

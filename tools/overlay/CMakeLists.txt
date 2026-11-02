@@ -14,6 +14,15 @@ target_link_libraries(pibridge_overlay_core PUBLIC pibridge_common)
 add_executable(pibridge-overlay src/main.cpp src/overlay.cpp)
 target_include_directories(pibridge-overlay SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/app/third_party/openvr)
 target_link_libraries(pibridge-overlay PRIVATE pibridge_overlay_core pibridge_room ${CMAKE_DL_LIBS})
+# the desktop tab (docs/desktop.md): a Vulkan texture, the bar painted by tools/home's dashboard painter
+find_package(Vulkan QUIET)
+if(Vulkan_FOUND AND TARGET pibridge_home_dash_paint)
+    target_sources(pibridge-overlay PRIVATE src/desk_tab.cpp)
+    target_compile_definitions(pibridge-overlay PRIVATE PIBRIDGE_OVERLAY_DESK=1)
+    target_link_libraries(pibridge-overlay PRIVATE pibridge_home_dash_paint pibridge_home_core Vulkan::Vulkan)
+else()
+    message(STATUS "pibridge-overlay: no Vulkan or no Qt dashboard painter: no desktop tab")
+endif()
 # the install paths baked in as the defaults (the user never types them; the app and the installer pass the rest)
 target_compile_definitions(pibridge-overlay PRIVATE
     PIBRIDGE_OVERLAY_ICON="${CMAKE_INSTALL_FULL_DATADIR}/icons/hicolor/256x256/apps/pibridge.png"

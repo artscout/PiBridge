@@ -1,16 +1,23 @@
 # SPDX-License-Identifier: MIT
 # PiBridge World (docs/world.md): the Monado backend's home in the headset. The world, the dashboard on a panel, the
 # controllers with their lasers and models, Passthrough (pibridge-home --passthrough-overlay, Monado's overlay over
-# this world). The menu button shows / hides the dashboard in front of you; holding a grip moves it there.
+# this world). Laid out in one frame (the rig, layout.gd) at your eyes, turned to where you look, moved and scaled by
+# the interface size (world_ui_scale: Large / Medium / Small / Miniature), holding the dashboard, the bar under it
+# (always there: bar.gd) and the desktop (desktop.gd, the monitors' places, scaled and moved by the bar's Zoom and
+# Distance). The menu button shows / hides the dashboard; holding a grip
+# brings the whole frame to where you look.
 # `-- --selftest` runs the self test without a headset (the settings' files, the apps, the parsers, a click) and quits.
 extends Node3D
 
 const AppsModel = preload("res://scripts/apps_model.gd")
+const Bar = preload("res://scripts/bar.gd")
 const BaseStations = preload("res://scripts/base_stations.gd")
 const ControllerModel = preload("res://scripts/controller_model.gd")
 const Dashboard = preload("res://scripts/dashboard.gd")
+const Desktop = preload("res://scripts/desktop.gd")
 const KeyConf = preload("res://scripts/keyconf.gd")
 const ObjLoader = preload("res://scripts/obj_loader.gd")
+const Layout = preload("res://scripts/layout.gd")
 const Paths = preload("res://scripts/paths.gd")
 const Pointer = preload("res://scripts/pointer.gd")
 const VrPanel = preload("res://scripts/vr_panel.gd")
@@ -21,6 +28,12 @@ var origin := XROrigin3D.new()
 var camera := XRCamera3D.new()
 var panel: VrPanel
 var dash: Dashboard
+var bar: Bar
+var bar_panel: VrPanel
+var desk: Desktop
+var rig := Node3D.new()           # the frame: the dashboard, the bar, the desktop
+var ui_scale := Layout.UI_SCALE_DEFAULT
+var _record_check := 0.0
 var models: Array[ControllerModel] = []
 var _hands := [] # per side: {grip, pointer, shown state}: a controller is drawn and points only while tracked
 const LOST_GRACE_S := 1.0
@@ -88,10 +101,54 @@ func _ready() -> void:
 	dash.models_toggled.connect(func(on):
 		for m in models:
 			m.visible = on)
-	panel = VrPanel.new(dash, Vector2i(1800, 1150), Vector2(1.8, 1.15))
-	add_child(panel)
+	ui_scale = KeyConf.new(Paths.pibridge_conf()).value("world_ui_scale", Layout.UI_SCALE_DEFAULT)
+	dash.ui_scale_changed.connect(func(n): ui_scale = n; _place_panel())
+	add_child(rig)
+	panel = VrPanel.new(dash, Vector2i(1840, 1150), Layout.MAIN_SIZE)
+	rig.add_child(panel)
+	panel.position = Layout.MAIN_POS
+	_make_bar()
 	await get_tree().process_frame
 	_place_panel()
+	if "--desktop" in OS.get_cmdline_user_args():
+		_set_desktop(true) # straight to the desktop (a look without a headset: `-- --desktop`)
+		bar.set_desktop(true, desk.monitors.size(), desk.mask, desk.words)
+
+
+func _make_bar() -> void:
+	bar = Bar.new()
+	bar_panel = VrPanel.new(bar, Bar.SIZE_PX, Layout.BAR_SIZE)
+	rig.add_child(bar_panel)
+	bar_panel.transform = Layout.bar_transform()
+	desk = Desktop.new()
+	rig.add_child(desk)
+	var conf := KeyConf.new(Paths.pibridge_conf())
+	_zoom = clampf(conf.value("desktop_zoom", "1").to_float(), Layout.ZOOM_MIN, Layout.ZOOM_MAX)
+	_distance = clampf(conf.value("desktop_distance", "0").to_float(), Layout.DISTANCE_MIN, Layout.DISTANCE_MAX)
+	bar.set_zoom(_zoom, _distance)
+	bar.desktop_toggled.connect(_set_desktop)
+	bar.monitors_chosen.connect(func(m): desk.show_monitors(m))
+	bar.zoom_changed.connect(func(z, d):
+		_zoom = z
+		_distance = d
+		desk.transform = Layout.zoom_transform(_zoom, _distance, ui_scale)
+		_zoom_save = 1.0)
+	bar.record_pressed.connect(func(): dash.toggle_record(); _record_check = 1.5)
+	bar.room_setup_pressed.connect(func(): dash.start_room_setup(false))
+	bar.recenter_pressed.connect(func(): dash.recenter())
+	desk.changed.connect(func(): bar.set_desktop(desk.shown, desk.monitors.size(), desk.mask, desk.words))
+
+
+var _zoom := 1.0
+var _distance := 0.0
+var _zoom_save := -1.0 # the sliders are saved a moment after the last move
+
+
+# Desktop on: the monitors in place of the dashboard; off: the dashboard back.
+func _set_desktop(on: bool) -> void:
+	desk.transform = Layout.zoom_transform(_zoom, _distance, ui_scale)
+	desk.set_shown(on)
+	panel.visible = not on
 
 
 func _place_pointer(m: ControllerModel, ptr: Node3D, grip: Node3D, aim: Node3D) -> void:
@@ -161,14 +218,35 @@ func _process(dt: float) -> void:
 			_panel_write = 0.1
 			var t := panel.global_transform
 			var q := t.basis.get_rotation_quaternion()
+			var k := t.basis.get_scale().x # the rig's UI scale: the panel's metres
 			Paths.write_text(Paths.status_dir() + "/world-panel", "%f %f %f %f %f %f %f %f %f\n" % [
-				t.origin.x, t.origin.y, t.origin.z, q.x, q.y, q.z, q.w, panel.size_m.x, panel.size_m.y])
+				t.origin.x, t.origin.y, t.origin.z, q.x, q.y, q.z, q.w, panel.size_m.x * k, panel.size_m.y * k])
 	for side in _grip_hold.keys():
 		_grip_hold[side] += dt
 		if _grip_hold[side] > 0.5:
 			_grip_hold.erase(side)
-			panel.visible = true
-			_place_panel()
+			if desk == null or not desk.shown:
+				panel.visible = true
+			_place_panel() # the whole frame where you look
+	if _zoom_save >= 0.0:
+		_zoom_save -= dt
+		if _zoom_save < 0.0:
+			var conf := KeyConf.new(Paths.pibridge_conf())
+			conf.set_value("desktop_zoom", "%.2f" % _zoom)
+			conf.set_value("desktop_distance", "%.2f" % _distance)
+	# the lasers on the desktop's screens: the overlay draws them over the pictures (it draws the pictures over the world)
+	if desk != null and desk.shown:
+		var rs := []
+		for h in _hands:
+			var p = h["pointer"]
+			if p.visible and p.on_screen:
+				rs.append([p.global_position, p.hit_point])
+		desk.rays = rs
+	# the bar's Record follows the recorder (the dashboard's own check, once a second)
+	_record_check -= dt
+	if bar != null and _record_check <= 0.0:
+		_record_check = 1.0
+		bar.set_recording(dash.recording_now())
 
 
 func _on_button(n: String, side: String) -> void:
@@ -179,6 +257,10 @@ func _on_button(n: String, side: String) -> void:
 		dash.say("Passthrough off.")
 		return
 	if n == "menu_button" or n == "by_button" and side == "left":
+		if desk != null and desk.shown:
+			_set_desktop(false) # from the desktop back to the dashboard
+			bar.set_desktop(false, 0, 0, "")
+			return
 		panel.visible = not panel.visible
 		if panel.visible:
 			_place_panel()
@@ -191,18 +273,11 @@ func _on_release(n: String, side: String) -> void:
 		_grip_hold.erase(side)
 
 
-# In front of the head, level, at a comfortable height and distance.
+# The frame at the eyes, turned to where you look (the interface size's distance and size).
 func _place_panel() -> void:
-	var head := camera.global_transform
-	var fwd := -head.basis.z
-	fwd.y = 0
-	if fwd.length() < 0.01:
-		fwd = Vector3.FORWARD
-	fwd = fwd.normalized()
-	var pos := head.origin + fwd * 1.35
-	pos.y = maxf(head.origin.y - 0.15, 0.8)
-	panel.global_position = pos
-	panel.look_at(pos + fwd, Vector3.UP)
+	rig.global_transform = Layout.rig_transform(camera.global_transform, ui_scale)
+	if desk != null:
+		desk.transform = Layout.zoom_transform(_zoom, _distance, ui_scale)
 
 
 func _on_recentered() -> void:
@@ -412,5 +487,78 @@ func _selftest() -> void:
 		.is_equal_approx(Basis(Vector3(0, 0, 1), deg_to_rad(-0.303)) * Basis(Vector3(0, 1, 0), deg_to_rad(2.071))
 		* Basis(Vector3(1, 0, 0), deg_to_rad(15.392))), "controller models: frames composed as Monado's (Rz Ry Rx)")
 
+	# ---- the desktop (desktop.gd) and the bar (bar.gd)
+	_check(Desktop.pack_pointer(true, 1, 7, 8, 1) == (8 | (8 << 16) | (1 << 32) | (1 << 40)) and
+		Desktop.pack_pointer(false, 3, 5, 5, 2) == (2 << 32), "desktop: the pointer packed as pibridge_desktop.h")
+	# a desktop.shm with two monitors and a picture of monitor 2 (BGRA 2 x 1), as pibridge-desktop writes it
+	var shm := PackedByteArray()
+	shm.resize(Desktop.HEADER_BYTES + Desktop.SLOT_BYTES + 8)
+	shm.encode_u32(Desktop.OFF_MONITOR_COUNT, 2)
+	for i in 2:
+		var mb := Desktop.OFF_MONITORS + i * Desktop.MONITOR_BYTES
+		shm.encode_s32(mb + 16, i * 2560)
+		shm.encode_u32(mb + 24, 2560)
+		shm.encode_u32(mb + 28, 1440)
+	var b2 := Desktop.OFF_MONITORS + Desktop.MONITOR_BYTES
+	shm.encode_u64(b2, 2)
+	shm.encode_u32(b2 + 8, 2)
+	shm.encode_u32(b2 + 12, 1)
+	shm.encode_u32(Desktop.HEADER_BYTES + Desktop.SLOT_BYTES, 0xff030201)
+	var mons := Desktop.parse_monitors(shm)
+	_check(mons.size() == 2 and mons[1]["x"] == 2560 and mons[1]["lw"] == 2560 and mons[1]["w"] == 2,
+		"desktop: the monitors read at pibridge_desktop.h's offsets")
+	var sf := FileAccess.open(Desktop.shm_path(), FileAccess.WRITE)
+	sf.store_buffer(shm)
+	sf.close()
+	var dk := Desktop.new()
+	dk.autostart = false
+	dk.draw_pictures = true
+	add_child(dk)
+	dk.monitors = mons
+	dk.mask = 0b10
+	dk.set_shown(true)
+	_check(dk.screens.size() == 1 and dk.screens.has(1) and dk.screens[1].position == Layout.MON_CENTER
+		and is_equal_approx(dk.screens[1].size_m.x, Layout.MON_W), "desktop: one monitor in the middle place, 2.19 wide")
+	dk.mask = 0
+	dk.show_monitors(0)
+	_check(dk.screens.size() == 2 and dk.screens[0].position == Layout.MON_CENTER
+		and is_equal_approx(dk.screens[1].position.x, Layout.MON_SIDE_X)
+		and dk.screens[1].transform.basis.z.x < -0.6, "desktop: All: the first in the middle, the second on the right, turned to you")
+	# the frame: Medium = 1.55 m ahead at the eyes, scale 0.75; the bar 30 degrees up; the sliders' container
+	var rt := Layout.rig_transform(Transform3D(Basis(), Vector3(0, 1.6, 0)), "Medium")
+	_check(rt.origin.is_equal_approx(Vector3(0, 1.6, -1.55)) and is_equal_approx(rt.basis.get_scale().x, 0.75),
+		"layout: the frame at the Medium interface size")
+	_check(Layout.bar_transform().basis.z.y > 0.49 and is_equal_approx(Layout.monitor_size(1080, 1920).y, Layout.MON_H)
+		and Layout.zoom_transform(2.0, 1.0, "Medium").origin.is_equal_approx(Vector3(0, 0, -0.75))
+		and is_equal_approx(Layout.zoom_transform(9.0, 0, "Medium").basis.get_scale().x, Layout.ZOOM_MAX),
+		"layout: the bar turned up, an upright monitor, the zoom and distance sliders")
+	for i in 40:
+		await get_tree().process_frame
+		if dk.screens[1].tex != null:
+			break
+	_check(dk.screens[1].tex != null and dk.screens[1].tex.get_width() == 2, "desktop: the picture read from desktop.shm")
+	dk.screens[1].pointer_move(dk.screens[1].to_global(Vector3(0, 0, 0)))
+	dk.screens[1].pointer_button(true)
+	await get_tree().process_frame
+	var rf := FileAccess.open(Desktop.shm_path(), FileAccess.READ)
+	rf.seek(Desktop.OFF_WANT)
+	var want := rf.get_32()
+	var ptr := rf.get_64()
+	_check(want == 0b1111 and ptr == Desktop.pack_pointer(true, 1, 1, 0, 1), "desktop: the laser's click written for the service")
+	var places := Paths.read_text(Desktop.world_desktop_path())
+	_check(places.begins_with("screen ") and places.count("\nscreen ") == 1 and places.split("\n")[0].split(" ").size() == 11,
+		"desktop: the screens' places written for the overlay (one line per monitor)")
+	dk.set_shown(false)
+	_check(dk.screens.values().all(func(sc): return not sc.visible and sc.area.collision_layer == 0),
+		"desktop: closed, its screens catch no laser (the dashboard behind them stays clickable)")
+	var br := Bar.new()
+	var bp := VrPanel.new(br, Bar.SIZE_PX, Layout.BAR_SIZE)
+	add_child(bp)
+	await get_tree().process_frame
+	br.set_desktop(true, 2, 0, "Desktop: 2 monitors")
+	await get_tree().process_frame
+	_check(br._mons.get_child_count() == 3 and br.words.text == "Desktop: 2 monitors" and br._sliders.visible,
+		"bar: 1, 2 and All and the Zoom and Distance sliders while the desktop is on")
+	_check(Bar.icon("recenter").get_width() == Bar.ICON, "bar: the icons drawn")
 	print("PiBridge World self test: %s" % ("ok" if _fails == 0 else "%d failed" % _fails))
 	get_tree().quit(1 if _fails > 0 else 0)

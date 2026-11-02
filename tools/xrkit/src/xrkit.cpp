@@ -1017,7 +1017,11 @@ std::expected<bool, std::string> renderStereo(Session& x, const room::Batch& bat
         out.views[e].subImage.swapchain = x.eyeSc[e];
         out.views[e].subImage.imageRect = {{0, 0}, {static_cast<std::int32_t>(x.size[0]), static_cast<std::int32_t>(x.size[1])}};
     }
+    // the caller's layer flags stay (an overlay's XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT: without it the
+    // transparent background is black over the app)
+    const XrCompositionLayerFlags flags = out.proj.layerFlags;
     out.proj = xr_make<XrCompositionLayerProjection>(XR_TYPE_COMPOSITION_LAYER_PROJECTION);
+    out.proj.layerFlags = flags;
     out.proj.space = x.stage;
     out.proj.viewCount = 2;
     out.proj.views = out.views.data();

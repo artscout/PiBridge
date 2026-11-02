@@ -18,6 +18,7 @@ Build-Depends:
  zlib1g-dev,
  libjpeg-dev,
  libopencv-dev,
+ libpipewire-0.3-dev,
 # the Monado fork (pibridge-monado)
  libeigen3-dev,
  libusb-1.0-0-dev,
@@ -60,6 +61,7 @@ Recommends:
  steam,
  pibridge-monado,
  fonts-ibm-plex,
+ xdg-desktop-portal-kde | xdg-desktop-portal,
 Suggests:
  wine,
  mingw-w64,
@@ -72,11 +74,11 @@ Description: Pimax Crystal Super / Dream Air / Crystal VR hub for Linux
  VR runs on one of two backends: SteamVR (the headset shown through
  CustomHeadsetOpenVR, installed by the user) or Monado (PiBridge's Monado fork,
  package pibridge-monado, with PiBridge World as the home, shipped as one
- executable built with Godot's release template). OpenCV, the Vulkan loader, Qt 6, ffmpeg
- and every other library are used from their system packages.
+ executable built with Godot's release template). OpenCV, the Vulkan loader,
+ Qt 6, ffmpeg and every other library are used from their system packages.
  .
- The per-user setup (enabling the user services) is done by the app on first
- run. The optional Pimax-engine inside-out path needs winbridge, shipped as
+ The two user services are enabled for every user by the package and start
+ at the next login. The optional Pimax-engine inside-out path needs winbridge, shipped as
  source and built with pibridge-build-winbridge (Suggests: wine, mingw-w64),
  and the Pimax kit, which is not shipped.
 

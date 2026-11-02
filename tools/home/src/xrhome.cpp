@@ -5,6 +5,7 @@
 #include "dash_settings.h"
 #include "dash_sys.h"
 #include "dash_view.h"
+#include "desk.h"
 #include "loop.h"
 #include "monado_clients.h"
 #include "panel.h"
@@ -17,7 +18,9 @@
 
 #include "pibridge/cam/slam.h"
 #include "pibridge/xrkit/passthrough.h"
+#include "pibridge/xrkit/quad.h"
 #include "pibridge/xrkit/xrkit.h"
+#include "pibridge_desktop.h"
 #include "pibridge_vrpanel.h"
 
 #include <chrono>
@@ -26,6 +29,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
+#include <iterator>
 #include <future>
 #include <memory>
 #include <sys/stat.h>
@@ -202,6 +206,26 @@ std::int64_t mtimeNs(const std::string& path) {
 }
 
 std::uint64_t monoNow() { return vrpanel::monoNs(); }
+
+// PiBridge World's Desktop button: $XDG_RUNTIME_DIR/pibridge/desktop-open changes
+std::string desktopOpenPath() {
+    const char* rt = std::getenv("XDG_RUNTIME_DIR");
+    return rt != nullptr ? std::string(rt) + "/pibridge/desktop-open" : std::string();
+}
+
+// PiBridge World's desktop: the places of its monitors and its lasers ($XDG_RUNTIME_DIR/pibridge/world-desktop)
+std::string worldDeskPath() {
+    const char* rt = std::getenv("XDG_RUNTIME_DIR");
+    return rt != nullptr ? std::string(rt) + "/pibridge/world-desktop" : std::string();
+}
+
+XrPosef poseOf(const desk::Screen& s) {
+    const auto q = desk::orientation(s);
+    XrPosef p;
+    p.orientation = {static_cast<float>(q[0]), static_cast<float>(q[1]), static_cast<float>(q[2]), static_cast<float>(q[3])};
+    p.position = {static_cast<float>(s.center.x), static_cast<float>(s.center.y), static_cast<float>(s.center.z)};
+    return p;
+}
 
 // $XDG_RUNTIME_DIR/pibridge/world-panel ("px py pz qx qy qz qw width height", the Godot world's panel in the stage,
 // rewritten while passthrough is on): two triangles a little larger than the panel; nothing when absent or stale.
@@ -441,10 +465,36 @@ std::expected<void, std::string> runHome(const RunOpts& opts, const std::atomic<
     dash::Clicker clicker;
     win::Pointer dashPointer;
     std::string painted; // the signature of the dashboard picture in the texture ("" = none)
-    enum class OnPanel { None, Dash, Window } onPanel = OnPanel::None;
+    enum class OnPanel { None, Dash, Window, Bar } onPanel = OnPanel::None;
     bool menuWas = false;
     double menuSince = 0;
     std::array<HandShown, 2> handShown;
+    // ---- the desktop (docs/desktop.md): the monitors from pibridge-desktop as quad layers, the bar under them
+    const std::string deskTool = opts.dashboardOverlay ? desktop::toolPath() : std::string();
+    desktop::Link deskLink;
+    bool deskOpen = false;     // the desktop instead of the dashboard (while the overlay is open)
+    std::uint32_t deskMask = 0; // the monitors shown (0: all, once they are known)
+    std::vector<desktop::MonitorInfo> deskMons;
+    std::vector<desk::Screen> screens;
+    bool screensPlaced = false;
+    std::array<xrkit::QuadImage, desktop::kMaxMonitors> deskQuads;
+    std::array<std::uint64_t, desktop::kMaxMonitors> deskSeq{};
+    std::vector<std::uint8_t> deskPix;
+    desk::Pointer deskPointer;
+    std::optional<win::Geometry> barGeom;
+    double deskStartedAt = -1e18; // the last time pibridge-desktop was started
+    std::int64_t deskOpenStamp = mtimeNs(desktopOpenPath());
+    desk::WorldDesk worldDesk; // PiBridge World's desktop this frame (the world's file, while it shows it)
+    const auto openDesktop = [&](bool on) {
+        deskOpen = on;
+        screensPlaced = false;
+        onPanel = OnPanel::None; // the panel's picture and mesh again
+        if (on && !deskLink.isOpen() && !deskLink.open()) {
+            std::printf("desktop: %s\n", deskLink.error().c_str());
+        }
+        std::printf("home: desktop %s\n", on ? "open" : "closed");
+        std::fflush(stdout);
+    };
 
     Frame frameIn;
     std::optional<Panel> textPanel;
@@ -612,6 +662,8 @@ std::expected<void, std::string> runHome(const RunOpts& opts, const std::atomic<
         PIBRIDGE_XR(xrBeginFrame(x.session, &fbi), "xrBeginFrame");
         const XrTime t = fs.predictedDisplayTime;
         std::vector<XrCompositionLayerBaseHeader*> layers;
+        std::vector<XrCompositionLayerQuad> deskLayers; // the desktop's monitors (kept alive until xrEndFrame)
+        deskLayers.reserve(desktop::kMaxMonitors);
         xrkit::ProjectionLayer proj;
         if (overlayMode) {
             // an overlay: its alpha counts (the world's panel window, everything around the dashboard)
@@ -721,6 +773,7 @@ std::expected<void, std::string> runHome(const RunOpts& opts, const std::atomic<
                         dashGeom = placeDash(*frameIn.head, world.floorY); // opened in front of you
                     }
                     onPanel = OnPanel::None;
+                    screensPlaced = false; // the desktop too, when it was what was open
                 } else if (p.window) {
                     wantWindow = false;
                 } else {
@@ -745,6 +798,17 @@ std::expected<void, std::string> runHome(const RunOpts& opts, const std::atomic<
                 // no app is left for a few seconds, ask the PiBridge app to start the world again
                 if (t0 - worldPollAt >= 0.5) {
                     worldPollAt = t0;
+                    // PiBridge World's Desktop button: the desktop opens over the world (its inputs blocked meanwhile)
+                    if (!deskTool.empty()) {
+                        if (const std::int64_t stamp = mtimeNs(desktopOpenPath()); stamp != deskOpenStamp) {
+                            deskOpenStamp = stamp;
+                            if (stamp >= 0) {
+                                hidden = false;
+                                wantWindow = false;
+                                openDesktop(true);
+                            }
+                        }
+                    }
                     const auto main = clients.primary();
                     if (main && main->second.find("PiBridge World") == std::string::npos && clients.knowsPids()) {
                         closeTarget = main;
@@ -859,7 +923,188 @@ std::expected<void, std::string> runHome(const RunOpts& opts, const std::atomic<
             } else if (link.isOpen()) {
                 link.header()->pointer.store(0);
             }
-            if (p.dashboard) {
+            // the quick actions' state, the same in the dashboard's bottom bar and the desktop's bar
+            const auto mainNow = opts.dashboardOverlay ? clients.primary() : std::nullopt;
+            const bool overWorld = mainNow && mainNow->second.find("PiBridge World") != std::string::npos;
+            const auto header = [&]() {
+                dash::Header hd;
+                hd.backend = dash::backendName(dsettings.backend());
+                hd.runtime = x.runtimeName;
+                hd.room = world.roomName;
+                hd.clock = clockNow();
+                hd.message = dashMessage;
+                hd.windowAvailable = settings.panel && appLinked && panelErr.empty();
+                if (opts.dashboardOverlay) {
+                    // over a game: Desktop, Record, Quick room setup, Recenter, Close app in the bottom bar (no Hide, no
+                    // window); over PiBridge World no Close app
+                    hd.overGame = true;
+                    hd.roomQuickAvailable = dsettings.canStartRoomSetup();
+                    hd.recenterAvailable = dsettings.backend() == dash::Backend::Monado;
+                    hd.closeName = closeTarget ? closeTarget->second : std::string();
+                    hd.closeShown = !overWorld;
+                    if (t0 >= recordCheckAt) {
+                        recordingShown = dsettings.recordingNow();
+                        recordCheckAt = t0 + 1.0;
+                    }
+                    hd.recordAvailable = dsettings.canRecord();
+                    hd.recording = recordingShown;
+                    hd.desktopAvailable = !deskTool.empty();
+                }
+                return hd;
+            };
+            // a quick action's click (true when `click` was one)
+            const auto quick = [&](const std::string& click) {
+                if (click == "view:desktop") {
+                    openDesktop(true);
+                } else if (click == "view:record") {
+                    dashMessage = dsettings.act("record");
+                    recordingShown = !recordingShown; // at once; the 1 s check confirms it
+                    recordCheckAt = t0 + 2.0;
+                    std::printf("home: %s: %s\n", click.c_str(), dashMessage.c_str());
+                    std::fflush(stdout);
+                } else if (click == "view:roomquick" || click == "view:recenter") {
+                    dashMessage = dsettings.act(click == "view:recenter" ? "recenter" : "roomquick");
+                    std::printf("home: %s: %s\n", click.c_str(), dashMessage.c_str());
+                    std::fflush(stdout);
+                    if (click == "view:roomquick" || dashMessage.starts_with("Recentered")) {
+                        hidden = true; // the room setup takes the headset; after a recenter, back to the game
+                    }
+                } else if (click == "view:close") {
+                    dashMessage = closeApp();
+                    std::printf("home: %s\n", dashMessage.c_str());
+                    std::fflush(stdout);
+                } else {
+                    return false;
+                }
+                return true;
+            };
+            if (p.dashboard && deskOpen) {
+                // ---- the desktop: the monitors as quad layers on an arc in front of you, the bar under them
+                const std::uint64_t monoD = monoNow();
+                const bool svcUp = deskLink.isOpen() && desktop::fresh(deskLink.header()->serviceBeatNs.load(), monoD);
+                if (!svcUp && !deskTool.empty() && t0 - deskStartedAt > 5.0) {
+                    deskStartedAt = t0; // it ends itself when nobody looks; started again when it does not answer
+                    desktop::startService(deskTool);
+                }
+                const auto mons = svcUp ? deskLink.monitors() : std::vector<desktop::MonitorInfo>{};
+                bool layoutChanged = mons.size() != deskMons.size();
+                for (std::size_t i = 0; i < mons.size() && !layoutChanged; i++) {
+                    layoutChanged = mons[i].x != deskMons[i].x || mons[i].y != deskMons[i].y ||
+                                    mons[i].logicalW != deskMons[i].logicalW || mons[i].logicalH != deskMons[i].logicalH;
+                }
+                deskMons = mons;
+                if (!mons.empty() && (deskMask & desk::maskAll(mons)) == 0) {
+                    deskMask = desk::maskAll(mons);
+                }
+                if ((!screensPlaced || layoutChanged || bring) && frameIn.head) {
+                    screens = desk::place(*frameIn.head, world.floorY, mons, deskMask);
+                    screensPlaced = !screens.empty(); // until the monitors are known: placed again
+                    win::Geometry g = win::place(*frameIn.head, world.floorY, dash::kW, dash::kBarH);
+                    g.width = 1.6;
+                    g.radius = desk::kDistance - 0.2; // a little nearer than the screens: never behind them
+                    win::fitAspect(g, dash::kW, dash::kBarH);
+                    const double under = screens.empty() ? frameIn.head->pos().y - 0.2 : desk::bottomY(screens) - 0.05;
+                    g.centerY = std::max(under - g.height / 2, world.floorY + 0.3);
+                    barGeom = g;
+                    onPanel = OnPanel::None;
+                }
+                for (desk::Screen& sc : screens) {
+                    for (const auto& mon : mons) {
+                        if (mon.index == sc.monitor) {
+                            sc.pixW = mon.width;
+                            sc.pixH = mon.height;
+                        }
+                    }
+                    std::uint32_t w = 0, h = 0;
+                    if (const auto sq = deskLink.readFrame(sc.monitor, deskSeq[sc.monitor], deskPix, w, h)) {
+                        deskSeq[sc.monitor] = *sq;
+                        if (auto r = deskQuads[sc.monitor].upload(x, deskPix.data(), w, h, static_cast<std::size_t>(w) * 4); !r) {
+                            std::printf("desktop: monitor %u: %s\n", sc.monitor + 1, r.error().c_str());
+                            std::fflush(stdout);
+                        }
+                    }
+                }
+                if (onPanel != OnPanel::Bar && barGeom) {
+                    onPanel = OnPanel::Bar;
+                    uploadMesh(x, *barGeom);
+                    painted.clear();
+                }
+                // the ray: the bar when it is nearer, else the screens (a drag on a screen keeps it)
+                std::optional<room::Vec3> ro, rd;
+                std::optional<win::Hit> bh;
+                if (aim) {
+                    ro = aim->pos();
+                    rd = (aim->axis(2) * -1.0).norm();
+                    if (barGeom) {
+                        bh = win::hit(*barGeom, *ro, *rd);
+                    }
+                }
+                const bool onBar = bh.has_value() && !deskPointer.pressed();
+                const XrVector2f stick = loop.focused() ? actionVec2(x.session, c.stick, x.hands[activeHand].path) : XrVector2f{0, 0};
+                const float sqzHand = loop.focused() ? actionFloat(x.session, c.squeeze, x.hands[activeHand].path) : 0.0F;
+                deskPointer.update(onBar ? std::nullopt : ro, onBar ? std::nullopt : rd, trig[activeHand], sqzHand, stick.y, dt,
+                                   screens);
+                dashPointer.update(onBar ? bh : std::nullopt, trig[activeHand], 0.0, dt, dash::kW, dash::kBarH);
+                if (ro && onBar) {
+                    win::addRay(overlay, *ro, *rd, bh, *barGeom, dashPointer.pressed());
+                } else if (ro) {
+                    const double len = deskPointer.hit() ? deskPointer.hit()->t : 3.0;
+                    overlay.line(*ro, *ro + *rd * len,
+                                 deskPointer.pressed() ? room::Rgba{0.55F, 0.85F, 1.0F, 1.0F} : room::Rgba{0.85F, 0.9F, 1.0F, 0.8F});
+                }
+                if (deskLink.isOpen()) {
+                    // until the monitors are known (the service tells them once it captures): all of them
+                    deskLink.clientUpdate(deskMask != 0 ? deskMask : desktop::kWantAll, deskPointer.state(), deskPointer.wheel());
+                }
+                // the bar: the state's words, the monitors' choice, the quick actions
+                dash::DeskBar db;
+                db.monitors = static_cast<std::uint32_t>(mons.size());
+                db.mask = deskMask;
+                if (deskTool.empty()) {
+                    db.words = "pibridge-desktop is not installed.";
+                } else if (!svcUp) {
+                    db.words = "Starting the desktop...";
+                } else if (deskLink.state() == desktop::State::Running) {
+                    db.words = dashMessage.empty() ? "Desktop: " + deskLink.text() + ". Trigger: click, short grip: right click, stick: scroll."
+                                                   : dashMessage;
+                } else {
+                    db.words = "Desktop: " + deskLink.text();
+                }
+                dash::Header hd = header();
+                dash::View view = dash::deskLayout(hd, db);
+                std::optional<std::string> over;
+                if (bh && dashPointer.state().on) {
+                    over = dash::hit(view, dashPointer.state().x, dashPointer.state().y);
+                }
+                if (const auto click = clicker.update(over, dashPointer.pressed())) {
+                    if (*click == "desk:dash") {
+                        if (overWorld) {
+                            hidden = true; // back to PiBridge World (its own dashboard)
+                        } else {
+                            openDesktop(false);
+                        }
+                    } else if (*click == "desk:all" || click->starts_with("desk:mon:")) {
+                        deskMask = *click == "desk:all" ? desk::maskAll(mons)
+                                                        : desk::maskOne(static_cast<std::uint32_t>(std::stoul(click->substr(9))));
+                        screensPlaced = false;
+                    } else {
+                        quick(*click);
+                    }
+                    hd.message = dashMessage;
+                    view = dash::deskLayout(hd, db);
+                }
+                view.hover = over.value_or("");
+                view.pressed = clicker.downOn().value_or("");
+#ifdef PIBRIDGE_HOME_DASH
+                if (std::string sig = dash::signature(view); sig != painted && painter) {
+                    int stride = 0;
+                    const std::uint8_t* px = painter->paint(view, stride);
+                    if (x.gpu.panel.setPixels(px, dash::kW, dash::kBarH, static_cast<std::size_t>(stride))) {
+                        painted = std::move(sig);
+                    }
+                }
+#endif
+            } else if (p.dashboard) {
                 // ---- the dashboard: placed in front of you, painted again only when its picture changes
                 if (!dashGeom && frameIn.head) {
                     dashGeom = placeDash(*frameIn.head, world.floorY);
@@ -881,26 +1126,7 @@ std::expected<void, std::string> runHome(const RunOpts& opts, const std::atomic<
                     win::addRay(overlay, o2, d2, hh, *dashGeom, dashPointer.pressed());
                 }
                 dashPointer.update(hh, trig[activeHand], 0.0, dt, dash::kW, dash::kH);
-                dash::Header hd;
-                hd.backend = dash::backendName(dsettings.backend());
-                hd.runtime = x.runtimeName;
-                hd.room = world.roomName;
-                hd.clock = clockNow();
-                hd.message = dashMessage;
-                hd.windowAvailable = settings.panel && appLinked && panelErr.empty();
-                if (opts.dashboardOverlay) {
-                    // over a game: Quick room setup, Recenter, Close app in the bottom bar (no Hide, no window)
-                    hd.overGame = true;
-                    hd.roomQuickAvailable = dsettings.canStartRoomSetup();
-                    hd.recenterAvailable = dsettings.backend() == dash::Backend::Monado;
-                    hd.closeName = closeTarget ? closeTarget->second : std::string();
-                    if (t0 >= recordCheckAt) {
-                        recordingShown = dsettings.recordingNow();
-                        recordCheckAt = t0 + 1.0;
-                    }
-                    hd.recordAvailable = dsettings.canRecord();
-                    hd.recording = recordingShown;
-                }
+                dash::Header hd = header();
                 dash::View view = dash::layout(page, dsettings.items(page), hd);
                 std::optional<std::string> over;
                 if (hh && dashPointer.state().on) {
@@ -913,24 +1139,7 @@ std::expected<void, std::string> runHome(const RunOpts& opts, const std::atomic<
                         wantWindow = true;
                     } else if (*click == "view:hide") {
                         hidden = true;
-                    } else if (*click == "view:record") {
-                        dashMessage = dsettings.act("record");
-                        recordingShown = !recordingShown; // at once; the 1 s check below confirms it
-                        recordCheckAt = t0 + 2.0;
-                        std::printf("home: %s: %s\n", click->c_str(), dashMessage.c_str());
-                        std::fflush(stdout);
-                    } else if (*click == "view:roomquick" || *click == "view:recenter") {
-                        dashMessage = dsettings.act(*click == "view:recenter" ? "recenter" : "roomquick");
-                        std::printf("home: %s: %s\n", click->c_str(), dashMessage.c_str());
-                        std::fflush(stdout);
-                        if (*click == "view:roomquick" || dashMessage.starts_with("Recentered")) {
-                            hidden = true; // the room setup takes the headset; after a recenter, back to the game
-                        }
-                    } else if (*click == "view:close") {
-                        dashMessage = closeApp();
-                        std::printf("home: %s\n", dashMessage.c_str());
-                        std::fflush(stdout);
-                    } else {
+                    } else if (!quick(*click)) {
                         dashMessage = dsettings.act(*click);
                         std::printf("home: %s: %s\n", click->c_str(), dashMessage.c_str());
                         std::fflush(stdout);
@@ -950,7 +1159,40 @@ std::expected<void, std::string> runHome(const RunOpts& opts, const std::atomic<
                 }
 #endif
             }
-            buildScene(batch, world, frameIn);
+            // the desktop's service stops capturing when the overlay stops looking (the beat ages out)
+            // ---- PiBridge World's desktop: the world places and drives the monitors, this overlay draws them (quad
+            // layers, the GPU upload here instead of the world's main thread) and the world's lasers over them
+            worldDesk = {};
+            if (opts.dashboardOverlay && hidden) {
+                struct stat wst{};
+                const std::string wdPath = worldDeskPath();
+                if (!wdPath.empty() && ::stat(wdPath.c_str(), &wst) == 0 &&
+                    std::time(nullptr) - wst.st_mtim.tv_sec <= 1) { // the world writes it every frame while it is shown
+                    std::ifstream wf(wdPath);
+                    worldDesk = desk::parseWorldDesk(std::string((std::istreambuf_iterator<char>(wf)), std::istreambuf_iterator<char>()));
+                }
+            }
+            if (!worldDesk.screens.empty()) {
+                if (!deskLink.isOpen()) {
+                    deskLink.open();
+                }
+                for (const desk::WorldScreen& ws : worldDesk.screens) {
+                    std::uint32_t w = 0, h = 0;
+                    if (const auto sq = deskLink.readFrame(ws.monitor, deskSeq[ws.monitor], deskPix, w, h)) {
+                        deskSeq[ws.monitor] = *sq;
+                        if (auto r = deskQuads[ws.monitor].upload(x, deskPix.data(), w, h, static_cast<std::size_t>(w) * 4); !r) {
+                            std::printf("world desktop: monitor %u: %s\n", ws.monitor + 1, r.error().c_str());
+                            std::fflush(stdout);
+                        }
+                    }
+                }
+                for (const auto& [ro, re] : worldDesk.rays) {
+                    overlay.line(ro, re, room::Rgba{0.6F, 0.9F, 1.0F, 0.85F});
+                }
+                batch.clear(); // only the lasers: the world draws its own controllers and scene
+            } else {
+                buildScene(batch, world, frameIn);
+            }
             // ---- draw
             xrkit::Extras extras;
             const bool srgb = x.srgb();
@@ -964,7 +1206,8 @@ std::expected<void, std::string> runHome(const RunOpts& opts, const std::atomic<
                     return sp;
                 };
             }
-            extras.panel = (p.window && geom.has_value() && panelSeq != 0) || (p.dashboard && dashGeom.has_value() && !painted.empty());
+            extras.panel = (p.window && geom.has_value() && panelSeq != 0) ||
+                           (p.dashboard && (deskOpen ? barGeom.has_value() : dashGeom.has_value()) && !painted.empty());
             extras.panelTexAlpha = p.dashboard && !p.window; // the dashboard is painted on a transparent background
             if (opts.passthroughOverlay && x.gpu.hole.ready()) {
                 // a window in the passthrough where the Godot world's panel is (its pose in the stage, written by the
@@ -1000,7 +1243,34 @@ std::expected<void, std::string> runHome(const RunOpts& opts, const std::atomic<
             }
             // the passthrough overlay covers the app only while camera frames come (never a black screen over a game);
             // the dashboard overlay only while it is open
-            if (*drawn && (!opts.passthroughOverlay || have.cameraFrames) && !(opts.dashboardOverlay && hidden)) {
+            if (opts.dashboardOverlay && hidden) {
+                for (const desk::WorldScreen& ws : worldDesk.screens) {
+                    const xrkit::QuadImage& q = deskQuads[ws.monitor];
+                    if (q.ready()) {
+                        XrPosef pose;
+                        pose.position = {static_cast<float>(ws.pos[0]), static_cast<float>(ws.pos[1]), static_cast<float>(ws.pos[2])};
+                        pose.orientation = {static_cast<float>(ws.quat[0]), static_cast<float>(ws.quat[1]),
+                                            static_cast<float>(ws.quat[2]), static_cast<float>(ws.quat[3])};
+                        deskLayers.push_back(q.layer(x.stage, pose, {static_cast<float>(ws.w), static_cast<float>(ws.h)}));
+                    }
+                }
+                for (auto& l : deskLayers) {
+                    layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&l));
+                }
+            }
+            if (opts.dashboardOverlay && !hidden && deskOpen && p.dashboard) {
+                for (const desk::Screen& sc : screens) {
+                    const xrkit::QuadImage& q = deskQuads[sc.monitor];
+                    if (q.ready()) {
+                        deskLayers.push_back(q.layer(x.stage, poseOf(sc), {static_cast<float>(sc.w), static_cast<float>(sc.h)}));
+                    }
+                }
+                for (auto& l : deskLayers) {
+                    layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&l));
+                }
+            }
+            if (*drawn && (!opts.passthroughOverlay || have.cameraFrames) &&
+                !(opts.dashboardOverlay && hidden && worldDesk.rays.empty())) {
                 layers.push_back(proj.header());
             }
         }

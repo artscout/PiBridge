@@ -92,6 +92,7 @@ bytes we derive from it, never the recording.
 | Panel on, refresh rate | works | 72 or 90 Hz, switch in the app |
 | Audio switch | works | the headset is the default output while SteamVR runs |
 | Eye tracking to SteamVR | works | `pibridge-eyed`; needs the CustomHeadsetOpenVR patch (`XR_EXT_eye_gaze_interaction`) |
+| Desktop in the headset | works in PiBridge World (Monado, tested in a headset); over games and the SteamVR tab not tried yet | your monitors (1, 2 or all) with a bar, Zoom and Distance, the controller as the mouse; [docs/desktop.md](docs/desktop.md) |
 | Monado backend | works (tested in a headset), newer than SteamVR | PiBridge's Monado fork: inside-out or Lighthouse tracking, eye gaze, quad views, its own rooms; [docs/monado.md](docs/monado.md), [docs/INSTALL.md](docs/INSTALL.md) 7.2 |
 | PiBridge World | works (tested in a headset) | the Monado backend's home in the headset, a Godot 4 project (Godot is downloaded by you): dashboard, Apps tiles with Run and Edit, passthrough, backgrounds, quad views settings; it gives a running game its memory and comes back after; [docs/world.md](docs/world.md) |
 | Dashboard over games (Monado) | works | the menu button over a game: settings and a Recording page, and along the bottom Record video / Stop recording, Quick room setup, Recenter, Close app; [docs/home.md](docs/home.md) |
@@ -160,7 +161,7 @@ Status on the Crystal Super (no faceplate), as of 2026-10-19:
 From the packages (`pibridge` and, for the Monado backend, `pibridge-monado`; built with `dpkg-buildpackage`,
 [docs/PACKAGING.md](docs/PACKAGING.md)):
 ```
-sudo apt install ./pibridge_2.0.2_amd64.deb ./pibridge-monado_2.0.2_amd64.deb
+sudo apt install ./pibridge_2.0.3_amd64.deb ./pibridge-monado_2.0.3_amd64.deb
 systemctl --user daemon-reload && systemctl --user start pibridge-keepalived pibridge-eyed
 pibridge
 ```

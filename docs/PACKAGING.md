@@ -9,6 +9,7 @@ How a user installs them: [INSTALL.md](INSTALL.md#installing-from-the-package-ub
 | Content | Path |
 | --- | --- |
 | App + engine binaries (`pibridge`, `pibridge-headtrack`, `pibridge-cam`, `pibridge-slam`, `pibridge-eyed`, `pibridge-ctrltrack`, `pibridge-roommap`, `pibridge-record`, `pibridge-overlay`, `pibridge-home`, `pibridge-roomsetup`, `pibridge-xroverlay`, ...) | `/usr/bin/` |
+| `pibridge-desktop` (the desktop in the headset: the portal, PipeWire, the pointer; [desktop.md](desktop.md)) | `/usr/bin/` |
 | `pibridge-get-godot` (fetches the official Godot 4.7.2, checked by its SHA-512; for source installs and the build machine) | `/usr/bin/` |
 | PiBridge World exported into one executable (Godot's Linux release template with the project embedded; never stripped) | `/usr/lib/pibridge/pibridge-world` |
 | Device descriptions (HID allowlist, `*.toml`) | `/usr/share/pibridge/devices/` |
@@ -50,6 +51,8 @@ loader *only if actually linked*) plus a few explicit packages:
   imgcodecs, video, calib3d, features2d, dnn and flann siblings, listed
   explicitly in `debian/control`.
 - **ffmpeg** — `pibridge-record` runs it (NVENC, x264 fallback).
+- **libpipewire-0.3** (shlibs) for `pibridge-desktop`; **xdg-desktop-portal-kde** | **xdg-desktop-portal** (Recommends): the
+  portal it asks.
 - **wireplumber**, **pulseaudio-utils** — the sound rule is WirePlumber's; `pibridge-keepalived` switches the
   default output and input with `pactl`.
 - **steam** (Recommends) — SteamVR is the runtime.
@@ -72,6 +75,8 @@ godotengine.org) with our project inside.
   D=~/.local/share/godot/export_templates/4.7.2.stable; mkdir -p $D
   unzip -j Godot_v4.7.2-stable_export_templates.tpz templates/linux_release.x86_64 templates/linux_debug.x86_64 templates/version.txt -d $D
   ```
+  debhelper gives the build a HOME of its own, so `debian/rules` hands Godot the builder's data folder
+  (`-DPIBRIDGE_GODOT_DATA_HOME`, from `$XDG_DATA_HOME` or `~/.local/share`; `GODOT_DATA_HOME=<dir>` names another).
   Nothing is downloaded during the package build itself.
 
 ### No development folders in the package
@@ -110,7 +115,7 @@ sudo apt install pkg-config python3 glslang-tools libopencv-dev libeigen3-dev li
 # binary .debs (run heavy build nicely):
 cd ~/gamedev/pibridge
 DEB_BUILD_OPTIONS="parallel=8" nice -n 19 dpkg-buildpackage -us -uc -b
-# -> ../pibridge_2.0.2_amd64.deb, ../pibridge-monado_2.0.2_amd64.deb
+# -> ../pibridge_2.0.3_amd64.deb, ../pibridge-monado_2.0.3_amd64.deb
 ```
 
 `debuild -b -us -uc` works the same. Inspect with `dpkg -c ../pibridge_*.deb ../pibridge-monado_*.deb`. The version
@@ -122,7 +127,7 @@ The format is `3.0 (native)`, so a source package can be produced for others to
 build on Debian/Ubuntu:
 
 ```sh
-dpkg-buildpackage -us -uc -S     # -> ../pibridge_2.0.2.dsc + .tar.xz
+dpkg-buildpackage -us -uc -S     # -> ../pibridge_2.0.3.dsc + .tar.xz
 ```
 
 (`debian/source/options` keeps the tarball lean — no `build*/`, `.git`, caches

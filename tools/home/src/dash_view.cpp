@@ -2,12 +2,15 @@
 #include "dash_view.h"
 
 #include <algorithm>
+#include <format>
 
 namespace pibridge::home::dash {
 
 namespace {
 
 constexpr double kMargin = 24;
+constexpr double kQuickW = 330; // a quick action's box
+constexpr double kQuickGap = 18;
 constexpr double kTopH = 110;
 constexpr double kBottomH = 110;
 constexpr double kNavW = 420;
@@ -17,7 +20,92 @@ constexpr double kTextH = 100;
 constexpr double kCtrlX = 1150;  // where the controls of a row begin
 constexpr double kCtrlH = 96;
 
+/// The quick actions, right-aligned to `right` (Desktop first when `desktop`, then Record video, Quick room setup,
+/// Recenter, Close app); where the leftmost begins.
+double quickActions(View& v, const Header& h, double right, double y, double bh, bool desktop) {
+    struct Q {
+        const char* id;
+        std::string label;
+        Icon icon;
+        bool enabled;
+        bool selected;
+    };
+    std::vector<Q> qs;
+    if (desktop) {
+        qs.push_back({"view:desktop", "Desktop", Icon::Desktop, h.desktopAvailable, false});
+    }
+    // the recording at hand: Record video / Stop recording (highlighted while it records)
+    qs.push_back({"view:record", h.recording ? "Stop recording" : "Record video", h.recording ? Icon::Stop : Icon::Record,
+                  h.recordAvailable, h.recording});
+    qs.push_back({"view:roomquick", "Quick room setup", Icon::Room, h.roomQuickAvailable, false});
+    qs.push_back({"view:recenter", "Recenter", Icon::Recenter, h.recenterAvailable, false});
+    if (h.closeShown) {
+        qs.push_back({"view:close", "Close app", Icon::Close, !h.closeName.empty(), false});
+    }
+    double x = right;
+    for (auto it = qs.rbegin(); it != qs.rend(); ++it) {
+        x -= kQuickW;
+        v.boxes.push_back({it->id, {x, y, kQuickW, bh}, it->label, it->selected ? Box::Style::Selected : Box::Style::Bar,
+                           it->enabled, it->icon});
+        x -= kQuickGap;
+    }
+    return x;
+}
+
 } // namespace
+
+View deskLayout(const Header& h, const DeskBar& d) {
+    View v;
+    v.w = kW;
+    v.h = kBarH;
+    const Rect words{kMargin, 14, kW - 2 * kMargin, 86};
+    const Rect bar{kMargin, 110, kW - 2 * kMargin, kBarH - 124};
+    v.cards = {bar};
+    Rect wordsR = words;
+    if (d.zoomShown) {
+        // Zoom and Distance, right-aligned in the top row: a label, [-], the value, [+]
+        const double sh = words.h - 8, sy = words.y + 4;
+        double sx = words.x + words.w;
+        const auto stepper = [&](const char* id, const char* name, double value) {
+            sx -= 96;
+            v.boxes.push_back({std::string(id) + ":+", {sx, sy, 96, sh}, "+", Box::Style::Normal, true});
+            sx -= 160;
+            v.labels.push_back({{sx, sy, 160, sh}, std::format("{:.2f}", value), Label::Kind::Value}); // never "1,25"
+            sx -= 96;
+            v.boxes.push_back({std::string(id) + ":-", {sx, sy, 96, sh}, "\xE2\x88\x92", Box::Style::Normal, true});
+            sx -= 210;
+            v.labels.push_back({{sx, sy, 200, sh}, name, Label::Kind::RowLabel});
+            sx -= 30;
+        };
+        stepper("desk:dist", "Distance", d.distance);
+        stepper("desk:zoom", "Zoom", d.zoom);
+        wordsR.w = sx - words.x;
+    }
+    v.labels.push_back({wordsR, d.words.empty() ? h.message : d.words, Label::Kind::Status});
+    const double bh = bar.h - 24, by = bar.y + 12;
+    double x = bar.x + 20;
+    if (d.toggleShown) {
+        v.boxes.push_back({"desk:toggle", {x, by, 300, bh}, "Desktop", d.on ? Box::Style::Selected : Box::Style::Bar, true,
+                           Icon::Desktop});
+        x += 300 + 40;
+    } else if (d.dashShown) {
+        v.boxes.push_back({"desk:dash", {x, by, 300, bh}, "Dashboard", Box::Style::Bar, true, Icon::Dashboard});
+        x += 300 + 40;
+    }
+    // the monitors: each alone, or all of them side by side
+    for (std::uint32_t i = 0; i < d.monitors && i < 4 && d.on; i++) {
+        const bool only = d.mask == (1U << i);
+        v.boxes.push_back({"desk:mon:" + std::to_string(i), {x, by, 120, bh}, std::to_string(i + 1),
+                           only ? Box::Style::Selected : Box::Style::Normal, true});
+        x += 120 + kQuickGap;
+    }
+    if (d.monitors > 1 && d.on) {
+        const bool all = d.mask == (1U << d.monitors) - 1;
+        v.boxes.push_back({"desk:all", {x, by, 150, bh}, "All", all ? Box::Style::Selected : Box::Style::Normal, true});
+    }
+    quickActions(v, h, bar.x + bar.w - 20, by, bh, false);
+    return v;
+}
 
 View layout(Page page, const std::vector<Item>& items, const Header& h) {
     View v;
@@ -102,16 +190,9 @@ View layout(Page page, const std::vector<Item>& items, const Header& h) {
 
     // ---- the bottom bar
     if (h.overGame) {
-        const double bw = 370, bh = bottom.h - 24, by = bottom.y + 12, barRight = bottom.x + bottom.w - 20;
-        v.labels.push_back({{bottom.x + 36, bottom.y, barRight - 4 * (bw + 20) - bottom.x - 56, bottom.h}, h.message,
-                            Label::Kind::Status});
-        // the recording at hand: Record video / Stop recording (highlighted while it records)
-        v.boxes.push_back({"view:record", {barRight - 4 * bw - 60, by, bw, bh}, h.recording ? "Stop recording" : "Record video",
-                           h.recording ? Box::Style::Selected : Box::Style::Bar, h.recordAvailable});
-        v.boxes.push_back({"view:roomquick", {barRight - 3 * bw - 40, by, bw, bh}, "Quick room setup", Box::Style::Bar,
-                           h.roomQuickAvailable});
-        v.boxes.push_back({"view:recenter", {barRight - 2 * bw - 20, by, bw, bh}, "Recenter", Box::Style::Bar, h.recenterAvailable});
-        v.boxes.push_back({"view:close", {barRight - bw, by, bw, bh}, "Close app", Box::Style::Bar, !h.closeName.empty()});
+        const double bh = bottom.h - 24, by = bottom.y + 12, barRight = bottom.x + bottom.w - 20;
+        const double left = quickActions(v, h, barRight, by, bh, true);
+        v.labels.push_back({{bottom.x + 36, bottom.y, left - bottom.x - 56, bottom.h}, h.message, Label::Kind::Status});
         return v;
     }
     v.labels.push_back({{bottom.x + 36, bottom.y, 1450, bottom.h}, h.message, Label::Kind::Status});
@@ -122,7 +203,7 @@ View layout(Page page, const std::vector<Item>& items, const Header& h) {
 }
 
 std::string signature(const View& v) {
-    std::string s;
+    std::string s = std::to_string(v.w) + 'x' + std::to_string(v.h) + '\x1d';
     for (const Box& b : v.boxes) {
         s += b.id + '\x1f' + b.label + '\x1f' + std::to_string(static_cast<int>(b.style)) + (b.enabled ? "1" : "0") + '\x1e';
     }

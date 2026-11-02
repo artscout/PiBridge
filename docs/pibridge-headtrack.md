@@ -28,6 +28,8 @@ session (START VR on the Dashboard; the settings are on the Tracking page, [TRAC
   (`world.{h,cpp}`, the formats of `libpibridge-anchor`), so the room map and RECENTER IN HEADSET work as before.
   A long press (0.8 s) of the Pimax button recenters; the Pimax button is not passed to apps, the menu button is
   SteamVR's system button.
+  The dashboards' **Recenter** (the SteamVR Desktop tab's bar) does the same: a change of
+  `$XDG_RUNTIME_DIR/pibridge/recenter-request` is taken as a press (checked ~3 times a second).
 - **Haptics**: CustomHeadsetOpenVR writes `$XDG_RUNTIME_DIR/pimax-haptic-request` ("SLOT AMP MS"), headtrack sends it.
 - **Output**: `/dev/shm/pibridge-crystal-pose` (`libpibridge-hmd` `pose_shm.h`, source 2 = headtrack) every 1 ms with
   the sample time and velocities; SteamVR predicts to the display time.

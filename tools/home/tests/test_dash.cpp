@@ -6,6 +6,8 @@
 #include "dash_settings.h"
 #include "dash_sys.h"
 #include "dash_view.h"
+#include "desk.h"
+#include "frame_layout.h"
 #include "plan.h"
 
 #ifdef PIBRIDGE_HOME_DASH
@@ -585,5 +587,202 @@ TEST(picture_painted) {
     CHECK((std::array<std::uint8_t, 3>{px2[at], px2[at + 1], px2[at + 2]}) != hov);
 }
 #endif
+
+TEST(the_desktop_box_and_the_desktops_bar) {
+    Header h;
+    h.overGame = true;
+    h.recordAvailable = h.roomQuickAvailable = h.recenterAvailable = true;
+    h.closeName = "Falcon BMS";
+    // over a game: Desktop first, every quick action with its icon, all inside the bottom bar, none overlapping
+    Fake f;
+    Settings s(Backend::Monado, paths(), f.sinks());
+    s.refresh();
+    View v = layout(Page::Headset, s.items(Page::Headset), h);
+    const auto find = [](const View& vw, const std::string& id) -> const Box* {
+        const auto it = std::ranges::find_if(vw.boxes, [&](const Box& b) { return b.id == id; });
+        return it == vw.boxes.end() ? nullptr : &*it;
+    };
+    CHECK(find(v, "view:desktop") != nullptr && !find(v, "view:desktop")->enabled); // pibridge-desktop not found
+    h.desktopAvailable = true;
+    v = layout(Page::Headset, s.items(Page::Headset), h);
+    const Box* d = find(v, "view:desktop");
+    CHECK(d != nullptr && d->enabled && d->icon == Icon::Desktop && d->r.x + d->r.w <= find(v, "view:record")->r.x);
+    CHECK(find(v, "view:record")->icon == Icon::Record && find(v, "view:recenter")->icon == Icon::Recenter &&
+          find(v, "view:roomquick")->icon == Icon::Room && find(v, "view:close")->icon == Icon::Close);
+    // over PiBridge World: no Close app
+    h.closeShown = false;
+    v = layout(Page::Headset, s.items(Page::Headset), h);
+    CHECK(find(v, "view:close") == nullptr && find(v, "view:desktop") != nullptr);
+    h.closeShown = true;
+    // the desktop's bar: a kW x kBarH picture, Dashboard, a box per monitor and All, the quick actions without Desktop
+    DeskBar db;
+    db.monitors = 2;
+    db.mask = 0b11;
+    db.words = "Desktop: 2 monitors";
+    const View b = deskLayout(h, db);
+    CHECK(b.w == kW && b.h == kBarH);
+    for (const char* id : {"desk:dash", "desk:mon:0", "desk:mon:1", "desk:all", "view:record", "view:roomquick", "view:recenter", "view:close"}) {
+        const Box* x = find(b, id);
+        CHECK(x != nullptr);
+        if (x != nullptr) {
+            CHECK(x->r.x >= 0 && x->r.y >= 0 && x->r.x + x->r.w <= kW && x->r.y + x->r.h <= kBarH);
+            CHECK(hit(b, x->r.x + 5, x->r.y + 5) == std::string(id));
+        }
+    }
+    CHECK(find(b, "view:desktop") == nullptr);
+    CHECK(find(b, "desk:all")->style == Box::Style::Selected && find(b, "desk:mon:0")->style == Box::Style::Normal);
+    CHECK(find(b, "desk:all")->r.x + find(b, "desk:all")->r.w <= find(b, "view:record")->r.x); // no overlap
+    db.mask = 0b10;
+    const View one = deskLayout(h, db);
+    CHECK(find(one, "desk:mon:1")->style == Box::Style::Selected && find(one, "desk:all")->style == Box::Style::Normal);
+    // one monitor: no All
+    db.monitors = 1;
+    db.mask = 1;
+    CHECK(find(deskLayout(h, db), "desk:all") == nullptr);
+    CHECK(signature(b) != signature(one));
+#ifdef PIBRIDGE_HOME_DASH
+    Painter p;
+    const auto px = p.picture(b);
+    CHECK(px.size() == static_cast<std::size_t>(kW) * kBarH * 4);
+    const auto big = p.picture(v); // back to the full size
+    CHECK(big.size() == static_cast<std::size_t>(kW) * kH * 4);
+#endif
+}
+
+TEST(desktop_screens_on_an_arc_the_ray_and_the_pointer) {
+    // two 2560 x 1440 monitors side by side; the head at 1.6 m, looking down -z
+    std::vector<desktop::MonitorInfo> mons(2);
+    mons[0].index = 0;
+    mons[0].logicalW = mons[1].logicalW = 2560;
+    mons[0].logicalH = mons[1].logicalH = 1440;
+    mons[0].width = mons[1].width = 2560;
+    mons[0].height = mons[1].height = 1440;
+    mons[1].index = 1;
+    mons[1].x = 2560;
+    room::Mat34 head = room::Mat34::identity();
+    head.m[1][3] = 1.6;
+    CHECK(desk::maskAll(mons) == 0b11 && desk::maskOne(1) == 0b10);
+    auto sc = desk::place(head, 0.0, mons, 0b11);
+    CHECK(sc.size() == 2 && sc[0].monitor == 0 && sc[1].monitor == 1);
+    CHECK(sc[0].center.x < 0 && sc[1].center.x > 0 && sc[0].center.z < 0); // left, right, in front
+    CHECK(std::abs(sc[0].w - 1.3) < 1e-9 && std::abs(sc[0].h - 1.3 * 1440 / 2560) < 1e-9);
+    for (const auto& s1 : sc) {
+        const room::Vec3 toHead = (room::Vec3{0, s1.center.y, 0} - s1.center).norm();
+        CHECK(s1.toward.dot(toHead) > 0.999); // each faces the viewer
+        CHECK(std::abs((room::Vec3{0, 0, 0} - s1.center).length() - std::abs(s1.center.y) - 0) >= 0);
+        CHECK(std::abs(room::Vec3{s1.center.x, 0, s1.center.z}.length() - desk::kDistance) < 1e-9);
+        // the quaternion turns the quad's axes onto the screen's
+        const auto q = desk::orientation(s1);
+        const double qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+        const room::Vec3 z{2 * (qx * qz + qw * qy), 2 * (qy * qz - qw * qx), 1 - 2 * (qx * qx + qy * qy)};
+        CHECK((z - s1.toward).length() < 1e-9);
+    }
+    CHECK(sc[0].center.y < 1.6 && sc[0].center.y > 1.0); // a little below the eyes
+    CHECK(std::abs(desk::bottomY(sc) - (sc[0].center.y - sc[0].h / 2)) < 1e-9);
+    // only monitor 2: straight ahead
+    const auto two = desk::place(head, 0.0, mons, desk::maskOne(1));
+    CHECK(two.size() == 1 && two[0].monitor == 1 && std::abs(two[0].center.x) < 1e-9);
+    // the ray from the head to a point on monitor 1 hits it there
+    const room::Vec3 o{0, 1.6, 0};
+    const room::Vec3 target = sc[0].at(0.25, 0.75);
+    const auto h = desk::hit(sc, o, (target - o).norm());
+    CHECK(h && h->monitor == 0 && std::abs(h->u - 0.25) < 1e-6 && std::abs(h->v - 0.75) < 1e-6);
+    CHECK(!desk::hit(sc, o, room::Vec3{0, 0, 1})); // behind
+    // the pointer: pixels, the trigger, a drag past the edge stays on its monitor, a short squeeze = right click
+    desk::Pointer p;
+    p.update(o, (target - o).norm(), 0, 0, 0, 0.01, sc);
+    CHECK(p.state().on && p.state().monitor == 0 && p.state().x == 640 && p.state().y == 1080 && p.state().buttons == 0);
+    p.update(o, (target - o).norm(), 1.0, 0, 0, 0.01, sc);
+    CHECK(p.pressed() && p.state().buttons == 1);
+    const room::Vec3 onRight = sc[1].at(0.5, 0.5);
+    p.update(o, (onRight - o).norm(), 1.0, 0, 0, 0.01, sc);
+    CHECK(p.state().on && p.state().monitor == 0 && p.state().x == 2559); // dragged to monitor 1's right edge
+    p.update(o, (onRight - o).norm(), 0.0, 0, 0, 0.01, sc);
+    CHECK(!p.pressed() && p.state().monitor == 0 && p.state().buttons == 0); // released where the drag ended
+    p.update(o, (onRight - o).norm(), 0.0, 0, 0, 0.01, sc);
+    CHECK(p.state().monitor == 1); // then the ray's monitor again
+    p.update(o, (onRight - o).norm(), 0.0, 1.0, 0, 0.1, sc);
+    p.update(o, (onRight - o).norm(), 0.0, 0.0, 0, 0.1, sc);
+    CHECK(p.state().buttons == 2); // the right button, for a few frames
+    for (int i = 0; i < 4; i++) {
+        p.update(o, (onRight - o).norm(), 0.0, 0.0, 0, 0.01, sc);
+    }
+    CHECK(p.state().buttons == 0);
+    // a long squeeze (bringing the screens back) is no click
+    for (int i = 0; i < 10; i++) {
+        p.update(o, (onRight - o).norm(), 0.0, 1.0, 0, 0.1, sc);
+    }
+    p.update(o, (onRight - o).norm(), 0.0, 0.0, 0, 0.01, sc);
+    CHECK(p.state().buttons == 0);
+    // the stick scrolls; off the screens the pointer is off
+    p.update(o, (onRight - o).norm(), 0.0, 0.0, 1.0, 0.5, sc);
+    CHECK(p.wheel() == 480);
+    p.update(o, room::Vec3{0, 1, 0}, 0.0, 0.0, 0, 0.01, sc);
+    CHECK(!p.state().on && p.state().buttons == 0);
+}
+
+TEST(world_desktop_file_the_overlay_draws) {
+    const auto d = desk::parseWorldDesk("screen 1 0.1 1.5 -1.6 0 0.342 0 0.94 1.6425 0.923\n"
+                                        "ray 0.2 1.2 -0.3 0.1 1.5 -1.5\n"
+                                        "screen 9 0 0 0 0 0 0 1 1 1\n"   // no such monitor
+                                        "screen 0 0 0 0 0 0 0 1 0 1\n"   // no size
+                                        "junk\n");
+    CHECK(d.screens.size() == 1 && d.screens[0].monitor == 1 && std::abs(d.screens[0].pos[2] + 1.6) < 1e-9 &&
+          std::abs(d.screens[0].quat[1] - 0.342) < 1e-9 && std::abs(d.screens[0].w - 1.6425) < 1e-9);
+    CHECK(d.rays.size() == 1 && std::abs(d.rays[0].second.z + 1.5) < 1e-9);
+    CHECK(desk::parseWorldDesk("").screens.empty());
+}
+
+TEST(the_frame_places_the_monitors_for_steamvr) {
+    room::Mat34 head = room::Mat34::identity();
+    head.m[1][3] = 1.6;
+    std::vector<frame::Monitor> mons{{0, 0, 0, 2560, 1440}, {1, 2560, 0, 2560, 1440}};
+    // one: in the middle, 1.55 m ahead (Medium), 2.19 x 0.75 wide, facing you
+    auto p = frame::place(head, mons, 0b01, 1.0, 0.0);
+    CHECK(p.size() == 1 && p[0].monitor == 0 && std::abs(p[0].w - 2.19 * 0.75) < 1e-9);
+    CHECK(std::abs(p[0].pose.pos().z + 1.55 - 0.0005 * 0.75) < 1e-9 && std::abs(p[0].pose.pos().x) < 1e-9);
+    CHECK(p[0].pose.axis(2).z > 0.999); // its face towards you
+    // two: the first in the middle, the second on the right, nearer, turned towards you
+    p = frame::place(head, mons, 0b11, 1.0, 0.0);
+    CHECK(p.size() == 2 && p[1].monitor == 1 && std::abs(p[1].pose.pos().x - 2.012 * 0.75) < 1e-9);
+    CHECK(p[1].pose.pos().z > p[0].pose.pos().z && p[1].pose.axis(2).x < -0.6);
+    // Zoom scales about the frame's middle, Distance moves it away
+    const auto z = frame::place(head, mons, 0b01, 2.0, 1.0);
+    CHECK(std::abs(z[0].w - 2.0 * 2.19 * 0.75) < 1e-9 && z[0].pose.pos().z < p[0].pose.pos().z - 0.5);
+    CHECK(std::abs(frame::place(head, mons, 0b01, 99.0, 0)[0].w - frame::kZoomMax * 2.19 * 0.75) < 1e-9);
+    CHECK(frame::uiScale("Large").forward == 2.3 && frame::uiScale("nonsense").scale == 0.75);
+}
+
+TEST(steamvrs_bar_toggles_the_desktop_and_steps_zoom_and_distance) {
+    Header h;
+    h.overGame = true;
+    h.closeShown = false;
+    DeskBar db;
+    db.monitors = 2;
+    db.mask = 0b11;
+    db.dashShown = false;
+    db.toggleShown = true;
+    db.on = false;
+    const auto find = [](const View& vw, const std::string& id) -> const Box* {
+        const auto it = std::ranges::find_if(vw.boxes, [&](const Box& b) { return b.id == id; });
+        return it == vw.boxes.end() ? nullptr : &*it;
+    };
+    View v = deskLayout(h, db);
+    CHECK(find(v, "desk:toggle") != nullptr && find(v, "desk:toggle")->style == Box::Style::Bar);
+    CHECK(find(v, "desk:mon:0") == nullptr && find(v, "desk:zoom:+") == nullptr && find(v, "desk:dash") == nullptr);
+    db.on = true;
+    db.zoomShown = true;
+    db.zoom = 1.25;
+    v = deskLayout(h, db);
+    CHECK(find(v, "desk:toggle")->style == Box::Style::Selected && find(v, "desk:mon:1") != nullptr);
+    for (const char* id : {"desk:zoom:-", "desk:zoom:+", "desk:dist:-", "desk:dist:+"}) {
+        const Box* b = find(v, id);
+        CHECK(b != nullptr && b->r.x >= 0 && b->r.x + b->r.w <= kW && b->r.y + b->r.h <= kBarH);
+        if (b != nullptr) {
+            CHECK(hit(v, b->r.x + 5, b->r.y + 5) == std::string(id));
+        }
+    }
+    CHECK(std::ranges::any_of(v.labels, [](const Label& l) { return l.text == "1.25"; }));
+}
 
 PIBRIDGE_TEST_MAIN()

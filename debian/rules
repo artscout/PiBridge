@@ -15,6 +15,9 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all optimize=-lto
 PIBRIDGE_GODOT ?= $(firstword $(wildcard $(HOME)/.local/share/pibridge/godot/Godot_v4.7.2-stable_linux.x86_64 \
                                          $(HOME)/gamedev/godot/Godot_v4.7.2-stable_linux.x86_64))
 
+# its export templates: the builder's own (debhelper gives the build a HOME of its own)
+GODOT_DATA_HOME ?= $(or $(XDG_DATA_HOME),$(HOME)/.local/share)
+
 MONADO_BUILD  = build-deb-monado
 MONADO_PREFIX = /usr/lib/pibridge/monado
 MONADO_DEST   = $(CURDIR)/debian/pibridge-monado
@@ -30,7 +33,7 @@ override_dh_auto_configure:
 	    -DPIBRIDGE_SYSTEMD_USER_UNIT_DIR=lib/systemd/user \
 	    -DPIBRIDGE_BUILD_TESTS=OFF \
 	    -DPIBRIDGE_DEV_PATHS=OFF \
-	    -DPIBRIDGE_EXPORT_WORLD=ON -DPIBRIDGE_GODOT=$(PIBRIDGE_GODOT)
+	    -DPIBRIDGE_EXPORT_WORLD=ON -DPIBRIDGE_GODOT=$(PIBRIDGE_GODOT) -DPIBRIDGE_GODOT_DATA_HOME=$(GODOT_DATA_HOME)
 
 # The Monado fork, configured as docs/INSTALL.md 7.2.1 says, without what PiBridge never uses (samples, tests, ONNX
 # hand tracking, Monado's SteamVR plugin and its own systemd units: the app starts monado-service itself).

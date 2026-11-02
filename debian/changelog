@@ -1,3 +1,36 @@
+pibridge (2.0.3) unstable; urgency=medium
+
+  * The desktop in the headset (pibridge-desktop): your monitors through
+    KDE's ScreenCast + RemoteDesktop portal and PipeWire (up to 120 pictures
+    a second), the controller as the mouse (trigger: click, A / X or a short
+    grip: right click, stick: scroll). KDE's permission is asked once on the
+    desktop: the app's Dashboard, Quick settings, Desktop in VR, Allow; the
+    portal's restore token keeps it, so the headset never asks.
+  * PiBridge World laid out like Pimax Experience (our own code, no Pimax
+    code or assets), in one frame at the eyes: the interface size (Large,
+    Medium, Small, Miniature: the World page's Interface size), the
+    dashboard, a bar always under it (Desktop, 1 / 2 / All, Zoom and
+    Distance sliders, Record, Room setup, Recenter, drawn icons), the
+    monitors in the frame (the first in the middle, the second on the right
+    turned to you, a third on the left). Holding a grip brings the frame to
+    where you look.
+  * The world places the monitors and takes the lasers; the dashboard
+    overlay draws the pictures as OpenXR quad layers in its own process, so
+    the world's frame rate does not drop.
+  * The dashboard over games: a bottom bar with icons (Desktop,
+    Record video, Quick room setup, Recenter, Close app); its Desktop shows
+    the monitors on an arc with a bar under them.
+  * SteamVR: a Desktop tab in SteamVR's dashboard (the monitors and the same
+    bar; a Vulkan texture; SteamVR's laser is the mouse).
+  * pibridge-headtrack recenters on the dashboards' recenter-request too.
+  * Fixed: the overlays' transparent background showed black over the app
+    (xrkit dropped the layer's alpha flag): the dashboard over games, the
+    world's passthrough window, the lasers over the desktop.
+  * Not yet tried in a headset: the SteamVR Desktop tab, the original
+    Crystal on Monado.
+
+ -- Albert Valiev <artscout@gmail.com>  Mon, 02 Nov 2026 03:05:36 +0100
+
 pibridge (2.0.2) unstable; urgency=medium
 
   * The Monado backend is back, as PiBridge's own Monado fork in the source

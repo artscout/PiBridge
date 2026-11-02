@@ -28,12 +28,12 @@ tested on Ubuntu 26.04. Skip sections 1 and 2 then; the rest of this guide still
 
 | Package | What |
 |---|---|
-| `pibridge_2.0.2_amd64.deb` | the app and every `pibridge-*` tool, the user services, the udev rule, the sound rule, the video record layer, the quad views layer, PiBridge World (one executable, no Godot needed), the EDID scripts, the patches for CustomHeadsetOpenVR and NVIDIA, the winbridge sources |
-| `pibridge-monado_2.0.2_amd64.deb` | PiBridge's Monado fork, the Monado backend's OpenXR runtime (optional; the SteamVR backend does not need it) |
+| `pibridge_2.0.3_amd64.deb` | the app and every `pibridge-*` tool, the user services, the udev rule, the sound rule, the video record layer, the quad views layer, PiBridge World (one executable, no Godot needed), the EDID scripts, the patches for CustomHeadsetOpenVR and NVIDIA, the winbridge sources |
+| `pibridge-monado_2.0.3_amd64.deb` | PiBridge's Monado fork, the Monado backend's OpenXR runtime (optional; the SteamVR backend does not need it) |
 
 Install both with apt, from the folder that holds them (apt pulls Qt 6, OpenCV, ffmpeg and the rest):
 ```
-sudo apt install ./pibridge_2.0.2_amd64.deb ./pibridge-monado_2.0.2_amd64.deb
+sudo apt install ./pibridge_2.0.3_amd64.deb ./pibridge-monado_2.0.3_amd64.deb
 ```
 
 What the packages set up on their own, so you do not:
@@ -63,6 +63,7 @@ Then start **PiBridge** from the application menu. What no package can carry, an
 | CustomHeadsetOpenVR (the SteamVR backend's display driver) | a separate project (GPL-2) | 5.3; the patches are in `/usr/share/pibridge/patches/chovr/` (use them where it says `/path/to/pibridge/patches`) |
 | The Pimax controller models (`crystal_controller_*`) | Pimax's files | from a Windows Pimax install: 5.3 (SteamVR) and [world.md](world.md#controller-and-base-station-models) (PiBridge World). Valve's Index and base station models are taken from your SteamVR install by themselves |
 | The lens profile for the Monado backend (recommended) | made from your own Pimax install's data | [libpibridge-lens.md](libpibridge-lens.md#the-crystal-super-profile): put `crystal-pimax-native.conf` and its LUT (the original Crystal: `crystal-og.conf` and its LUT) into `~/.local/share/pibridge/lens/` |
+| The desktop in the headset: KDE's permission | KDE asks the logged-in user | once: Dashboard, Quick settings, **Desktop in VR → Allow**, and allow KDE's question ([desktop.md](desktop.md)) |
 | Eye tracking's start list and your calibration | made from your headset under Windows | section 6 |
 | Inside-out on the Pimax engine (optional): winbridge and the Pimax kit | winbridge is built for your user; the kit is Pimax's | as your user `pibridge-build-winbridge` (needs `mingw-w64`; `wine` to run), then the kit: 7.1 |
 | Basalt (optional, the open SLAM engine) | not a distribution package | 7.1 |

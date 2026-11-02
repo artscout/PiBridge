@@ -19,6 +19,7 @@ const Paths = preload("res://scripts/paths.gd")
 const VrKeyboard = preload("res://scripts/keyboard.gd")
 const WorldEnvironmentBuilder = preload("res://scripts/environment.gd")
 
+signal ui_scale_changed(name: String) # the World page's Interface size
 signal hide_requested
 signal passthrough_toggled(on: bool)
 signal models_toggled(on: bool)
@@ -601,6 +602,22 @@ func _page_qv(page: VBoxContainer) -> void:
 
 
 func _page_world(page: VBoxContainer) -> void:
+	# the interface size: how far and how big the dashboard, its bar and the desktop are
+	var sizes := HBoxContainer.new()
+	var now := conf.value("world_ui_scale", "Medium")
+	for n in ["Large", "Medium", "Small", "Miniature"]:
+		var sb := Button.new()
+		sb.text = n
+		sb.toggle_mode = true
+		sb.button_pressed = n == now
+		sb.custom_minimum_size = Vector2(230, 64)
+		sb.pressed.connect(func():
+			conf.set_value("world_ui_scale", n)
+			say("Interface size: %s." % n)
+			ui_scale_changed.emit(n)
+			show_page("World"))
+		sizes.add_child(sb)
+	page.add_child(_row("Interface size", sizes))
 	var cur := conf.value("home_background", "")
 	page.add_child(_dim("The world around you. The pictures are the 360-degree backgrounds the app's Home page downloads."))
 	var grid := GridContainer.new()

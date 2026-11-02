@@ -203,12 +203,15 @@ The Monado session starts `pibridge-home --dashboard-overlay` next to PiBridge W
 while PiBridge World is in front, the menu button is the world's.
 
 - **The panel**: the same dashboard pages as above, opened in front of you.
-- **The bottom bar**: **Record video** / **Stop recording** (the recording at hand, highlighted while it records;
+- **The bottom bar**, each action with its icon (drawn in code): **Desktop** (your monitors in the headset,
+  [desktop.md](desktop.md): the dashboard turns into the monitors on an arc with a bar under them - 1 / 2 / All,
+  Record, Quick room setup, Recenter, Close app, and Dashboard to come back), **Record video** / **Stop recording** (the recording at hand, highlighted while it records;
   the state is the recorder's own, checked once a second while the panel is open), **Quick room setup** (the Room page's quick setup; the dashboard closes, the setup takes the
   headset), **Recenter** (as the Room page's: the driver turns forward to where you look, for every app, seated ones
   too; the dashboard closes) and **Close app** (the game in front ends: SIGTERM, then SIGKILL after 3 s if it is still
   there; its process id comes from libmonado's `mnd_root_get_client_pid`, PiBridge's fork, docs/monado.md). Close app is
   off when the libmonado has no process ids or no game is in front. There is no Hide and no PiBridge window here.
+  Over PiBridge World there is no Close app (the world has its own bar and desktop, [world.md](world.md)).
 - **The game's inputs** are blocked while the panel is open (libmonado `mnd_root_set_client_io_blocks`), as SteamVR's
   dashboard does, and released when it closes or the overlay ends.
 

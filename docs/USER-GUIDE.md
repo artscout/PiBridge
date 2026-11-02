@@ -278,13 +278,18 @@ Record what you see in the headset to a video file.
 - **Passthrough** shows your room through the cameras, with a small panel to come back; the menu button brings you
   back too.
 - **Record** starts and stops a video recording.
+- **The bar** under the dashboard is always there: **Desktop**, **Record**, **Room setup**, **Recenter**. Desktop shows
+  your monitors in front of you; the controller is the mouse (trigger: click, A / X: right click, stick: scroll), and
+  the bar under them picks monitor **1**, **2** or **All**. Allow it once on the desktop:
+  Dashboard, Quick settings, **Desktop in VR → Allow** ([desktop.md](desktop.md)).
 
 **When a game starts**, PiBridge World closes itself so the game gets all of the graphics memory. It comes back by
 itself a few seconds after the game ends.
 
-**Over a game**, the menu button opens PiBridge's dashboard: the same settings pages, **Record video**, and along the
-bottom **Record video** (**Stop recording** while it records), **Quick room setup**, **Recenter** and **Close app**
-(ends the game in front of you). While it is open, the game
+**Over a game**, the menu button opens PiBridge's dashboard: the same settings pages, and along the
+bottom **Desktop**, **Record video** (**Stop recording** while it records), **Quick room setup**, **Recenter** and
+**Close app** (ends the game in front of you). Under SteamVR the same desktop is the **Desktop** tab of SteamVR's
+dashboard. While it is open, the game
 does not see your clicks. The menu button again closes it.
 
 ## Eye tracking

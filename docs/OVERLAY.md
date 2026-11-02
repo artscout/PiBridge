@@ -1,8 +1,10 @@
 # pibridge-overlay: PiBridge buttons in the SteamVR dashboard bar (`tools/overlay/`)
 
 **For users:** with SteamVR running, open the SteamVR dashboard with the system button. In its bottom bar, next to the
-other overlay apps, there are three PiBridge buttons: **Room Setup**, **Quick Room Setup** and **Record Video**. Each
-opens one big button — **START ROOM SETUP**, **START QUICK SETUP**, **START RECORDING** / **STOP RECORDING** — clickable
+other overlay apps, there are four PiBridge buttons: **Room Setup**, **Quick Room Setup**, **Record Video** and
+**Desktop** (a bar: Desktop shows your monitors in the room in front of you and a second press hides them; 1 / 2 /
+All, Zoom, Distance, Record video, Quick room setup, Recenter; the laser is the mouse; [desktop.md](desktop.md)). The first three each
+open one big button — **START ROOM SETUP**, **START QUICK SETUP**, **START RECORDING** / **STOP RECORDING** — clickable
 with the controller laser. The record button in the bar is a white ring while nothing records and a solid red dot (named
 **Recording**) while a recording runs. It runs with the app by default; the switch is **Dashboard → Quick settings →
 SteamVR dashboard** (right under Passthrough). The rest of this page is the design detail.
@@ -24,7 +26,7 @@ recording every time the dashboard opens. The page is one big button: bar button
 
 - **The order** in the bar is SteamVR's (alphabetical by name): Quick Room Setup, Record Video, Room Setup.
 - **Inline tabs.** SteamVR shows only `dashboard/maxInlineTabs` external overlays inline (default **2**) and folds the
-  rest into an "N more" button. At start the overlay raises it to 5 (our three + two other overlay apps) through
+  rest into an "N more" button. At start the overlay raises it to 5 (our three + two other overlay apps; the Desktop tab makes four, so one is left) through
   `IVRSettings`, only if it is lower; it is never lowered. It is a normal SteamVR setting in `steamvr.vrsettings`.
 - **The recording state in the bar**: the Record tab's thumbnail is drawn in code and re-uploaded when the state
   changes (the dashboard redraws on `VREvent_DashboardThumbChanged`), and its name becomes "Recording"

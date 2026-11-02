@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 cmake_minimum_required(VERSION 3.22)
-project(pibridge VERSION 2.0.2 LANGUAGES C CXX)
+project(pibridge VERSION 2.0.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -45,7 +45,7 @@ target_include_directories(pibridge_common INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}
 # (the janky controller interactions) is not used from fast mode.
 foreach(part libpibridge-hmd libpibridge-eyemath libpibridge-eye libpibridge-room libpibridge-cam libpibridge-lens libpibridge-ctrl libpibridge-anchor libpibridge-roommap monado-abi
         tools/keepalived tools/record tools/eyed tools/eye-tool tools/eyecal tools/cam tools/slam tools/ctrltrack tools/roommap tools/xrkit tools/roomsetup
-        quadviews tools/home tools/overlay tools/xroverlay tools/record-layer tools/headtrack tools/posetap tools/lens app)
+        quadviews tools/home tools/overlay tools/xroverlay tools/desktop tools/record-layer tools/headtrack tools/posetap tools/lens app)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${part}/CMakeLists.txt)
         if(part STREQUAL "app" AND NOT PIBRIDGE_BUILD_APP)
             continue()
@@ -70,6 +70,9 @@ install(PROGRAMS tools/get-godot/pibridge-get-godot DESTINATION ${CMAKE_INSTALL_
 # (PIBRIDGE_GODOT) and that version's export templates on the build machine (docs/world.md).
 option(PIBRIDGE_EXPORT_WORLD "Export PiBridge World to a standalone pibridge-world (needs Godot + export templates)" OFF)
 set(PIBRIDGE_GODOT "" CACHE FILEPATH "The Godot 4.7 binary that exports PiBridge World")
+# Where that Godot finds its export templates (<it>/godot/export_templates/<version>/): Godot's own default
+# ($XDG_DATA_HOME, ~/.local/share) when empty. The package build names it, since debhelper replaces HOME.
+set(PIBRIDGE_GODOT_DATA_HOME "" CACHE PATH "XDG_DATA_HOME for the Godot that exports PiBridge World")
 if(PIBRIDGE_EXPORT_WORLD)
     if(NOT EXISTS "${PIBRIDGE_GODOT}")
         message(FATAL_ERROR "PIBRIDGE_EXPORT_WORLD=ON needs PIBRIDGE_GODOT, the Godot binary (\"${PIBRIDGE_GODOT}\")")
@@ -83,7 +86,8 @@ if(PIBRIDGE_EXPORT_WORLD)
         COMMAND ${CMAKE_COMMAND} -E rm -rf ${pibridge_world_copy}
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${PROJECT_SOURCE_DIR}/world ${pibridge_world_copy}
         COMMAND ${CMAKE_COMMAND} -E rm -rf ${pibridge_world_copy}/.godot
-        COMMAND ${PIBRIDGE_GODOT} --headless --path ${pibridge_world_copy} --export-release Linux ${pibridge_world_bin}
+        COMMAND ${CMAKE_COMMAND} -E env $<$<BOOL:${PIBRIDGE_GODOT_DATA_HOME}>:XDG_DATA_HOME=${PIBRIDGE_GODOT_DATA_HOME}>
+                ${PIBRIDGE_GODOT} --headless --path ${pibridge_world_copy} --export-release Linux ${pibridge_world_bin}
         COMMAND ${CMAKE_COMMAND} -E rm -rf ${pibridge_world_copy}
         DEPENDS ${pibridge_world_files}
         COMMENT "Exporting PiBridge World with ${PIBRIDGE_GODOT}"

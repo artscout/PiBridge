@@ -68,6 +68,14 @@ session: with OpenXR on and SteamVR as the system runtime, Godot would start Ste
   - *Passthrough* (top): the room through the tracking cameras over the world (pibridge-home --passthrough-overlay, a
     Monado overlay).
 - **Record** (top): a video of what you see (pibridge-record, through Monado's compositor tap); red while it records.
+- **The layout** (`layout.gd`, made after Pimax Experience's: the same places and sizes, our own code): the dashboard,
+  the bar under it and the desktop in one frame at the eyes, its
+  distance and size by the interface size (World page, **Interface size**: Large, Medium (the default), Small,
+  Miniature). Holding a grip brings the frame to where you look.
+- **The bar** (`bar.gd`), always there under the dashboard, as the bottom window: **Desktop** (your monitors in place
+  of the dashboard, `desktop.gd`; then **1** / **2** / **All** and the **Zoom** and **Distance** sliders; the lasers
+  are the mouse, A / X the right button; Desktop again or the menu button brings the dashboard back), **Record**,
+  **Room setup**, **Recenter**. [desktop.md](desktop.md)
 - **Recenter**: hold the Pimax button, or on Valve Index controllers the **right** system button, ~0.8 s
   (pibridge-xroverlay shows the ring over any app), or Recenter on the Tracking / Room page. With Lighthouse the
   recenter moves the Index controllers, the trackers and the base stations with the head. Forward becomes where you look and the centre where you stand; in games too, also seated ones that use
@@ -78,8 +86,8 @@ session: with OpenXR on and SteamVR as the system runtime, Godot would start Ste
 ## Over a game
 
 The menu button during a game opens PiBridge's dashboard over it (`pibridge-home --dashboard-overlay`, a Monado
-overlay started with the session): the settings pages, and along the bottom Record video / Stop recording, Quick room
-setup, Recenter and Close app ([home.md](home.md), "Over a game"); the game's inputs are blocked while it is open (libmonado), as
+overlay started with the session): the settings pages, and along the bottom Desktop, Record video / Stop recording,
+Quick room setup, Recenter and Close app ([home.md](home.md), "Over a game"); the game's inputs are blocked while it is open (libmonado), as
 SteamVR's dashboard does. While PiBridge World is the main app, the menu button is the world's.
 
 While a game runs, PiBridge World closes itself so the game gets its GPU memory and CPU back: about 2 s after Monado

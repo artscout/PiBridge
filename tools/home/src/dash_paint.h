@@ -17,9 +17,9 @@ public:
     ~Painter();
     Painter(const Painter&) = delete;
     Painter& operator=(const Painter&) = delete;
-    /// Paint `v` into a kW x kH BGRA picture; the bytes stay valid until the next paint (rows `stride` bytes apart).
+    /// Paint `v` into a v.w x v.h BGRA picture; the bytes stay valid until the next paint (rows `stride` bytes apart).
     const std::uint8_t* paint(const View& v, int& stride);
-    /// The same as a tightly packed copy (kW * kH * 4 bytes): the self test's pictures.
+    /// The same as a tightly packed copy (v.w * v.h * 4 bytes): the self test's pictures.
     std::vector<std::uint8_t> picture(const View& v);
 
 private:

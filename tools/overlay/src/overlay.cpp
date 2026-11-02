@@ -2,6 +2,9 @@
 #include "overlay.h"
 
 #include "overlay_core.h"
+#ifdef PIBRIDGE_OVERLAY_DESK
+#include "desk_tab.h"
+#endif
 
 #include "pibridge/room/files.h"
 #include "pibridge/room/json.h"
@@ -455,14 +458,34 @@ int run(const Options& o, std::atomic<bool>& stop) {
         if (!ring.create()) {
             std::fprintf(stderr, "pibridge-overlay: recenter ring overlay not created (non-fatal)\n");
         }
-        std::fprintf(stderr, "pibridge-overlay: dashboard buttons up (Room Setup, Quick Room Setup, Record Video)\n");
+#ifdef PIBRIDGE_OVERLAY_DESK
+        // the desktop tab (docs/desktop.md): its Vulkan texture needs the system (the GPU SteamVR uses) and, when SteamVR
+        // gives it to a background app, the compositor (the Vulkan extensions it wants)
+        DeskTab desk(ov, c.iface<vr::IVRSystem>(vr::IVRSystem_Version), c.iface<vr::IVRCompositor>(vr::IVRCompositor_Version));
+        const bool deskUp = desk.create();
+        if (!deskUp) {
+            std::fprintf(stderr, "pibridge-overlay: desktop tab not created (non-fatal): %s\n", desk.error().c_str());
+        }
+#endif
+        std::fprintf(stderr, "pibridge-overlay: dashboard buttons up (Room Setup, Quick Room Setup, Record Video, Desktop)\n");
         while (!stop.load()) {
             if (!app.poll()) {
                 // SteamVR is going down: exit cleanly (no shutdown). The app restarts us, and the next process waits.
                 return 0;
             }
             ring.update(); // the in-game recenter ring (shown only while the recenter button is held)
-            sleepMs(stop, 50);
+            int waitMs = 50;
+#ifdef PIBRIDGE_OVERLAY_DESK
+            if (deskUp) {
+                if (!desk.update()) {
+                    return 0;
+                }
+                if (desk.shown()) {
+                    waitMs = 8; // the desktop's pictures and the laser mouse
+                }
+            }
+#endif
+            sleepMs(stop, waitMs);
         }
         return 0; // stop requested
     }

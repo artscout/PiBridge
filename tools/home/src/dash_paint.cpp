@@ -9,6 +9,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
+#include <QPolygonF>
 #include <QRectF>
 #include <QString>
 
@@ -68,6 +69,61 @@ void line(QPainter& p, const QRectF& r, const QString& s, double px, bool bold, 
     p.drawText(r, al | Qt::AlignVCenter, QFontMetricsF(f).elidedText(s, Qt::ElideRight, r.width()));
 }
 
+// The quick actions' pictures, in a square `r`, in the label's colour: lines and dots, no picture files.
+void icon(QPainter& p, Icon k, const QRectF& r, const QColor& c) {
+    const double s = r.width();
+    const QPointF m = r.center();
+    p.save();
+    p.setPen(QPen(c, std::max(2.0, s * 0.08), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.setBrush(Qt::NoBrush);
+    switch (k) {
+    case Icon::None: break;
+    case Icon::Desktop: // a monitor on its foot
+        p.drawRoundedRect(QRectF(r.x() + s * 0.08, r.y() + s * 0.14, s * 0.84, s * 0.54), s * 0.05, s * 0.05);
+        p.drawLine(QPointF(m.x(), r.y() + s * 0.68), QPointF(m.x(), r.y() + s * 0.84));
+        p.drawLine(QPointF(m.x() - s * 0.2, r.y() + s * 0.86), QPointF(m.x() + s * 0.2, r.y() + s * 0.86));
+        break;
+    case Icon::Dashboard: // four tiles
+        for (int i = 0; i < 4; i++) {
+            const double x = r.x() + s * (i % 2 == 0 ? 0.12 : 0.54), y = r.y() + s * (i < 2 ? 0.12 : 0.54);
+            p.drawRoundedRect(QRectF(x, y, s * 0.34, s * 0.34), s * 0.05, s * 0.05);
+        }
+        break;
+    case Icon::Record: // a red dot in a ring
+        p.drawEllipse(m, s * 0.4, s * 0.4);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(236, 80, 72));
+        p.drawEllipse(m, s * 0.24, s * 0.24);
+        break;
+    case Icon::Stop: // a square in a ring
+        p.drawEllipse(m, s * 0.4, s * 0.4);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(236, 80, 72));
+        p.drawRect(QRectF(m.x() - s * 0.17, m.y() - s * 0.17, s * 0.34, s * 0.34));
+        break;
+    case Icon::Room: // a floor outline with its corners
+        p.drawPolygon(QPolygonF({QPointF(r.x() + s * 0.5, r.y() + s * 0.14), QPointF(r.x() + s * 0.92, r.y() + s * 0.46),
+                                 QPointF(r.x() + s * 0.5, r.y() + s * 0.86), QPointF(r.x() + s * 0.08, r.y() + s * 0.46)}));
+        p.setBrush(c);
+        p.drawEllipse(QPointF(r.x() + s * 0.5, r.y() + s * 0.5), s * 0.06, s * 0.06);
+        break;
+    case Icon::Recenter: // a target: a ring, a dot, four ticks
+        p.drawEllipse(m, s * 0.3, s * 0.3);
+        p.drawLine(QPointF(m.x(), r.y() + s * 0.04), QPointF(m.x(), r.y() + s * 0.2));
+        p.drawLine(QPointF(m.x(), r.y() + s * 0.8), QPointF(m.x(), r.y() + s * 0.96));
+        p.drawLine(QPointF(r.x() + s * 0.04, m.y()), QPointF(r.x() + s * 0.2, m.y()));
+        p.drawLine(QPointF(r.x() + s * 0.8, m.y()), QPointF(r.x() + s * 0.96, m.y()));
+        p.setBrush(c);
+        p.drawEllipse(m, s * 0.08, s * 0.08);
+        break;
+    case Icon::Close: // a cross
+        p.drawLine(QPointF(r.x() + s * 0.22, r.y() + s * 0.22), QPointF(r.x() + s * 0.78, r.y() + s * 0.78));
+        p.drawLine(QPointF(r.x() + s * 0.78, r.y() + s * 0.22), QPointF(r.x() + s * 0.22, r.y() + s * 0.78));
+        break;
+    }
+    p.restore();
+}
+
 void chip(QPainter& p, const Box& b, bool hover, bool pressed) {
     const QRectF r = qr(b.r);
     const double rad = std::min(r.height() * 0.3, 30.0);
@@ -115,8 +171,14 @@ void chip(QPainter& p, const Box& b, bool hover, bool pressed) {
         p.fillRect(QRectF(r.x() + 6, r.y() + r.height() * 0.2, 8, r.height() * 0.6), kAccentHi);
     }
     const bool nav = b.style == Box::Style::Nav || b.style == Box::Style::NavSelected;
-    const QRectF tr = nav ? r.adjusted(44, 0, -16, 0) : r.adjusted(16, 0, -16, 0);
-    line(p, tr, qs(b.label), b.label.size() <= 3 ? 64 : 42, true, text, nav ? Qt::AlignLeft : Qt::AlignHCenter);
+    QRectF tr = nav ? r.adjusted(44, 0, -16, 0) : r.adjusted(16, 0, -16, 0);
+    if (b.icon != Icon::None) {
+        // the picture on the left, the words in the rest
+        const double is = std::min(r.height() * 0.62, 64.0);
+        icon(p, b.icon, QRectF(r.x() + 18, r.center().y() - is / 2, is, is), text);
+        tr = r.adjusted(18 + is + 12, 0, -14, 0);
+    }
+    line(p, tr, qs(b.label), b.label.size() <= 3 ? 64 : 42, true, text, nav || b.icon != Icon::None ? Qt::AlignLeft : Qt::AlignHCenter);
 }
 
 } // namespace
@@ -130,8 +192,8 @@ Painter::~Painter() { delete d_; }
 
 const std::uint8_t* Painter::paint(const View& v, int& stride) {
     ensureApp();
-    if (d_->img.width() != kW || d_->img.height() != kH) {
-        d_->img = QImage(kW, kH, QImage::Format_ARGB32); // B, G, R, A bytes on little-endian
+    if (d_->img.width() != v.w || d_->img.height() != v.h) {
+        d_->img = QImage(v.w, v.h, QImage::Format_ARGB32); // B, G, R, A bytes on little-endian
     }
     d_->img.fill(Qt::transparent);
     QPainter p(&d_->img);
@@ -139,7 +201,7 @@ const std::uint8_t* Painter::paint(const View& v, int& stride) {
 
     // the whole panel, then the bars and columns
     QPainterPath all;
-    all.addRoundedRect(QRectF(4, 4, kW - 8, kH - 8), 40, 40);
+    all.addRoundedRect(QRectF(4, 4, v.w - 8, v.h - 8), 40, 40);
     p.fillPath(all, kBack);
     p.setPen(QPen(kEdge, 3));
     p.drawPath(all);
@@ -189,9 +251,10 @@ const std::uint8_t* Painter::paint(const View& v, int& stride) {
 std::vector<std::uint8_t> Painter::picture(const View& v) {
     int stride = 0;
     const std::uint8_t* px = paint(v, stride);
-    std::vector<std::uint8_t> out(static_cast<std::size_t>(kW) * kH * 4);
-    for (int y = 0; y < kH; y++) {
-        std::memcpy(&out[static_cast<std::size_t>(y) * kW * 4], px + static_cast<std::size_t>(y) * stride, static_cast<std::size_t>(kW) * 4);
+    const auto w = static_cast<std::size_t>(v.w);
+    std::vector<std::uint8_t> out(w * static_cast<std::size_t>(v.h) * 4);
+    for (int y = 0; y < v.h; y++) {
+        std::memcpy(&out[static_cast<std::size_t>(y) * w * 4], px + static_cast<std::size_t>(y) * stride, w * 4);
     }
     return out;
 }

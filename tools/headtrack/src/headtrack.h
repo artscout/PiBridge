@@ -169,6 +169,12 @@ private:
     /// (output thread). This is the observe-and-pin-down step for GetGroundState / GetLocModeState.
     void room_state_poll(std::int64_t now_ns);
     std::int64_t room_poll_at_ = 0;
+    /// The recenter: the live anchor and the chaperone commit (the Pimax button's long press, the dashboards' request).
+    void recenter_now(const std::string& why);
+    /// $XDG_RUNTIME_DIR/pibridge/recenter-request changed: recenter (output thread, ~3 Hz).
+    void recenter_request_poll(std::int64_t now_ns);
+    std::int64_t recenter_poll_at_ = 0;
+    std::optional<std::int64_t> recenter_stamp_;
     bool room_logged_ = false;
     std::int32_t room_loc_ret_ = -3, room_ground_ret_ = -3;
     std::uint8_t room_loc_state_ = 0, room_ground_flag_ = 0;
