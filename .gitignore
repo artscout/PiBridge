@@ -12,3 +12,6 @@ winbridge/vit-replay
 
 # Python bytecode (tools/headset-edid imports make_crystal_edid)
 __pycache__/
+
+# local backups of the user's own settings (A/B tests); never in the repository
+.ab-monado-backup/
