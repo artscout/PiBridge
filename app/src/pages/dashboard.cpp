@@ -1506,9 +1506,12 @@ void DashboardPage::applyState() {
     const bool insideOut = insideOutNow();
     // the original Crystal: its own inside-out without a pose right now (covered cameras, a dark room, just switched)
     const bool poseLost = k.crystalPresent && insideOut && !k.crystalTracked;
-    hsSub_->setText(QStringLiteral("%1%2 · SteamVR")
+    // the chosen VR backend (not always SteamVR: the Monado backend runs without it)
+    const bool onMonado = vrBackend(conf_) == VrBackend::Monado;
+    hsSub_->setText(QStringLiteral("%1%2 · %3")
                         .arg(insideOut ? QStringLiteral("Inside-out") : QStringLiteral("Lighthouse"),
-                             poseLost ? QStringLiteral(" · tracking lost") : QString()));
+                             poseLost ? QStringLiteral(" · tracking lost") : QString(),
+                             onMonado ? QStringLiteral("Monado") : QStringLiteral("SteamVR")));
     // The chip: during a live session show the panel state, not keepalived's internal "paused".
     hsChip_->set(hmd != nullptr ? ChipText{QStringLiteral("SCREEN ON"), ChipKind::Info} : headsetChip(k));
     hsHint_->setText(headsetHint(k, s.steamvrRunning));
@@ -1528,7 +1531,7 @@ void DashboardPage::applyState() {
         hsState_->setText(mw.state.isEmpty() ? QStringLiteral("Service not running") : mw.state);
     } else {
         static const QHash<QString, QString> words{
-            {QStringLiteral("idle"), QStringLiteral("Waiting for SteamVR")},
+            {QStringLiteral("idle"), QStringLiteral("Waiting for VR backend")}, // SteamVR or Monado (the subtitle says which)
             {QStringLiteral("waking"), QStringLiteral("Waking")},
             {QStringLiteral("active"), QStringLiteral("Active")},
             {QStringLiteral("no-headset"), QStringLiteral("No headset")},
