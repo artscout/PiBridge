@@ -21,7 +21,7 @@ pibridge::eyemath::FrameConv conv = cal ? cal->conv : pibridge::eyemath::FrameCo
 pibridge::eyemath::FilterParams fp = cal ? cal->filter : pibridge::eyemath::FilterParams{.enabled = false};  // no filter without one
 pibridge::eyemath::ClockMap clock;                               // device us -> CLOCK_MONOTONIC ns
 clock.latency_ns = configured_latency_ns;
-pibridge::eyemath::CombineState combine;                         // blink hold-off state
+pibridge::eyemath::CombineState combine;                         // blink hold-off state, smoothed convergence (lone-eye depth)
 pibridge::eyemath::OneEuro one_euro;                             // output smoothing state
 pibridge::eyemath::Drift drift;                                  // running recentre offsets (shared with the recentre hook)
 
@@ -32,7 +32,7 @@ std::int64_t host = clock.map(g->timestamp_us, arrival_ns);
 pibridge::eyemath::Sample s = pibridge::eyemath::convert(*g, conv, seq++, host, arrival_ns);   // device -> OpenXR head frame
 if (cal) cal->apply_sample_with(s, combine, drift.offset);   // per-eye maps + combination
 else if (corr) corr->apply_sample(s);                         // old single correction (Correction::from_env())
-pibridge::eyemath::filter_sample(fp, one_euro, s);               // One-Euro on the combined ray
+pibridge::eyemath::filter_sample(fp, one_euro, s);               // One-Euro on the combined ray (a sample without gaze keeps its state)
 // s.eyes[0/1] (left/right) and s.gaze (combined ray, std::optional) are what goes to shared memory
 // on a new USB link: clock.reset(); one_euro.reset();
 ```
@@ -45,7 +45,7 @@ pibridge::eyemath::filter_sample(fp, one_euro, s);               // One-Euro on 
 | `gaze.h` | `GazeSample`, `Eye`, `EyeState`, `FrameFields`, `GazeError`, `parse_payload` (strict), `parse_payload_lenient`, `encode_payload`, `GazeStats`, `format_line`, field numbers `EYE_FIELDS`, `WIRE_ORDER`, `field::*`, `NOMINAL_PERIOD_US` |
 | `track.h` | `FrameConv` (+ `from_env`, `slot`), `EyeRay`, `Gaze`, `Sample`, `convert`, `sample_at` (interpolation for a host time) |
 | `correction.h` | `features`, `tangent_of`, `dir_of`, `MAX_TANGENT`, `Correction` (map, `to_toml`/`parse`/`load`/`select`/`from_env`, `flip_warning`), `home_dir` |
-| `calib.h` | `Calibration`, `EyeCal`, `OriginTerms`, `Combine`, `CombineState`, `LoadedCalibration`; the fit: `EyePoint`, `Ridge`, `fit_eye`, `evaluate`, `select_model`, `Selection`, `ModelFit`, `ModelKind`, `stats`, `tangent_angle_deg`, `point_error_deg`, `raw_ray` |
+| `calib.h` | `Calibration`, `EyeCal`, `OriginTerms`, `Combine`, `CombineState`, `LoadedCalibration`; the fit: `EyePoint`, `Ridge`, `fit_eye`, `evaluate`, `select_model`, `Selection`, `ModelFit`, `ModelKind`, `stats`, `tangent_angle_deg`, `eye_disagreement_deg`, `NEAREST_FIXATION_M`, `point_error_deg`, `raw_ray` |
 | `filter.h` | `FilterParams`, `OneEuro`, `MAX_GAP_S`, `filter_sample` (Rust `filter::apply_sample`) |
 | `drift.h` | `DriftParams`, `Drift` (`observe`, `apply`, `apply_dir`) |
 | `clock.h` | `monotonic_ns`, `ClockMap` |
@@ -94,7 +94,7 @@ flip = "1,0,1"                    # FrameConv flip_x, flip_y, flip_z
 swap = 0
 offset_mm = [0.500000000, -1.250000000, 0.000000000]
 depth_m = 2.0000                  # clamped to 0.2..100
-max_disagree_deg = 3.500          # at least 0.5
+max_disagree_deg = 3.500          # at least 0.5; natural convergence (fixations 0.2 m .. infinity) is not counted
 holdoff = 2                       # 0..30
 
 [left]                            # and [right]; both must hold at least one key
@@ -134,8 +134,8 @@ lookup.
 
 ## Tests
 
-`ctest -R eyemath` runs 9 binaries, 53 tests. Every Rust unit test of the ported modules has a C++ twin with the same
-cases and tolerances (gaze 9, track 6, correction 8, calib 9, filter 3, drift 1, clock 4, rng 1). C++-only tests: the
+`ctest -R eyemath` runs 9 binaries, 56 tests. Every Rust unit test of the ported modules has a C++ twin with the same
+cases and tolerances (gaze 9, track 6, correction 8, calib 9, filter 3, drift 1, clock 4, rng 1). C++-only tests: the convergence-aware combination (near fixation kept binocular, a lone eye at the converged depth, `eye_disagreement_deg`), the filter kept through samples without gaze, the
 Rust byte fixtures (gaze payload and printed line, version-2 calibration file), the number format and parse tables
 printed by Rust, a non-"C" locale (skipped with a message when none is installed), `save`/`load`, parse error texts
 and clamps, the pibridge, pimax-linux, omarchyvr default lookup, the `PIMAX_EYE_*` fallback names, `from_env` for `FrameConv` and `Calibration`
@@ -153,3 +153,12 @@ canonical gaze sample of the Rust tests.
 - `live.rs` (the tracker that runs this pipeline): phase 2, `libpibridge-eye/src/live*`.
 - The TLV layer beyond the gaze tags (`tlv.rs` is libpibridge-eye's) and its tests.
 - `Rng` exists only as the deterministic source of the tests and simulations; it is not a general RNG.
+
+## Differences from the Rust original
+
+- The combination (`Calibration::apply_sample_with`) compares the eyes with `eye_disagreement_deg`: the eyes'
+  convergence on a fixation between `NEAREST_FIXATION_M` (0.2 m) and infinity is not a disagreement (Rust measured
+  the angle of the two rays' points at `depth_m`, so anything nearer than ~0.5 m dropped an eye). A lone eye (blink,
+  dropped) is followed to the depth of the smoothed convergence (`CombineState::vergence_deg`) instead of `depth_m`.
+- `filter_sample` keeps the One-Euro state on a sample without gaze (Rust reset it, so frames without eyes in
+  between passed the raw noise through); a gap longer than `MAX_GAP_S` still restarts it.

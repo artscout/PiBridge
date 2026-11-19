@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Smoothing of the gaze for the focus placement: a One-Euro filter (Casiez et al. 2012) on the gaze tangent, with a
-// saccade snap, and a short hold of the last gaze when it drops out (blinks).
+// saccade snap, a hold of the last gaze when it drops out (blinks), then a glide back to the middle.
 //
 // One-Euro is a first-order low-pass whose cutoff rises with the speed: fc = minCutoff + beta * |speed| (speed in
 // degrees per second, itself low-passed at dCutoff). At fixation it removes the sample noise that would make the
@@ -34,7 +34,14 @@ class OneEuro {
             return;
         }
         const double dt = t - t_;
-        if (!(dt > 1e-5) || dt > kMaxGapS) {
+        if (!(dt > 1e-5) && dt > -kMaxGapS) {
+            // the same time again (a game that locates its views more than once per frame) or a little earlier:
+            // the output for that time, the state unchanged (restarting here would pass the raw noise through)
+            x = x_;
+            y = y_;
+            return;
+        }
+        if (!(dt > 0) || dt > kMaxGapS) {
             restart(t, x, y);
             return;
         }
@@ -80,12 +87,17 @@ class OneEuro {
     uint32_t far_ = 0;
 };
 
-// The gaze the focus uses: filtered when valid, the last one for holdMs after it drops out, then none.
+// The gaze the focus uses: filtered when valid; when it drops out, the last one for holdMs, then a glide back to the
+// middle over kReleaseS (the focus does not jump across the field when the eyes are lost for a moment, e.g. looking
+// far down at the instruments), then none. Short dropouts keep the filter's state (a gap longer than
+// OneEuro::kMaxGapS restarts it at the next gaze anyway, so a gaze that comes back elsewhere is taken at once).
 class GazeTrack {
   public:
     struct Dir {
         double x, y; // tangent in view space (x right, y up, looking down -z)
     };
+
+    static constexpr double kReleaseS = 0.4;
 
     // A new reading at time t (seconds); `raw` empty when the tracker has no gaze.
     std::optional<Dir> update(double t, std::optional<Dir> raw, bool smooth, uint32_t holdMs,
@@ -101,11 +113,19 @@ class GazeTrack {
             lastT_ = t;
             return d;
         }
-        filter_.reset();
-        if (last_ && t - lastT_ <= holdMs / 1000.0) {
+        if (!last_) {
+            return std::nullopt;
+        }
+        const double lost = t - lastT_ - holdMs / 1000.0;
+        if (lost <= 0) {
             return last_;
         }
+        if (lost < kReleaseS) {
+            const double k = 1.0 - lost / kReleaseS;
+            return Dir{last_->x * k, last_->y * k};
+        }
         last_.reset();
+        filter_.reset();
         return std::nullopt;
     }
 

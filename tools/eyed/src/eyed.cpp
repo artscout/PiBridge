@@ -363,6 +363,7 @@ void Daemon::tick(Clock::time_point now) {
         }
         last_state_.reset();
         last_seq_.reset();
+        last_gaze_write_.reset();
         rate_ = 0;
         rate_count_ = 0;
         rate_since_ = now;
@@ -378,7 +379,13 @@ void Daemon::tick(Clock::time_point now) {
     const std::optional<std::uint64_t> seq = s ? std::optional<std::uint64_t>(s->seq) : std::nullopt;
     const bool fresh = seq != last_seq_;
     // every new sample, and twice a second without one (readers see the state and that the writer lives)
-    if (fresh || !last_write_ || now - *last_write_ >= SHM_EVERY) {
+    // a fresh sample without gaze right after a valid one: keep the valid one in the file (GAZE_BRIDGE)
+    const bool bridge = fresh && s && !s->gaze && last_gaze_write_ && now - *last_gaze_write_ < GAZE_BRIDGE;
+    if (bridge) {
+        last_seq_ = seq;
+        streamed_++;
+        rate_count_++;
+    } else if (fresh || !last_write_ || now - *last_write_ >= SHM_EVERY) {
         std::optional<pibridge::eye::shm::Sample> o;
         if (s) {
             o = pibridge::eye::live::to_shm(*s);
@@ -388,6 +395,11 @@ void Daemon::tick(Clock::time_point now) {
         }
         last_write_ = now;
         last_seq_ = seq;
+        if (o && o->gaze) {
+            last_gaze_write_ = now;
+        } else {
+            last_gaze_write_.reset();
+        }
         if (fresh && s) {
             streamed_++;
             rate_count_++;

@@ -92,6 +92,8 @@ pibridge::eye::Bytes base_profile() {
 struct Rig {
     std::atomic<bool> running{false};
     std::shared_ptr<std::atomic<bool>> eyes = std::make_shared<std::atomic<bool>>(true);
+    // every other chip frame without eyes (the Crystal Super does this while worn)
+    std::shared_ptr<std::atomic<bool>> alternate = std::make_shared<std::atomic<bool>>(false);
     std::atomic<int> starts{0};
     std::shared_ptr<RecordingHid> hid = std::make_shared<RecordingHid>();
     std::mutex log_mu;
@@ -123,14 +125,15 @@ struct Rig {
                 cfgs.push_back(c);
             }
             auto eyes_on = eyes;
+            auto alt = alternate;
             return live::Tracker::start_with(
                 c,
-                [eyes_on](const live::Config&, std::stop_token) -> std::expected<std::unique_ptr<pibridge::eye::Transport>, std::string> {
+                [eyes_on, alt](const live::Config&, std::stop_token) -> std::expected<std::unique_ptr<pibridge::eye::Transport>, std::string> {
                     auto chip = std::make_unique<pibridge::eye::fake::FakeChip>();
                     chip->start_on = pibridge::eye::session::OP_SUBSCRIBE;
-                    chip->payload = [eyes_on](std::uint32_t k, std::int64_t ts) {
+                    chip->payload = [eyes_on, alt](std::uint32_t k, std::int64_t ts) {
                         auto g = live::fake_sample(k, ts);
-                        if (!eyes_on->load()) {
+                        if (!eyes_on->load() || (alt->load() && k % 2 == 1)) {
                             g.eyes[0] = pibridge::eyemath::Eye{};
                         }
                         return pibridge::eyemath::encode_payload(g);
@@ -201,6 +204,36 @@ TEST(daemon_streams_gaze_to_the_shm_file_and_says_no_gaze_on_stop) {
     CHECK(end && end->state == 0 && end->flags == 0);
     CHECK(!fs::exists(status_file())); // the app reads a missing file as "not running"
     CHECK(r.logged("stopped"));
+}
+
+TEST(frames_without_eyes_do_not_blank_a_fresh_gaze_in_the_file) {
+    Rig r(plain());
+    r.alternate->store(true);
+    CHECK(r.d->start(Clock::now()).has_value());
+    CHECK(r.run_until([&] { const auto g = r.gaze(); return g && g->state == 2 && (g->flags & shm::COMBINED) != 0; },
+                      5000ms));
+    // half a second of alternating frames: every read sees the gaze, and the samples keep coming
+    int reads = 0, blank = 0;
+    std::uint64_t first = r.gaze()->sample, last = first;
+    r.run_until(
+        [&] {
+            const auto g = r.gaze();
+            if (g && g->state == 2) {
+                reads++;
+                blank += (g->flags & shm::COMBINED) == 0;
+                last = g->sample;
+            }
+            return false;
+        },
+        500ms);
+    CHECK(reads > 50);
+    CHECK(blank == 0);
+    CHECK(last > first);
+    // the eyes really gone: "no gaze" within a moment
+    r.alternate->store(false);
+    r.eyes->store(false);
+    CHECK(r.run_until([&] { const auto g = r.gaze(); return g && (g->flags & shm::COMBINED) == 0; }, 1000ms));
+    r.d->stop();
 }
 
 TEST(follow_starts_the_tracker_with_the_runtime_and_stops_it_5_s_after) {

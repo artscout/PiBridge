@@ -22,7 +22,9 @@ libpibridge-hmd is `eyed::HidHeadsetCommands` (`src/hid_commands.{h,cpp}`), `src
   upload); the start list and eye profile files of the Crystal Super are not used for it. eyed never powers it itself.
 - Every new sample goes into the gaze file at once (the loop runs every 2 ms); without one the file is rewritten twice
   a second with the tracker state (0 searching, 1 connecting, 2 streaming, 3 reconnecting, 4 stopped), so readers
-  see that the writer lives.
+  see that the writer lives. A sample without a combined gaze (the chip's frames without eyes, a short blink) does
+  not replace a valid gaze younger than 100 ms (`GAZE_BRIDGE`): readers take the newest sample and would otherwise
+  see "no gaze" for single frames.
 - Logs "eyes seen" / "no eye seen yet", "eyes lost after X s", "eyes seen again after X s" (lost = 500 ms without
   a single sample with a valid eye; about half the samples carry no eye even when worn), and the sample rate once a
   minute.

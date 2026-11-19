@@ -29,7 +29,7 @@ This layer is written from scratch for Vulkan; the design follows Quad-Views-Fov
 | Wide views | Catmull-Rom (bicubic) upscaling, or bilinear |
 | Focus edge | smooth blend over a configurable band, starting at a configurable share of the focus (as Pimax's "focus transition opacity") |
 | Focus at the edge of the field | keeps its size and slides back inside (as VectorXR does), instead of shrinking |
-| Gaze | One-Euro filter with a saccade snap: steady at fixation, no lag on saccades; holds the last gaze through blinks |
+| Gaze | One-Euro filter with a saccade snap: steady at fixation, no lag on saccades; keeps its state through short dropouts and repeated locates of one frame; holds the last gaze through blinks, then glides back to the middle |
 | Gaze parallax | the gaze point is projected into each eye from its real position and orientation (canted displays) |
 | The game's own gaze action | kept: the layer adds its binding to the game's suggestion instead of replacing it |
 | Image hand-off | the game's images are released to the runtime only after the composition read them (no use after release) |
@@ -75,7 +75,7 @@ for one game. Uninstall: delete the three installed files.
 | `edge_opacity` | 0.50 | share of the focus at the outer edge of the band (0 fades from the periphery, 1 hard edge) |
 | `sharpen` | 0.60 | contrast-adaptive sharpening of the focus |
 | `peripheral_filter` | bicubic | or `bilinear` |
-| `gaze_filter`, `gaze_hold_ms` | on, 600 | gaze smoothing, hold through blinks |
+| `gaze_filter`, `gaze_hold_ms` | on, 600 | gaze smoothing, hold through blinks (then a 0.4 s glide to the middle) |
 | `debug_overlay` | off | tint the focus area and mark the gaze in the headset |
 
 ## Eye tracking

@@ -235,8 +235,61 @@ TEST(gaze_hold_bridges_blinks_then_drops) {
     CHECK(g.update(0.0, GazeTrack::Dir{0.2, 0.1}, false, 600).has_value());
     const auto held = g.update(0.3, std::nullopt, false, 600);
     CHECK(held.has_value() && std::fabs(held->x - 0.2) < 1e-12);
-    CHECK(!g.update(0.7, std::nullopt, false, 600).has_value());
-    CHECK(!g.update(0.71, std::nullopt, false, 600).has_value());
+    // after the hold: back to the middle over GazeTrack::kReleaseS, then none
+    const auto gliding = g.update(0.7, std::nullopt, false, 600);
+    CHECK(gliding.has_value() && std::fabs(gliding->x - 0.2 * (1 - 0.1 / GazeTrack::kReleaseS)) < 1e-9 &&
+          std::fabs(gliding->y - 0.1 * (1 - 0.1 / GazeTrack::kReleaseS)) < 1e-9);
+    CHECK(!g.update(0.6 + GazeTrack::kReleaseS + 0.01, std::nullopt, false, 600).has_value());
+    CHECK(!g.update(1.5, std::nullopt, false, 600).has_value());
+    // a gaze that comes back is taken at once
+    const auto back = g.update(1.6, GazeTrack::Dir{-0.3, 0.0}, true, 600);
+    CHECK(back.has_value() && std::fabs(back->x + 0.3) < 1e-12);
+}
+
+TEST(one_euro_same_time_again_gives_the_same_output) {
+    OneEuro f;
+    OneEuroParams p;
+    std::mt19937 rng(3);
+    std::normal_distribution<double> n(0.0, std::tan(1.0 * M_PI / 180));
+    double x = 0, y = 0;
+    for (int i = 0; i < 240; i++) {
+        x = n(rng);
+        y = n(rng);
+        f.filter(p, i / 90.0, x, y);
+    }
+    // the game locates its views again for the same display time, the tracker gave another noisy sample
+    double x2 = 0.03, y2 = -0.03;
+    f.filter(p, 239 / 90.0, x2, y2);
+    CHECK_NEAR(x2, x, 1e-12);
+    CHECK_NEAR(y2, y, 1e-12);
+    // and the filter goes on smoothly afterwards (not restarted at the raw value)
+    double x3 = 0.03, y3 = -0.03;
+    f.filter(p, 240 / 90.0, x3, y3);
+    CHECK(std::fabs(x3) < 0.02 && std::fabs(y3) < 0.02);
+}
+
+TEST(gaze_track_keeps_smoothing_through_single_frame_dropouts) {
+    GazeTrack g;
+    std::mt19937 rng(11);
+    std::normal_distribution<double> n(0.0, std::tan(1.0 * M_PI / 180));
+    double raw = 0, out = 0;
+    int k = 0;
+    for (int i = 0; i < 900; i++) {
+        const double t = i / 90.0;
+        if (i % 2 == 1) {
+            const auto held = g.update(t, std::nullopt, true, 600);
+            CHECK(held.has_value());
+            continue;
+        }
+        const GazeTrack::Dir d{0.1 + n(rng), n(rng)};
+        const auto o = g.update(t, d, true, 600);
+        if (i > 180) {
+            raw += std::hypot(d.x - 0.1, d.y);
+            out += std::hypot(o->x - 0.1, o->y);
+            k++;
+        }
+    }
+    CHECK(out < raw / 2); // restarted after every dropout it would be the raw noise
 }
 
 QV_TEST_MAIN

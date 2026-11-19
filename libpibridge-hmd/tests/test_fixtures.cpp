@@ -348,4 +348,29 @@ TEST(right_controller_idle_and_round1) {
     CHECK(std::all_of(r1.begin(), r1.end(), [](const auto& x) { return x.first >= 70.0 || !x.second.touch_bits().hand_on; }));
 }
 
+TEST(controller_imu_two_samples_and_period_in_the_captures) {
+    const auto rows = testutil::load_rec("ctrl_buttons_hub2.rec.gz");
+    if (!rows) {
+        return;
+    }
+    // the left controller here samples every ~2 ms, the right one every 2.5 ms; reports come at ~250 Hz, mostly
+    // with two samples (the engine wants all of them: one per report is half its IMU rate)
+    std::array<ControllerSamplePeriod, 2> per;
+    std::array<long, 2> reports{}, samples{};
+    for (const auto& [t, b] : *rows) {
+        if (b[0] != 0x53 || b[1] != 0x32 || b[2] != 0x08 || (b[3] != 2 && b[3] != 3)) {
+            continue;
+        }
+        const std::size_t h = b[3] == 2 ? 0 : 1;
+        const auto c = controller_imu(b);
+        per[h].update(decode_controller(b)->ts_us, c.n);
+        reports[h]++;
+        samples[h] += static_cast<long>(c.n);
+    }
+    CHECK(per[0].us() > 1950.0 && per[0].us() < 2010.0);
+    CHECK(std::fabs(per[1].us() - 2500.0) < 30.0);
+    CHECK(samples[0] > reports[0] * 19 / 10);
+    CHECK(samples[1] > reports[1] * 14 / 10);
+}
+
 PIBRIDGE_TEST_MAIN()

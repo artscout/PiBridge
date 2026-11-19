@@ -112,6 +112,8 @@ struct Hand {
     ImuTime dev_time;
     std::int64_t eng_ts_ns = 0;
     int eng_ts_mode = -1;
+    /// This controller's IMU sample period (the second sample of a report is one period after the first).
+    hmd::ControllerSamplePeriod period;
     std::optional<hmd::ControllerReport> report;
     std::int64_t report_ns = 0;
     Orientation imu; // the controller IMU in its raw axes (only its changes are used)
@@ -192,6 +194,7 @@ private:
     std::optional<hmd::pose_shm::Publisher> pub_;
     ImuTime time_;
     bool ctrl_dev_ts_ = true; // PIBRIDGE_CTRL_IMU_TS=host: the controller IMU stamped at arrival, as before
+    bool ctrl_imu_both_ = true; // PIBRIDGE_CTRL_IMU_BOTH=0: only the first IMU sample of a report to the LED engine
     std::mutex imu_mu_;
     Orientation orient_;
     std::int64_t last_imu_ns_ = 0;

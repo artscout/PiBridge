@@ -57,7 +57,7 @@ private:
     std::uint32_t far_ = 0;
 };
 
-/// Filter the combined gaze direction of a sample in place (no gaze: the filter restarts). The Rust function is
+/// Filter the combined gaze direction of a sample in place (no gaze: the state is kept; a gap longer than MAX_GAP_S restarts it). The Rust function is
 /// `filter::apply_sample`.
 void filter_sample(const FilterParams& p, OneEuro& f, Sample& s);
 

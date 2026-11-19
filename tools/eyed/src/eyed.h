@@ -62,6 +62,10 @@ inline constexpr std::chrono::milliseconds EYES_LOST_AFTER{500};
 inline constexpr std::chrono::seconds STATUS_EVERY{2};
 /// The shared-memory file is rewritten at least this often without a new sample.
 inline constexpr std::chrono::milliseconds SHM_EVERY{500};
+/// A sample without a combined gaze (the chip's frames without eyes, a short blink) does not replace a valid gaze
+/// younger than this in the gaze file: readers take the newest sample, and frames without eyes in between would
+/// otherwise make them see "no gaze" for single frames (and restart their smoothing).
+inline constexpr std::chrono::milliseconds GAZE_BRIDGE{100};
 /// The followed process is looked up this often.
 inline constexpr std::chrono::milliseconds FOLLOW_EVERY{500};
 
@@ -210,6 +214,8 @@ private:
     std::optional<pibridge::eye::live::State> last_state_;
     std::optional<std::uint64_t> last_seq_;
     std::optional<Clock::time_point> last_write_;
+    // when a sample with a combined gaze last went into the gaze file
+    std::optional<Clock::time_point> last_gaze_write_;
     std::uint64_t streamed_ = 0;
     Clock::time_point since_{};
     // eyes seen or not (any eye's direction valid), and since when; whether the enable went out for this stretch

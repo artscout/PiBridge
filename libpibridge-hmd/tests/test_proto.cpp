@@ -464,4 +464,50 @@ TEST(props_line_splitter_bounds_and_inflate_never_crashes) {
     CHECK(bad == 0);
 }
 
+TEST(controller_imu_gives_both_samples_in_time_order) {
+    Report r{};
+    r[0] = 0x53; r[1] = 0x32; r[2] = 0x08; r[3] = 2;
+    const auto put = [&](std::size_t off, std::int16_t a0, std::int16_t g2) {
+        r[off] = static_cast<std::uint8_t>(static_cast<std::uint16_t>(a0) >> 8);
+        r[off + 1] = static_cast<std::uint8_t>(a0 & 0xff);
+        r[off + 10] = static_cast<std::uint8_t>(static_cast<std::uint16_t>(g2) >> 8);
+        r[off + 11] = static_cast<std::uint8_t>(g2 & 0xff);
+    };
+    put(16, 1024, -5);
+    put(30, -300, 7);
+    auto c = controller_imu(r);
+    CHECK(c.n == 2);
+    CHECK(c.accel[0][0] == 1024 && c.gyro[0][2] == -5);
+    CHECK(c.accel[1][0] == -300 && c.gyro[1][2] == 7);
+    // the first sample as decode_controller takes it
+    CHECK(decode_controller(r)->raw_accel[0] == c.accel[0][0]);
+    // only the second slot filled: one sample (the one decode_controller takes)
+    std::fill(r.begin() + 16, r.begin() + 28, 0);
+    c = controller_imu(r);
+    CHECK(c.n == 1 && c.accel[0][0] == -300 && c.gyro[0][2] == 7);
+    std::fill(r.begin() + 30, r.begin() + 42, 0);
+    CHECK(controller_imu(r).n == 0);
+}
+
+TEST(controller_sample_period_is_learnt_per_controller) {
+    // ~1978 us, two samples a report; one lost report on the way
+    ControllerSamplePeriod a;
+    std::uint32_t ts = 4'294'960'000u; // wraps
+    for (int i = 0; i < 100; i++) {
+        a.update(ts, 2);
+        ts += (i == 50 ? 3 : 2) * 1978u;
+    }
+    CHECK(std::fabs(a.us() - 1978.0) < 1.0);
+    // 2500 us, one or two samples a report
+    ControllerSamplePeriod b;
+    ts = 1000;
+    for (int i = 0; i < 100; i++) {
+        const std::size_t n = i % 3 == 0 ? 1 : 2;
+        b.update(ts, n);
+        ts += static_cast<std::uint32_t>(n) * 2500u;
+    }
+    CHECK(std::fabs(b.us() - 2500.0) < 1.0);
+    CHECK(ControllerSamplePeriod{}.us() == ControllerSamplePeriod::DEFAULT_US);
+}
+
 PIBRIDGE_TEST_MAIN()

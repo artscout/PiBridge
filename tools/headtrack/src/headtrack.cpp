@@ -228,6 +228,9 @@ Daemon::Daemon(Options o, std::function<void(std::string_view)> say) : o_(std::m
     if (const char* t = std::getenv("PIBRIDGE_CTRL_IMU_TS"); t != nullptr && std::string_view(t) == "host") {
         ctrl_dev_ts_ = false;
     }
+    if (const char* t = std::getenv("PIBRIDGE_CTRL_IMU_BOTH"); t != nullptr && std::string_view(t) == "0") {
+        ctrl_imu_both_ = false;
+    }
 }
 
 Daemon::~Daemon() { stop(); }
@@ -703,6 +706,11 @@ void Daemon::on_controller(const hmd::ControllerReport& r) {
         a[k] = static_cast<float>(r.raw_accel[k] / 1024.0 * G);
         g[k] = static_cast<float>(r.raw_gyro[k] * CTRL_GYRO_SCALE);
     }
+    // A report holds one or two IMU samples (~250 reports/s, samples every ~2 or 2.5 ms depending on the controller):
+    // Pimax Play gives the engine every sample; the second goes in one sample period after the first.
+    const hmd::ControllerImu samples = hmd::controller_imu(r.raw);
+    const bool second = ctrl_imu_both_ && samples.n == 2;
+    std::int64_t eng_ts2 = 0;
     bool buttonsChanged = false;
     if (side == 1) {
         right_menu_.store((r.buttons & hmd::BTN_APP_MENU) != 0);
@@ -738,6 +746,11 @@ void Daemon::on_controller(const hmd::ControllerReport& r) {
             eng_ts = hd.eng_ts_ns + 1; // strictly increasing per hand, also across a change of the source
         }
         hd.eng_ts_ns = eng_ts;
+        const double period_us = hd.period.update(r.ts_us, samples.n);
+        if (second) {
+            eng_ts2 = eng_ts + std::llround(period_us * 1000.0);
+            hd.eng_ts_ns = eng_ts2;
+        }
         if (ts_mode != hd.eng_ts_mode) {
             hd.eng_ts_mode = ts_mode;
             ts_mode_changed = true;
@@ -792,6 +805,14 @@ void Daemon::on_controller(const hmd::ControllerReport& r) {
     }
     if (vit_) {
         vit_->push_controller_imu(static_cast<std::uint32_t>(side), eng_ts, a, g); // as Pimax Play feeds its LED engine
+        if (second) {
+            float a2[3], g2[3];
+            for (int k = 0; k < 3; k++) {
+                a2[k] = static_cast<float>(samples.accel[1][k] / 1024.0 * G);
+                g2[k] = static_cast<float>(samples.gyro[1][k] * CTRL_GYRO_SCALE);
+            }
+            vit_->push_controller_imu(static_cast<std::uint32_t>(side), eng_ts2, a2, g2);
+        }
     }
     static std::int64_t ts_logged_ns[2] = {0, 0}; // at most one line a second per hand if the source flaps
     if (ts_mode_changed && now - ts_logged_ns[side] >= 1'000'000'000) {

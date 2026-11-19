@@ -62,6 +62,32 @@ TEST(saccade_lands_without_lag_after_the_snap) {
     CHECK(deg(std::fabs(y[0] - c[0])) < 0.1);
 }
 
+TEST(a_sample_without_gaze_keeps_the_smoothing) {
+    const FilterParams p;
+    OneEuro f;
+    // fixation at 0, then every other sample has no gaze and the gazed ones carry noise of +-1 degree
+    for (int i = 0; i < 120; i++) {
+        f.filter(p, i / 120.0, {0.0, 0.0});
+    }
+    double worst = 0.0;
+    for (int i = 120; i < 240; i++) {
+        Sample s;
+        s.host_ts_ns = static_cast<std::int64_t>(i * (1e9 / 120.0));
+        if (i % 2 == 0) {
+            const double t = (i % 4 == 0 ? 1.0 : -1.0) * std::tan(rad(1.0));
+            const auto d = dir_of(t, 0.0);
+            s.gaze = Gaze{{0.0F, 0.0F, 0.0F}, {float(d[0]), float(d[1]), float(d[2])}, 3};
+        }
+        filter_sample(p, f, s);
+        if (s.gaze) {
+            const auto t = tangent_of({double{s.gaze->direction[0]}, double{s.gaze->direction[1]},
+                                       double{s.gaze->direction[2]}});
+            worst = std::max(worst, deg(std::fabs(std::atan(t->u))));
+        }
+    }
+    CHECK(worst < 0.3); // restarted at every gazed sample it would be the full 1 degree
+}
+
 TEST(gaps_and_missing_gaze_restart_the_filter) {
     const FilterParams p;
     OneEuro f;

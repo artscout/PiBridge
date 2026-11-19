@@ -101,8 +101,14 @@ pibridge-ctrltrack is not started. Everything below is from the Frida traces of 
 - Axes: the LED engine works in (x, z, -y) of the SLAM world (world rotation Rx(-90 deg), body unchanged): derived
   from one head pose that pass 1 and pass 3 caught in both forms. winbridge turns the head pose into it and the
   controller poses back.
-- Only one IMU sample per report is passed on (the first non-zero of the two at bytes 16 and 30); how often a report
-  holds two is not measured.
+- Both IMU samples of a report go to the engine (`hmd::controller_imu`), as Pimax Play does (twice the calls of one
+  per report). Measured on two captures (`ctrl_buttons_hub2`, `p82`): reports come at ~250 Hz per hand; one
+  controller samples every ~1978 us with two samples in ~98 % of its reports, the other every 2500 us with one or two;
+  s0 (bytes 16) is the earlier sample, s1 (bytes 30) one period later (s1 continues into the next report's s0), and
+  `ts_us` is s0's time, stepping by samples x period. So the second sample is sent at the first's time plus this
+  hand's period, learnt from its reports (`hmd::ControllerSamplePeriod`, the median of the last 15 steps per sample).
+  Until 2026-11-19 only the first sample went in: half the engine's IMU rate (its log: `incomplete IMU interval`).
+  `PIBRIDGE_CTRL_IMU_BOTH=0` gives the old behaviour back for an A/B.
 - Path: pibridge-headtrack hands the LED frames and every controller IMU report to the extension of
   `libpibridge_vit_winbridge.so` (`pibridge_winbridge_ext.h`, found by dlopen of the VIT library), which sends them over the same pipelined socket. The reply carries the controller pose
   and the head pose the engine used; pibridge-headtrack takes the controller relative to the head and puts it under its own
@@ -110,6 +116,17 @@ pibridge-ctrltrack is not started. Everything below is from the Frida traces of 
   (engine velocity, controller gyro), turns the body into the aim frame (rot_x(-52 deg), as pimax-ctrltrack) and the
   grip. Not seen by the engine: position held and orientation turned by the gyro for
   `PIMAX_CTRL_TRACK_LOST_S` (4 s), then the rest pose.
+- Threads in winbridge: every LED engine call runs on one worker thread of its own (still a single thread for that
+  DLL, in arrival order), so a slow controller engine can no longer hold up the head's IMU and camera messages in the
+  socket loop (issue #3: the client's queue overflowed, frames were dropped and the engine lost the controllers). The
+  socket loop answers at once: an LED frame set goes into a latest-wins mailbox (a set the worker has not started
+  when the next one arrives is replaced, counted), a controller IMU sample into a bounded queue (oldest dropped when
+  full, counted), and `MSG_CPOSE` carries the latest pose the worker has for that hand (its own timestamp; the client
+  keeps the last tracked pose and judges its age anyway). `PIBRIDGE_WB_CTRL_THREAD=0` brings back the inline calls.
+  Every 5 s winbridge.log has `timing 5 s, socket loop:` (`HeadsetPutCameraImage`, `HeadsetPutHmdImuData`) and
+  `timing 5 s, controller worker:` (`ControllerPutCameraImage`, `ControllerPutControllerImuData`: count, mean, max ms;
+  IMU queue depth and drops, replaced LED frame sets). With synthetic black frames under Wine 10
+  `ControllerPutCameraImage` returns in ~0.03 ms (it hands the frame to the engine's own tracking thread).
 - Offline (`ctrl_prep` + `vit-replay --ctrl` on a 30 s take with LED frames and both controllers' IMU, no head data):
   the engine tracks both hands, poses for about 80 % (left) and 76 % (right) of the IMU samples, nothing dropped;
   head-to-controller distance within 5 cm of the take's own tracker (a constant origin offset).

@@ -241,7 +241,9 @@ struct EyeCal {
 struct Combine {
     /// Fixation distance the rays are followed to, metres.
     double depth_m = 1.5;
-    /// Larger disagreement between the eyes means one of them is wrong (degrees).
+    /// Larger disagreement between the eyes means one of them is wrong (degrees). The eyes' natural convergence on a
+    /// fixation between NEAREST_FIXATION_M and infinity is not a disagreement: only a vertical difference, rays that
+    /// diverge, or more convergence than the nearest fixation count.
     double max_disagree_deg = 4.0;
     /// Samples an eye is ignored after it was invalid.
     std::uint32_t holdoff = 2;
@@ -249,10 +251,22 @@ struct Combine {
     friend bool operator==(const Combine&, const Combine&) = default;
 };
 
-/// Running state of the combination (blink hold-off).
+/// The nearest fixation the eyes' convergence is accepted for (metres).
+inline constexpr double NEAREST_FIXATION_M = 0.2;
+
+/// Disagreement of two eye rays in degrees, natural convergence excluded (see Combine::max_disagree_deg): the
+/// vertical difference and the horizontal convergence outside [0, the convergence at NEAREST_FIXATION_M], combined.
+/// The eye with the smaller origin x is the left one.
+double eye_disagreement_deg(const Vec3& origin_a, const Vec3& dir_a, const Vec3& origin_b, const Vec3& dir_b);
+
+/// Running state of the combination (blink hold-off, fixation depth).
 struct CombineState {
     std::array<std::uint32_t, 2> invalid_run_end{0, 0};
     std::array<std::uint32_t, 2> since_valid{0, 0};
+    /// Smoothed convergence of the two eyes (degrees) while both are used; negative = not known yet. A lone eye (the
+    /// other one blinked or was dropped) is followed to the fixation depth this gives instead of Combine::depth_m,
+    /// so looking at something near does not make the gaze jump by half the convergence.
+    double vergence_deg = -1.0;
 };
 
 struct LoadedCalibration;

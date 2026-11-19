@@ -3,6 +3,8 @@
 // Linux client (libpibridge_vit_winbridge.so in Monado) over TCP localhost (proto.h).
 // Build: x86_64-w64-mingw32-g++ -O2 -static server.cpp -lws2_32 -o winbridge.exe
 // Run: WINEDEBUG=-all wine winbridge.exe [port]
+// Threads: the socket loop makes the head SLAM calls; the controller LED engine's calls run on a worker thread of their
+// own (ctrl_worker; PIBRIDGE_WB_CTRL_THREAD=0 = inline), so a slow controller engine never holds up the head.
 //
 // Everything as in pi_server (frida pass1-3, re-dll/README.md):
 //   head:        HeadsetInitialImpl -> SetTrackingMode(1) -> SetDeviceEnable(1); PutCameraImage(4 frames),
@@ -88,8 +90,10 @@ static void to_led(const float v[3], float o[3]) { o[0] = v[0]; o[1] = v[2]; o[2
 static void from_led(const float v[3], float o[3]) { o[0] = v[0]; o[1] = -v[2]; o[2] = v[1]; }
 
 // The head pose whose timestamp is nearest `ts` from recent history (nearest sample; IMU ~490 Hz so the residual is
-// well under 1 ms). Falls back to the latest pose while the ring is still filling.
-static const float* head_at(uint64_t ts) {
+// well under 1 ms), copied into `out`. Falls back to the latest pose while the ring is still filling. The head path
+// (main thread) writes the ring, the controller worker reads it: both under g_headLock.
+static SRWLOCK g_headLock = SRWLOCK_INIT;
+static void head_at(uint64_t ts, float out[13]) {
     const float* best = g_head;
     uint64_t bestTs = g_headTs, bestd = UINT64_MAX;
     for (int i = 0; i < kHeadRing; ++i) {
@@ -98,8 +102,26 @@ static const float* head_at(uint64_t ts) {
         if (d < bestd) { bestd = d; best = g_headRing[i]; bestTs = g_headRingTs[i]; }
     }
     g_headUsedTs = bestTs;
-    return best;
+    memcpy(out, best, 13 * sizeof(float));
 }
+
+// ---- timing of the engine calls (logged every 5 s per thread: which call makes the bridge slow) ----
+static double now_ms() {
+    static LARGE_INTEGER f = [] { LARGE_INTEGER x; QueryPerformanceFrequency(&x); return x; }();
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    return (double)c.QuadPart * 1000.0 / (double)f.QuadPart;
+}
+struct CallStat {
+    const char* name;
+    long n = 0;
+    double sum = 0, max = 0;
+    void add(double ms) { ++n; sum += ms; if (ms > max) max = ms; }
+    void print_and_reset() {
+        if (n) printf(" %s n=%ld mean %.2f max %.2f ms;", name, n, sum / n, max);
+        n = 0; sum = max = 0;
+    }
+};
 
 static bool recv_all(SOCKET s, void* buf, int n) {
     char* p = (char*)buf;
@@ -271,12 +293,230 @@ static void init_ctrl() {
     if (!g_ctrlOn) fprintf(stderr, "controllers off: no models in %s\\H1\n", g_slam);
 }
 
+// ---- the controller engine on its own thread ----
+// The LED engine's calls (ControllerPutCameraImage, ControllerPutControllerImuData) can take tens of milliseconds while
+// its matching search is slow. Made inline in the socket loop, they held up the head's IMU and camera messages behind
+// them, the client's queue overflowed (dropped messages and frame sets), the engine missed frames, lost the
+// controllers and searched even longer. Now one worker thread makes every controller engine call (still one thread for
+// that DLL, in arrival order, as before); the socket loop only hands the data over and answers at once:
+//   - LED frames: a latest-wins mailbox (3 buffers, no copies); a frame the worker could not start before the next
+//     one arrived is replaced (counted), never queued;
+//   - controller IMU: a bounded queue (the oldest dropped when full); MSG_CPOSE carries the latest pose the worker got
+//     for that hand (the client keeps the last tracked pose and judges its age by its timestamp anyway).
+// PIBRIDGE_WB_CTRL_THREAD=0: the old inline calls (A/B).
+struct CtrlImuItem { uint32_t hand; uint64_t ts; float accel[3], gyro[3]; };
+static bool g_ctrlThread = true;
+static SRWLOCK g_ctrlLock = SRWLOCK_INIT;
+static CONDITION_VARIABLE g_ctrlCv = CONDITION_VARIABLE_INIT;
+static const int kCtrlQueue = 4096;  // ~2 s of both hands' IMU
+static CtrlImuItem g_ctrlQ[kCtrlQueue];
+static int g_ctrlQHead = 0, g_ctrlQCount = 0, g_ctrlQMax = 0;
+static long g_ctrlQDropped = 0, g_ledReplaced = 0;
+static uint8_t g_ledBuf[3][4][640 * 480];
+static LedHeader g_ledHdr[3];
+static int g_ledFill = 0, g_ledWork = 1, g_ledFree = 2, g_ledPending = -1;  // buffer roles (see led_publish/led_take)
+static CtrlPosePayload g_ctrlLatest[2];  // the latest pose per hand (tracked = 0 until there is one)
+static uint8_t g_black[640 * 480];
+static float g_ctrlScratch[2][64];
+
+// One controller IMU sample through the engine; the pose (if the engine gave one this time) into p, p.tracked set.
+static void ctrl_imu_process(const CtrlImuItem& in, CtrlPosePayload& p, CallStat& st) {
+    p = CtrlPosePayload{};
+    p.hand = in.hand;
+    p.ts = in.ts;
+    memcpy(p.dev_from_imu, g_devFromImu[in.hand], sizeof(p.dev_from_imu));
+    ImuSample s{};
+    s.ts = in.ts;
+    memcpy(s.accel, in.accel, sizeof(s.accel));
+    memcpy(s.gyro, in.gyro, sizeof(s.gyro));
+    float out[64] = {0};
+    const double t0 = now_ms();
+    const int imuRet = g_ctrlImu((int)in.hand, &s, out, g_ctrlScratch[in.hand]);
+    st.add(now_ms() - t0);
+    // DIAG (pibridge): ControllerPutControllerImuData's return + the out[] tail past the pose (we use
+    // out[0..12]); one of these may be the per-hand matched-LED count or a tracking confidence.
+    static long imuLogN[2] = {0, 0};
+    if (++imuLogN[in.hand] % 250 == 0) {
+        printf("ctrl %u: ControllerPutControllerImuData=%d, out[13..26] %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f\n",
+               in.hand, imuRet, out[13], out[14], out[15], out[16], out[17], out[18], out[19], out[20],
+               out[21], out[22], out[23], out[24], out[25], out[26]);
+    }
+    if (out[4] != 0.0f || out[5] != 0.0f || out[6] != 0.0f) {
+        // from LED engine axes into the SLAM world: q = Q^-1 * q_led, vectors (x, -z, y)
+        const float qinv[4] = {-kQ[0], -kQ[1], -kQ[2], kQ[3]};
+        qmul(qinv, out, p.pose);
+        from_led(out + 4, p.pose + 4);
+        from_led(out + 7, p.pose + 7);
+        from_led(out + 10, p.pose + 10);
+        p.tracked = 1;
+        // head pose from which the LED engine computed the controller (without head data: identity)
+        AcquireSRWLockShared(&g_headLock);
+        if (g_headSeen) {
+            memcpy(p.head, g_head, 7 * sizeof(float));
+        } else {
+            const float id[7] = {0, 0, 0, 1, 0, 0, 0};
+            memcpy(p.head, id, sizeof(id));
+        }
+        ReleaseSRWLockShared(&g_headLock);
+    }
+}
+
+// One set of LED frames through the engine, projected with the head pose at the frames' capture time.
+static void led_process(const LedHeader& lh, uint8_t (*leds)[640 * 480], CallStat& st) {
+    const uint32_t n = lh.ncam > 4 ? 4 : lh.ncam;
+    LedFrame lf[4];
+    for (int i = 0; i < 4; ++i)
+        lf[i] = LedFrame{lh.ts, lh.shutter_ns ? lh.shutter_ns : 40000u, (uint32_t)i, lh.w, lh.h, lh.w, 0,
+                         (uint32_t)i < n ? leds[i] : g_black};
+    // head pose at the frame time (latest from SLAM) in LED engine axes; without head data -- identity
+    // (controller poses are then relative to the headset)
+    HeadPoseForLed hp{};
+    hp.q[3] = 1.0f;
+    float head[13];
+    bool seen;
+    uint64_t usedTs;
+    AcquireSRWLockShared(&g_headLock);
+    if (g_ledHeadAlign) {
+        head_at(lh.ts, head);
+    } else {
+        memcpy(head, g_head, sizeof(head));
+    }
+    seen = g_headSeen;
+    usedTs = g_ledHeadAlign ? g_headUsedTs : g_headTs;
+    ReleaseSRWLockShared(&g_headLock);
+    if (seen) {
+        qmul(kQ, head, hp.q);
+        to_led(head + 4, hp.p);
+    }
+    const double t0 = now_ms();
+    const int camRet = g_ctrlCam(&lf[0], &lf[1], &lf[2], &lf[3], &hp, nullptr);
+    st.add(now_ms() - t0);
+    // DIAG (pibridge): ControllerPutCameraImage's return -- the candidate for how many LED points the
+    // cameras matched this frame. Logged ~1/s so we can see it drop on fast swings / bad angles.
+    static long ledFrameN = 0;
+    if (++ledFrameN % 90 == 0) {
+        // Head pose fed into the LED projection: how stale it is vs the LED frame (during a head turn
+        // this delta times the head's angular velocity is a controller error that follows head motion),
+        // the raw SLAM head pose, and the LED-axis pose actually passed to the engine.
+        const double stale_ms = (double)(int64_t)(lh.ts - usedTs) / 1e6;
+        printf("LED optical: ControllerPutCameraImage=%d (frame %ld); head stale %.2f ms (align=%d); "
+               "slam q[%.4f %.4f %.4f %.4f] p[%.3f %.3f %.3f]; led q[%.4f %.4f %.4f %.4f] p[%.3f %.3f %.3f]\n",
+               camRet, ledFrameN, stale_ms, g_ledHeadAlign ? 1 : 0, head[0], head[1], head[2], head[3],
+               head[4], head[5], head[6], hp.q[0], hp.q[1], hp.q[2], hp.q[3], hp.p[0], hp.p[1], hp.p[2]);
+    }
+}
+
+// The socket loop finished receiving LED frames into g_ledBuf[g_ledFill]: hand them to the worker. A frame set the
+// worker has not started yet is replaced (its buffer becomes the next fill buffer).
+static void led_publish() {
+    AcquireSRWLockExclusive(&g_ctrlLock);
+    if (g_ledPending >= 0) {
+        const int old = g_ledPending;
+        g_ledPending = g_ledFill;
+        g_ledFill = old;
+        ++g_ledReplaced;
+    } else {
+        g_ledPending = g_ledFill;
+        g_ledFill = g_ledFree;
+        g_ledFree = -1;
+    }
+    ReleaseSRWLockExclusive(&g_ctrlLock);
+    WakeConditionVariable(&g_ctrlCv);
+}
+
+static void ctrl_imu_push(const CtrlImuItem& it) {
+    AcquireSRWLockExclusive(&g_ctrlLock);
+    if (g_ctrlQCount == kCtrlQueue) {  // the worker is far behind: the oldest sample goes
+        g_ctrlQHead = (g_ctrlQHead + 1) % kCtrlQueue;
+        --g_ctrlQCount;
+        ++g_ctrlQDropped;
+    }
+    g_ctrlQ[(g_ctrlQHead + g_ctrlQCount) % kCtrlQueue] = it;
+    ++g_ctrlQCount;
+    if (g_ctrlQCount > g_ctrlQMax) g_ctrlQMax = g_ctrlQCount;
+    ReleaseSRWLockExclusive(&g_ctrlLock);
+    WakeConditionVariable(&g_ctrlCv);
+}
+
+// A new client: no queued samples, no pending frames, no poses from the last connection.
+static void ctrl_reset() {
+    AcquireSRWLockExclusive(&g_ctrlLock);
+    g_ctrlQHead = g_ctrlQCount = 0;
+    if (g_ledPending >= 0) { g_ledFree = g_ledPending; g_ledPending = -1; }
+    g_ctrlLatest[0] = CtrlPosePayload{};
+    g_ctrlLatest[1] = CtrlPosePayload{};
+    ReleaseSRWLockExclusive(&g_ctrlLock);
+}
+
+static DWORD WINAPI ctrl_worker(void*) {
+    CallStat camSt{"ControllerPutCameraImage"}, imuSt{"ControllerPutControllerImuData"};
+    double lastPrint = now_ms();
+    CtrlImuItem batch[256];
+    for (;;) {
+        int n = 0;
+        bool led = false;
+        AcquireSRWLockExclusive(&g_ctrlLock);
+        while (g_ctrlQCount == 0 && g_ledPending < 0) {
+            SleepConditionVariableSRW(&g_ctrlCv, &g_ctrlLock, 1000, 0);
+            if (now_ms() - lastPrint >= 5000) break;
+        }
+        // the IMU samples queued so far (in arrival order), then the newest LED frame set: the samples up to the
+        // frames' time are in the engine before the frames, as when they came in one by one
+        while (g_ctrlQCount > 0 && n < 256) {
+            batch[n++] = g_ctrlQ[g_ctrlQHead];
+            g_ctrlQHead = (g_ctrlQHead + 1) % kCtrlQueue;
+            --g_ctrlQCount;
+        }
+        if (g_ctrlQCount == 0 && g_ledPending >= 0) {
+            g_ledFree = g_ledWork;
+            g_ledWork = g_ledPending;
+            g_ledPending = -1;
+            led = true;
+        }
+        ReleaseSRWLockExclusive(&g_ctrlLock);
+        for (int i = 0; i < n; ++i) {
+            CtrlPosePayload p;
+            ctrl_imu_process(batch[i], p, imuSt);
+            if (p.tracked) {
+                AcquireSRWLockExclusive(&g_ctrlLock);
+                g_ctrlLatest[p.hand] = p;
+                ReleaseSRWLockExclusive(&g_ctrlLock);
+            }
+        }
+        if (led) led_process(g_ledHdr[g_ledWork], g_ledBuf[g_ledWork], camSt);
+        if (now_ms() - lastPrint >= 5000) {
+            AcquireSRWLockExclusive(&g_ctrlLock);
+            const int qmax = g_ctrlQMax;
+            const long dropped = g_ctrlQDropped, replaced = g_ledReplaced;
+            g_ctrlQMax = 0;
+            g_ctrlQDropped = g_ledReplaced = 0;
+            ReleaseSRWLockExclusive(&g_ctrlLock);
+            printf("timing 5 s, controller worker:");
+            camSt.print_and_reset();
+            imuSt.print_and_reset();
+            printf(" IMU queue max %d, dropped %ld; LED frame sets replaced %ld\n", qmax, dropped, replaced);
+            lastPrint = now_ms();
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char** argv) {
     int port = (argc > 1) ? atoi(argv[1]) : WINBRIDGE_PORT;
     setvbuf(stdout, nullptr, _IONBF, 0);
     if (const char* a = getenv("PIBRIDGE_LED_HEAD_ALIGN")) g_ledHeadAlign = (atoi(a) != 0);
+    if (const char* a = getenv("PIBRIDGE_WB_CTRL_THREAD")) g_ctrlThread = (atoi(a) != 0);
     if (!find_kit() || !init_slam()) return 1;
     init_ctrl();
+    if (g_ctrlOn && g_ctrlThread) {
+        HANDLE th = CreateThread(nullptr, 0, ctrl_worker, nullptr, 0, nullptr);
+        if (th) {
+            CloseHandle(th);
+        } else {
+            g_ctrlThread = false;
+        }
+    }
+    printf("controller engine: %s\n", !g_ctrlOn ? "off" : g_ctrlThread ? "own thread" : "inline (PIBRIDGE_WB_CTRL_THREAD=0)");
 
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
@@ -292,16 +532,31 @@ int main(int argc, char** argv) {
     }
     printf("winbridge listening on 127.0.0.1:%d\n", port);
 
-    static uint8_t frames[4][640 * 480], leds[4][640 * 480], black[640 * 480];
-    static float ctrlScratch[2][64];
+    static uint8_t frames[4][640 * 480];
+    uint8_t (&black)[640 * 480] = g_black;
+    CallStat slamCamSt{"HeadsetPutCameraImage"}, slamImuSt{"HeadsetPutHmdImuData"};
+    CallStat inlineCamSt{"ControllerPutCameraImage"}, inlineImuSt{"ControllerPutControllerImuData"};
     for (;;) {
         SOCKET c = accept(ls, nullptr, nullptr);
         if (c == INVALID_SOCKET) continue;
         setsockopt(c, IPPROTO_TCP, TCP_NODELAY, (const char*)&one, sizeof(one));
         printf("client connected\n");
+        ctrl_reset();
+        double lastPrint = now_ms();
         long imuN = 0, camN = 0, ledN = 0, cimuN[2] = {0, 0}, ctrackN[2] = {0, 0};
         MsgHeader h;
         while (recv_all(c, &h, sizeof(h))) {
+            if (now_ms() - lastPrint >= 5000) {
+                printf("timing 5 s, socket loop:");
+                slamCamSt.print_and_reset();
+                slamImuSt.print_and_reset();
+                if (!g_ctrlThread) {
+                    inlineCamSt.print_and_reset();
+                    inlineImuSt.print_and_reset();
+                }
+                printf("\n");
+                lastPrint = now_ms();
+            }
             if (h.type == MSG_IMU && h.len == sizeof(ImuPayload)) {
                 ImuPayload in;
                 if (!recv_all(c, &in, sizeof(in))) break;
@@ -310,13 +565,17 @@ int main(int argc, char** argv) {
                 memcpy(s.accel, in.accel, sizeof(s.accel));
                 memcpy(s.gyro, in.gyro, sizeof(s.gyro));
                 float out[32] = {0};
+                const double t0 = now_ms();
                 g_putImu(&s, out);
+                slamImuSt.add(now_ms() - t0);
+                AcquireSRWLockExclusive(&g_headLock);
                 memcpy(g_head, out, sizeof(g_head));
                 g_headSeen = true;
                 g_headTs = in.ts;
                 memcpy(g_headRing[g_headRingPos], out, sizeof(g_head));
                 g_headRingTs[g_headRingPos] = in.ts;
                 g_headRingPos = (g_headRingPos + 1) % kHeadRing;
+                ReleaseSRWLockExclusive(&g_headLock);
                 PosePayload p;
                 p.ts = in.ts;
                 memcpy(p.pose, out, sizeof(p.pose));
@@ -335,46 +594,26 @@ int main(int argc, char** argv) {
                 CamFrame cam[4];
                 for (int i = 0; i < 4; ++i)
                     cam[i] = CamFrame{ch.ts, ch.shutter_ns, (uint32_t)i, ch.w, ch.h, ch.w, (uint32_t)i < n ? frames[i] : black};
+                const double t0 = now_ms();
                 g_putCam(&cam[0], &cam[1], &cam[2], &cam[3], 0.019f);
+                slamCamSt.add(now_ms() - t0);
                 if (!send_msg(c, MSG_ACK, nullptr, 0)) break;
                 ++camN;
             } else if (h.type == MSG_LED && h.len >= sizeof(LedHeader)) {
-                LedHeader lh;
+                // received straight into the fill buffer of the worker's mailbox
+                LedHeader& lh = g_ledHdr[g_ledFill];
                 if (!recv_all(c, &lh, sizeof(lh))) break;
                 const uint32_t n = lh.ncam > 4 ? 4 : lh.ncam;
                 if (lh.w != 640 || lh.h != 480 || n == 0) { fprintf(stderr, "bad LED frame %ux%u x%u\n", lh.w, lh.h, lh.ncam); break; }
                 bool ok = true;
+                uint8_t (*leds)[640 * 480] = g_ledBuf[g_ledFill];
                 for (uint32_t i = 0; i < lh.ncam && ok; ++i) ok = recv_all(c, i < 4 ? leds[i] : leds[3], (int)(lh.w * lh.h));
                 if (!ok) break;
                 if (g_ctrlOn) {
-                    LedFrame lf[4];
-                    for (int i = 0; i < 4; ++i)
-                        lf[i] = LedFrame{lh.ts, lh.shutter_ns ? lh.shutter_ns : 40000u, (uint32_t)i, lh.w, lh.h, lh.w, 0,
-                                         (uint32_t)i < n ? leds[i] : black};
-                    // head pose at the frame time (latest from SLAM) in LED engine axes; without head data --
-                    // identity (controller poses are then relative to the headset)
-                    HeadPoseForLed hp{};
-                    hp.q[3] = 1.0f;
-                    const float* head = g_ledHeadAlign ? head_at(lh.ts) : g_head;
-                    if (g_headSeen) {
-                        qmul(kQ, head, hp.q);
-                        to_led(head + 4, hp.p);
-                    }
-                    const int camRet = g_ctrlCam(&lf[0], &lf[1], &lf[2], &lf[3], &hp, nullptr);
-                    // DIAG (pibridge): ControllerPutCameraImage's return -- the candidate for how many LED points the
-                    // cameras matched this frame. Logged ~1/s so we can see it drop on fast swings / bad angles.
-                    static long ledFrameN = 0;
-                    if (++ledFrameN % 90 == 0) {
-                        // Head pose fed into the LED projection: how stale it is vs the LED frame (during a head turn
-                        // this Δt times the head's angular velocity is a controller error that follows head motion),
-                        // the raw SLAM head pose, and the LED-axis pose actually passed to the engine.
-                        const uint64_t usedTs = g_ledHeadAlign ? g_headUsedTs : g_headTs;
-                        const double stale_ms = (double)(int64_t)(lh.ts - usedTs) / 1e6;
-                        printf("LED optical: ControllerPutCameraImage=%d (frame %ld); head stale %.2f ms (align=%d); "
-                               "slam q[%.4f %.4f %.4f %.4f] p[%.3f %.3f %.3f]; led q[%.4f %.4f %.4f %.4f] p[%.3f %.3f %.3f]\n",
-                               camRet, ledFrameN, stale_ms, g_ledHeadAlign ? 1 : 0, head[0], head[1], head[2], head[3],
-                               head[4], head[5], head[6], hp.q[0], hp.q[1], hp.q[2], hp.q[3], hp.p[0], hp.p[1], hp.p[2]);
-                        fflush(stdout);
+                    if (g_ctrlThread) {
+                        led_publish();
+                    } else {
+                        led_process(lh, leds, inlineCamSt);
                     }
                 }
                 if (!send_msg(c, MSG_ACK, nullptr, 0)) break;
@@ -387,38 +626,18 @@ int main(int argc, char** argv) {
                 p.ts = in.ts;
                 if (in.hand < 2) memcpy(p.dev_from_imu, g_devFromImu[in.hand], sizeof(p.dev_from_imu));
                 if (g_ctrlOn && in.hand < 2) {
-                    ImuSample s{};
-                    s.ts = in.ts;
-                    memcpy(s.accel, in.accel, sizeof(s.accel));
-                    memcpy(s.gyro, in.gyro, sizeof(s.gyro));
-                    float out[64] = {0};
-                    const int imuRet = g_ctrlImu((int)in.hand, &s, out, ctrlScratch[in.hand]);
-                    // DIAG (pibridge): ControllerPutControllerImuData's return + the out[] tail past the pose (we use
-                    // out[0..12]); one of these may be the per-hand matched-LED count or a tracking confidence.
-                    static long imuLogN[2] = {0, 0};
-                    if (++imuLogN[in.hand] % 250 == 0) {
-                        printf("ctrl %d: ControllerPutControllerImuData=%d, out[13..26] %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f\n",
-                               in.hand, imuRet, out[13], out[14], out[15], out[16], out[17], out[18], out[19], out[20],
-                               out[21], out[22], out[23], out[24], out[25], out[26]);
-                        fflush(stdout);
+                    CtrlImuItem it{in.hand, in.ts, {in.accel[0], in.accel[1], in.accel[2]},
+                                   {in.gyro[0], in.gyro[1], in.gyro[2]}};
+                    if (g_ctrlThread) {
+                        // answered with the latest pose the worker has for this hand (its own timestamp)
+                        ctrl_imu_push(it);
+                        AcquireSRWLockShared(&g_ctrlLock);
+                        if (g_ctrlLatest[in.hand].tracked) p = g_ctrlLatest[in.hand];
+                        ReleaseSRWLockShared(&g_ctrlLock);
+                    } else {
+                        ctrl_imu_process(it, p, inlineImuSt);
                     }
-                    if (out[4] != 0.0f || out[5] != 0.0f || out[6] != 0.0f) {
-                        // from LED engine axes into the SLAM world: q = Q^-1 * q_led, vectors (x, -z, y)
-                        const float qinv[4] = {-kQ[0], -kQ[1], -kQ[2], kQ[3]};
-                        qmul(qinv, out, p.pose);
-                        from_led(out + 4, p.pose + 4);
-                        from_led(out + 7, p.pose + 7);
-                        from_led(out + 10, p.pose + 10);
-                        p.tracked = 1;
-                        // head pose from which the LED engine computed the controller (without head data: identity)
-                        if (g_headSeen) {
-                            memcpy(p.head, g_head, 7 * sizeof(float));
-                        } else {
-                            const float id[7] = {0, 0, 0, 1, 0, 0, 0};
-                            memcpy(p.head, id, sizeof(id));
-                        }
-                        ++ctrackN[in.hand];
-                    }
+                    if (p.tracked) ++ctrackN[in.hand];
                     ++cimuN[in.hand];
                 }
                 if (!send_msg(c, MSG_CPOSE, &p, sizeof(p))) break;

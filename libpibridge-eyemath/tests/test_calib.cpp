@@ -235,6 +235,47 @@ TEST(disagreeing_eyes_fall_back_to_the_better_one) {
     CHECK(!s.gaze.has_value());
 }
 
+TEST(near_fixation_is_not_a_disagreement_and_a_lone_eye_keeps_its_depth) {
+    const auto cal = Calibration::identity(FrameConv{}, 0.064);
+    // a cockpit instrument 0.45 m away, a little left and down: the eyes converge by about 8 degrees
+    const Vec3 target{-0.08, -0.12, -0.45};
+    const auto dir_from = [&](Vec3 o) { return unit(add(target, scale(o, -1.0))); };
+    const auto l = dir_from(cal.eyes[0].origin_m);
+    const auto r = dir_from(cal.eyes[1].origin_m);
+    const auto want = unit(target);
+    CHECK(eye_disagreement_deg(cal.eyes[0].origin_m, l, cal.eyes[1].origin_m, r) < 0.01);
+    CombineState st;
+    for (int k = 0; k < 40; k++) {
+        auto s = sample(l, r);
+        cal.apply_sample(s, st);
+        CHECK(s.gaze.has_value() && s.gaze->eyes == 3); // both eyes used (was: one dropped above 4 degrees)
+        CHECK(angle_deg(f64v(s.gaze->direction), want) < 0.3);
+    }
+    // the right eye blinks: the left one alone, followed to the converged depth, does not jump by half the
+    // convergence (about 4 degrees at the fixed 1.5 m)
+    auto s = sample(l, std::nullopt);
+    cal.apply_sample(s, st);
+    CHECK(s.gaze.has_value() && s.gaze->eyes == 1);
+    CHECK(angle_deg(f64v(s.gaze->direction), want) < 0.3);
+}
+
+TEST(disagreement_counts_divergence_and_height_not_convergence) {
+    const Vec3 lo{-0.032, 0.0, 0.0}, ro{0.032, 0.0, 0.0};
+    // converging on 0.3 m: natural
+    CHECK(eye_disagreement_deg(lo, dir_of(0.032 / 0.3, 0.0), ro, dir_of(-0.032 / 0.3, 0.0)) < 1e-9);
+    // the same with the eyes given the other way round
+    CHECK(eye_disagreement_deg(ro, dir_of(-0.032 / 0.3, 0.0), lo, dir_of(0.032 / 0.3, 0.0)) < 1e-9);
+    // diverging by 5 degrees
+    CHECK(std::fabs(eye_disagreement_deg(lo, dir_of(std::tan(-2.5 * M_PI / 180), 0.0), ro,
+                                         dir_of(std::tan(2.5 * M_PI / 180), 0.0)) -
+                    5.0) < 0.01);
+    // 5 degrees apart vertically
+    CHECK(std::fabs(eye_disagreement_deg(lo, dir_of(0.0, 0.0), ro, dir_of(0.0, std::tan(5.0 * M_PI / 180))) - 5.0) <
+          0.01);
+    // converging on 5 cm: more than the nearest fixation allows
+    CHECK(eye_disagreement_deg(lo, dir_of(0.032 / 0.05, 0.0), ro, dir_of(-0.032 / 0.05, 0.0)) > 30.0);
+}
+
 TEST(select_follows_the_variable) {
     eyemath_test::TempDir dir("pibridge-cal");
     std::filesystem::create_directories(dir.path / ".config/omarchyvr");

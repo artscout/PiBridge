@@ -66,7 +66,8 @@ void filter_sample(const FilterParams& p, OneEuro& f, Sample& s) {
         return;
     }
     if (!s.gaze) {
-        f.reset();
+        // a sample without gaze (a frame without eyes, a blink): the state stays, so a short dropout does not throw
+        // the smoothing away; gaps longer than MAX_GAP_S restart it at the next gaze anyway
         return;
     }
     auto& g = *s.gaze;

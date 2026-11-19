@@ -749,11 +749,25 @@ std::optional<Vec3> unit(const Vec3& a) {
     return std::nullopt;
 }
 
-double angle_deg(const Vec3& a, const Vec3& b) {
-    const Vec3 c{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
-    const double s = std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
-    return detail::to_degrees(std::atan2(s, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]));
+} // namespace
+
+double eye_disagreement_deg(const Vec3& origin_a, const Vec3& dir_a, const Vec3& origin_b, const Vec3& dir_b) {
+    const bool a_left = origin_a[0] <= origin_b[0];
+    const Vec3& l = a_left ? dir_a : dir_b;
+    const Vec3& r = a_left ? dir_b : dir_a;
+    // Helmholtz angles (elevation about the interocular axis first): two eyes fixating one point have the same
+    // elevation, and their azimuths differ by the convergence alone
+    const auto yaw = [](const Vec3& d) { return detail::to_degrees(std::atan2(d[0], std::hypot(d[1], d[2]))); };
+    const auto pitch = [](const Vec3& d) { return detail::to_degrees(std::atan2(d[1], -d[2])); };
+    const Vec3 dv{origin_b[0] - origin_a[0], origin_b[1] - origin_a[1], origin_b[2] - origin_a[2]};
+    const double ipd = std::sqrt(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]);
+    const double max_vergence = detail::to_degrees(2.0 * std::atan(0.5 * ipd / NEAREST_FIXATION_M));
+    const double vergence = yaw(l) - yaw(r); // positive: the rays cross in front
+    const double excess = vergence < 0.0 ? -vergence : std::max(0.0, vergence - max_vergence);
+    return std::hypot(pitch(l) - pitch(r), excess);
 }
+
+namespace {
 
 Vec3 f64v(const Vec3f& v) { return {double{v[0]}, double{v[1]}, double{v[2]}}; }
 
@@ -764,6 +778,10 @@ struct Hit {
     double weight;
     std::size_t eye;
 };
+
+// Smoothing of the convergence per sample (~70 ms at 120 Hz) and the farthest fixation depth it gives.
+constexpr double VERGENCE_ALPHA = 0.1;
+constexpr double MAX_FIXATION_M = 100.0;
 
 } // namespace
 
@@ -809,13 +827,37 @@ void Calibration::apply_sample_with(Sample& s, CombineState& st, const std::arra
         hits.push_back({add(o, scale(*d, combine.depth_m)), w, i});
     }
     const auto mid = scale(add(eyes[0].origin_m, eyes[1].origin_m), 0.5);
+    const auto dir_of_hit = [&](const Hit& h) { return unit(add(h.point, scale(eyes[h.eye].origin_m, -1.0))); };
     if (hits.size() == 2) {
-        const auto da = unit(add(hits[0].point, scale(mid, -1.0)));
-        const auto db = unit(add(hits[1].point, scale(mid, -1.0)));
-        if (da && db && angle_deg(*da, *db) > combine.max_disagree_deg) {
+        const auto da = dir_of_hit(hits[0]);
+        const auto db = dir_of_hit(hits[1]);
+        if (da && db &&
+            eye_disagreement_deg(eyes[hits[0].eye].origin_m, *da, eyes[hits[1].eye].origin_m, *db) >
+                combine.max_disagree_deg) {
             // keep the more trustworthy eye
             const std::size_t keep = hits[0].weight >= hits[1].weight ? 0 : 1;
             hits = {hits[keep]};
+        } else if (da && db) {
+            // both eyes agree: follow their convergence (the fixation depth for a lone eye later)
+            const bool a_left = eyes[hits[0].eye].origin_m[0] <= eyes[hits[1].eye].origin_m[0];
+            const auto& l = a_left ? *da : *db;
+            const auto& r = a_left ? *db : *da;
+            const double v = detail::to_degrees(std::atan2(l[0], std::hypot(l[1], l[2])) -
+                                                std::atan2(r[0], std::hypot(r[1], r[2])));
+            const double vc = std::max(v, 0.0);
+            st.vergence_deg = st.vergence_deg < 0.0 ? vc : st.vergence_deg + VERGENCE_ALPHA * (vc - st.vergence_deg);
+        }
+    }
+    if (hits.size() == 1 && st.vergence_deg >= 0.0) {
+        // a lone eye: follow it to the fixation depth of the last convergence
+        const double half_ipd = 0.5 * std::sqrt(std::pow(eyes[1].origin_m[0] - eyes[0].origin_m[0], 2) +
+                                                std::pow(eyes[1].origin_m[1] - eyes[0].origin_m[1], 2) +
+                                                std::pow(eyes[1].origin_m[2] - eyes[0].origin_m[2], 2));
+        const double half = std::tan(detail::to_radians(st.vergence_deg) * 0.5);
+        const double depth = half > half_ipd / MAX_FIXATION_M ? std::clamp(half_ipd / half, NEAREST_FIXATION_M, MAX_FIXATION_M)
+                                                              : MAX_FIXATION_M;
+        if (const auto d = dir_of_hit(hits[0])) {
+            hits[0].point = add(eyes[hits[0].eye].origin_m, scale(*d, depth));
         }
     }
     double wsum = 0.0;

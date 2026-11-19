@@ -235,6 +235,34 @@ struct ControllerReport {
 };
 std::optional<ControllerReport> decode_controller(const Report& r);
 
+/// The IMU samples of a controller report: one or two (s0 @16, s1 @30; a slot of all zeros holds none). In time order:
+/// `ts_us` is the first sample's time, the second is one sample period later (captures: s1 continues into the next
+/// report's s0, and `ts_us` steps by samples x period).
+struct ControllerImu {
+    std::size_t n = 0;
+    std::array<std::array<std::int16_t, 3>, 2> accel{};
+    std::array<std::array<std::int16_t, 3>, 2> gyro{};
+};
+ControllerImu controller_imu(const Report& r);
+
+/// A controller's IMU sample period, learnt from its reports: `ts_us` steps by (samples in the previous report) x
+/// period. It differs between controllers (captures: ~2000 us on one, 2500 us on another), so it is measured per hand.
+/// The median of the last 15 steps per sample, so a step over a lost report does not move it.
+class ControllerSamplePeriod {
+public:
+    static constexpr double DEFAULT_US = 2000.0;
+    /// A report with `n` samples at `ts_us`; returns the period estimate (us) after it.
+    double update(std::uint32_t ts_us, std::size_t n);
+    double us() const { return period_; }
+
+private:
+    double period_ = DEFAULT_US;
+    std::uint32_t last_ts_ = 0;
+    std::size_t last_n_ = 0;
+    std::array<double, 15> recent_{};
+    std::size_t count_ = 0;
+};
+
 // ------------------------------------------------------------------------------------------------ firmware log (IF3)
 
 /// Incremental line splitter. NUL and CR are dropped; a line is flushed on LF or when the buffer is full.

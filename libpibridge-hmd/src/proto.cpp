@@ -182,6 +182,43 @@ std::optional<std::array<ImuSample, 2>> decode_imu(const Report& r) {
     return out;
 }
 
+ControllerImu controller_imu(const Report& r) {
+    ControllerImu o;
+    for (const std::size_t off : {std::size_t{16}, std::size_t{30}}) {
+        if (std::none_of(r.begin() + static_cast<std::ptrdiff_t>(off), r.begin() + static_cast<std::ptrdiff_t>(off + 12),
+                         [](std::uint8_t b) { return b != 0; })) {
+            continue;
+        }
+        for (std::size_t k = 0; k < 3; k++) {
+            o.accel[o.n][k] = be16(&r[off + 2 * k]);
+            o.gyro[o.n][k] = be16(&r[off + 6 + 2 * k]);
+        }
+        o.n++;
+    }
+    return o;
+}
+
+double ControllerSamplePeriod::update(std::uint32_t ts_us, std::size_t n) {
+    if (last_n_ > 0) {
+        const std::uint32_t step = ts_us - last_ts_;
+        const double per = static_cast<double>(step) / static_cast<double>(last_n_);
+        // plausible sample periods only (200..800 Hz)
+        if (step < 0x80000000u && per >= 1250.0 && per <= 5000.0) {
+            recent_[count_ % recent_.size()] = per;
+            ++count_;
+            const std::size_t k = std::min(count_, recent_.size());
+            std::array<double, 15> v = recent_;
+            std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(k / 2), v.begin() + static_cast<std::ptrdiff_t>(k));
+            period_ = v[k / 2];
+        }
+    }
+    if (n > 0) {
+        last_ts_ = ts_us;
+        last_n_ = n;
+    }
+    return period_;
+}
+
 // ------------------------------------------------------------------------------------------------ status
 
 std::array<std::optional<ControllerStatus>, 2> parse_status(const Report& r) {
