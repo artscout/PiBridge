@@ -107,6 +107,11 @@ private:
 /// One controller: its last HID report, its own 3DoF (the hold between engine poses), the last engine aim pose.
 struct Hand {
     std::mutex mu;
+    /// The controller IMU's time for Pimax's LED engine (on_controller): this hand's own device-clock mapping (used when
+    /// the report's ts_us is not on the headset IMU's clock), the last time sent, and the source last logged.
+    ImuTime dev_time;
+    std::int64_t eng_ts_ns = 0;
+    int eng_ts_mode = -1;
     std::optional<hmd::ControllerReport> report;
     std::int64_t report_ns = 0;
     Orientation imu; // the controller IMU in its raw axes (only its changes are used)
@@ -186,6 +191,7 @@ private:
     void to_world(hmd::pose_shm::Device& d, bool position_valid, std::int64_t now_ns);
     std::optional<hmd::pose_shm::Publisher> pub_;
     ImuTime time_;
+    bool ctrl_dev_ts_ = true; // PIBRIDGE_CTRL_IMU_TS=host: the controller IMU stamped at arrival, as before
     std::mutex imu_mu_;
     Orientation orient_;
     std::int64_t last_imu_ns_ = 0;

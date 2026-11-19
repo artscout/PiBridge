@@ -19,6 +19,9 @@ session (START VR on the Dashboard; the settings are on the Tracking page, [TRAC
   - `pimax` (default): Pimax Play's engine under Wine (`libpibridge_vit_winbridge.so`, [WINBRIDGE.md](WINBRIDGE.md)).
     The head pose is taken as it is (zeroed at the start); without a pose for 350 ms the 3DoF orientation at the last
     position. Controllers from the LED engine through winbridge's extension, held by their own gyro for up to 4 s.
+    Their IMU samples carry the report's device timestamp on the head IMU's clock, as in Pimax Play
+    (`PIBRIDGE_CTRL_IMU_TS=host`: the arrival time, as before; [WINBRIDGE.md](WINBRIDGE.md)). pibridge-ctrltrack is
+    not used with this engine.
   - `basalt`: Basalt with libpibridge-cam's output layer (`headpose::HeadTracker`, mid-exposure frame times, reset when
     the supervisor asks); controllers from `pibridge-ctrltrack`'s pose file fused with their IMU (`libpibridge-ctrl`).
 - **Auto-exposure** (`PIMAX_CAM_AE`: unset/0 off, `dry` compute only, `1` send): the same controller as before

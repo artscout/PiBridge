@@ -51,8 +51,9 @@ cp "$W/ProgramData/Pimax/slam/"device_calibration_*.xml "$K/slam/"
 cp -r "$W/ProgramData/Pimax/slam/H1" "$K/slam/"
 ```
 
-Without `H1/` the head still uses Pimax's engine and the controllers stay with pimax-ctrltrack. The Tracking page
-says what is missing. These files are Pimax's: personal use, they stay on this computer and never go into a
+Without `H1/` the head still uses Pimax's engine, but the controllers have no optical tracking: `pibridge-ctrltrack`'s
+poses are used only with the Basalt head engine (pibridge-headtrack has its fuser only there), so Pimax head tracking
+with pibridge-ctrltrack controllers is not a working combination. The Tracking page says what is missing. These files are Pimax's: personal use, they stay on this computer and never go into a
 repository (`.gitignore` keeps `windll/` and `*.exe` out).
 
 The app looks for `winbridge.exe` and the library in `$XDG_DATA_HOME/pibridge/winbridge/`, then in the source tree
@@ -88,9 +89,20 @@ pibridge-ctrltrack is not started. Everything below is from the Frida traces of 
 - IMU: every controller report (500 Hz per hand) to `ControllerPutControllerImuData(hand, {u64 ts; accel[3];
   gyro[3]}, out, scratch)` in the controller's raw IMU axes (m/s^2, rad/s; the driver's scales 1024 LSB/g and
   8.2 LSB/(deg/s), see below); the pose comes back in `out` (quaternion, position, angular and linear velocity).
+- IMU time: `ts` is the report's device timestamp (`ts_us`, le32 at byte 8), as Pimax Play passes it: in pass 5 the
+  head IMU, the controller IMU and the camera frames are on one clock (the headset's, us resolution, the same drift
+  against QPC; controller steps are multiples of the ~1978 us sample period). pibridge-headtrack puts `ts_us` through
+  the head IMU's clock mapping, the one the LED frames use; if that does not land within 100 ms of the arrival (the
+  controller's clock is not the headset's after all) it uses a least-delay mapping of the hand's own, and failing that
+  the arrival time. Its log says which: "left controller IMU time for the engine: ...". Until 2026-11-19 the arrival
+  time was always used, which adds the radio/USB delay and its jitter to every sample;
+  `PIBRIDGE_CTRL_IMU_TS=host` (Advanced > Extra environment) gives that back for an A/B. Not yet checked live which
+  mapping a real session picks, nor whether it cures controllers that stick after some minutes (issue #3).
 - Axes: the LED engine works in (x, z, -y) of the SLAM world (world rotation Rx(-90 deg), body unchanged): derived
   from one head pose that pass 1 and pass 3 caught in both forms. winbridge turns the head pose into it and the
   controller poses back.
+- Only one IMU sample per report is passed on (the first non-zero of the two at bytes 16 and 30); how often a report
+  holds two is not measured.
 - Path: pibridge-headtrack hands the LED frames and every controller IMU report to the extension of
   `libpibridge_vit_winbridge.so` (`pibridge_winbridge_ext.h`, found by dlopen of the VIT library), which sends them over the same pipelined socket. The reply carries the controller pose
   and the head pose the engine used; pibridge-headtrack takes the controller relative to the head and puts it under its own

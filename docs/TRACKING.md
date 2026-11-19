@@ -69,7 +69,7 @@ on, so only the off value is passed (as omarchyvr's launcher passes only the fla
 | Mode | Head tracking by | `tracking_mode` | **lighthouse**, inside-out | (which setup the Dashboard offers) | |
 | Session | Refresh rate | `refresh_hz` (shared) | 72, **90** | `--fps`, `PIMAX_FPS` | `pimax_hmd.c:81` (driver default 72), `crystal-6dof.sh:23` (90) |
 | Head | 6DoF head tracking | `io_slam` | **on**, off | needed for inside-out (START VR says so when it is off) | `pimax_camera.c:158`, `t_tracker_slam.cpp:87-88` |
-| Head | Head tracking engine | `io_slam_engine` | basalt, **pimax** | basalt: `--engine basalt --vit <libbasalt.so> --slam-config <PiBridge's toml>`; pimax: `--engine pimax --vit libpibridge_vit_winbridge.so --cams 0,1,2,3`, `PIBRIDGE_VIT_POSE_RATE=imu`, controllers by Pimax's LED engine (no pibridge-ctrltrack); the session runs `wine winbridge.exe` ([WINBRIDGE.md](WINBRIDGE.md)) | Pimax Play's `pimax_slam.pi.dll`, `LedObjectPoseEstimator.dll` |
+| Head | Head tracking engine | `io_slam_engine` | basalt, **pimax** | basalt: `--engine basalt --vit <libbasalt.so> --slam-config <PiBridge's toml>`; pimax: `--engine pimax --vit libpibridge_vit_winbridge.so --cams 0,1,2,3`, `PIBRIDGE_VIT_POSE_RATE=imu`, controllers by Pimax's LED engine (pibridge-ctrltrack is not used with this engine: without the controllers' LED models in the kit they have no optical tracking); the session runs `wine winbridge.exe` ([WINBRIDGE.md](WINBRIDGE.md)) | Pimax Play's `pimax_slam.pi.dll`, `LedObjectPoseEstimator.dll` |
 | Head | Head tracking cameras | `io_slam_cams` | **2** (lower pair 0, 1), 4 (also the upper side pair 2, 3) | Basalt: `--cams 0,1,2,3` and a four-camera calibration in PiBridge's Basalt config (below), else `--cams 0,1`. 2 until a live take decides | `pimax_camera.c` `PIMAX_SLAM_CAMS`; ROADMAP 1b |
 | Head | Detection grid | `io_slam_grid` | **30**, 40, 50 px | PiBridge's Basalt config: `config.optical_flow_detection_grid_size` | research doc, study 2 (recommendation 3) and study 3 |
 | Head | Accelerometer bias | `io_slam_accel_bias` | **factory**, off | PiBridge's Basalt config: `calib_accel_bias = [aBias, 0 x 6]` | research doc "What PiBridge should implement"; pimax-cam `slam.rs` `factory_accel_bias` |
@@ -123,7 +123,8 @@ Fixed, always passed (from `crystal-6dof.sh` lines 22-29): `PIMAX_LOG=info`, `PI
 Read but deliberately not offered (test aids or A/B switches in the sources): `PIMAX_SLAM_CAM_OFFSET_US`,
 `PIMAX_SLAM_CAMS`, `PIMAX_SLAM_STILL_REZERO`, `PIMAX_SLAM_FUSE`, `PIMAX_SLAM_TAU_MS`, `PIMAX_SLAM_TAU_REST_MS`,
 `PIMAX_SLAM_FREEZE`, `PIMAX_SLAM_RESNAP`, `PIMAX_CAM_AE_TARGET` and the other `PIMAX_CAM_AE_*` tuning, the
-`PIMAX_CTRL_TRACK_*` fuser tuning, `PIMAX_CTRL_INHAND`, the hand-tracking `PIMAX_HT_*`, `PIMAX_HANDS`. Any of them
+`PIMAX_CTRL_TRACK_*` fuser tuning, `PIMAX_CTRL_INHAND`, the hand-tracking `PIMAX_HT_*`, `PIMAX_HANDS`, `PIBRIDGE_CTRL_IMU_TS` (`host` = the controller
+IMU stamped at arrival for Pimax's LED engine instead of its device timestamp, [WINBRIDGE.md](WINBRIDGE.md)). Any of them
 can still be set under Advanced > Extra environment.
 
 ## The head output's own defaults (libpibridge-cam)

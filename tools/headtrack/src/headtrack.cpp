@@ -12,6 +12,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <atomic>
 #include <cstdio>
@@ -223,6 +224,9 @@ Daemon::Daemon(Options o, std::function<void(std::string_view)> say) : o_(std::m
     if (const char* p = std::getenv("PIMAX_CTRL_PREDICT_MS"); p != nullptr && *p != '\0') {
         const double ms = std::strtod(p, nullptr);
         ctrl_predict_s_ = std::isnan(ms) ? 0.025 : std::clamp(ms, 0.0, 50.0) * 1e-3;
+    }
+    if (const char* t = std::getenv("PIBRIDGE_CTRL_IMU_TS"); t != nullptr && std::string_view(t) == "host") {
+        ctrl_dev_ts_ = false;
     }
 }
 
@@ -703,9 +707,41 @@ void Daemon::on_controller(const hmd::ControllerReport& r) {
     if (side == 1) {
         right_menu_.store((r.buttons & hmd::BTN_APP_MENU) != 0);
     }
+    // The sample time for Pimax's LED engine. Pimax Play hands the engine the report's device timestamp, on the same
+    // clock as the head IMU and the camera frames (Windows pass 5: all three at us resolution with one drift); the
+    // arrival time adds the radio/USB delay and its jitter to every sample. 1 = ts_us on the head IMU's clock mapping
+    // (exactly the LED frames' timeline), 2 = ts_us on this hand's own least-delay mapping (ts_us turned out not to be
+    // on the headset's clock), 0 = arrival time (PIBRIDGE_CTRL_IMU_TS=host, or neither mapping lands near now).
+    std::int64_t eng_ts = now;
+    int ts_mode = 0;
+    double ts_lag_ms = 0.0;
+    bool ts_mode_changed = false;
     {
         std::lock_guard l(hands_[side].mu);
         Hand& hd = hands_[side];
+        if (ctrl_dev_ts_) {
+            constexpr std::int64_t NEAR_NS = 100'000'000;
+            const std::int64_t own = hd.dev_time.map(r.ts_us, now); // always fed, so its offset is ready when needed
+            const auto ref = time_.ref();
+            const std::int64_t shared =
+                ref.valid != 0 ? static_cast<std::int64_t>(cam::imu_dev_to_mono_ns(r.ts_us, ref)) : 0;
+            if (ref.valid != 0 && std::llabs(now - shared) < NEAR_NS) {
+                eng_ts = shared;
+                ts_mode = 1;
+            } else if (std::llabs(now - own) < NEAR_NS) {
+                eng_ts = own;
+                ts_mode = 2;
+            }
+        }
+        ts_lag_ms = static_cast<double>(now - eng_ts) * 1e-6;
+        if (eng_ts <= hd.eng_ts_ns) {
+            eng_ts = hd.eng_ts_ns + 1; // strictly increasing per hand, also across a change of the source
+        }
+        hd.eng_ts_ns = eng_ts;
+        if (ts_mode != hd.eng_ts_mode) {
+            hd.eng_ts_mode = ts_mode;
+            ts_mode_changed = true;
+        }
         if (r.buttons != hd.logged_buttons) {
             hd.logged_buttons = r.buttons;
             buttonsChanged = true;
@@ -755,7 +791,17 @@ void Daemon::on_controller(const hmd::ControllerReport& r) {
         }
     }
     if (vit_) {
-        vit_->push_controller_imu(static_cast<std::uint32_t>(side), now, a, g); // as Pimax Play feeds its LED engine
+        vit_->push_controller_imu(static_cast<std::uint32_t>(side), eng_ts, a, g); // as Pimax Play feeds its LED engine
+    }
+    static std::int64_t ts_logged_ns[2] = {0, 0}; // at most one line a second per hand if the source flaps
+    if (ts_mode_changed && now - ts_logged_ns[side] >= 1'000'000'000) {
+        ts_logged_ns[side] = now;
+        static const char* names[] = {"the arrival time", "the device timestamp on the head IMU's clock",
+                                      "the device timestamp on the controller's own clock mapping"};
+        char b[160];
+        std::snprintf(b, sizeof b, "%s controller IMU time for the engine: %s (%.1f ms before arrival)",
+                      side == 0 ? "left" : "right", names[ts_mode], ts_lag_ms);
+        say_(b);
     }
     if (fuser_[side]) {
         std::lock_guard l(ht_mu_);
