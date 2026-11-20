@@ -202,18 +202,17 @@ static bool init_slam() {
     const char* map_env = getenv("PIBRIDGE_WB_SLAM_MAP");
     if (map_env && strcmp(map_env, "loc") == 0) {
         map_mode = 2;
-        char pat[MAX_PATH];
-        snprintf(pat, sizeof(pat), "%s\*platMap_orborb_K8L4.bin", g_slam);
-        WIN32_FIND_DATAA fd;
-        HANDLE fh = FindFirstFileA(pat, &fd);
+        // the serial: device_calibration_<serial>.xml (the map file is <serial>platMap_orborb_K8L4.bin)
         std::string serial_bin;
-        if (fh != INVALID_HANDLE_VALUE) {
-            do {
-                if (strncmp(fd.cFileName, "Lab", 3) != 0) {
-                    serial_bin = fd.cFileName;
-                }
-            } while (FindNextFileA(fh, &fd));
-            FindClose(fh);
+        const char* cbase = strrchr(g_calib, '\\');
+        cbase = cbase ? cbase + 1 : g_calib;
+        const char* cpre = "device_calibration_";
+        if (strncmp(cbase, cpre, strlen(cpre)) == 0) {
+            std::string ser(cbase + strlen(cpre));
+            if (const auto dot = ser.rfind('.'); dot != std::string::npos) {
+                ser.resize(dot);
+            }
+            serial_bin = ser + "platMap_orborb_K8L4.bin";
         }
         if (!serial_bin.empty()) {
             const std::string stem = serial_bin.substr(0, serial_bin.size() - strlen("platMap_orborb_K8L4.bin"));
