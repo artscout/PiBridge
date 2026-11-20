@@ -96,6 +96,22 @@ pibridge-ctrltrack is not started. Everything below is from the Frida traces of 
   - **Validity.** `out[]` is filled with the IMU-only propagation when the pose is not valid too. winbridge therefore
     takes a pose only with `out[23]`; until 2026-11-20 any non-zero position passed, so stale poses drifted.
     `PIBRIDGE_WB_CTRL_ANY=1` gives back the old test.
+- **Head SLAM's saved map** (RE 2026-11-20, pimax_slam 2.0.0.1).
+  - **Map mode.** The 5th argument of `HeadsetInitialImpl` (low byte) picks it; `HeadsetSetTrackingMode` is only the
+    6DoF / 3DoF switch.
+    - 0 = kNormal, as Pimax Play: load `<serial>platMap_orborb_K8L4.{bin,yaml}` to relocalize, save it back.
+    - 1 = kLabMap: no load, saves `LabplatMap_*`.
+    - 2 = kLabLoc: loads `LabplatMap_*`, never saves.
+  - **Bounds (hardcoded).** 1500 keyframes per map (the oldest dropped), at most 3 maps (the one with the fewest
+    keyframes deleted), sessions under 50 keyframes thrown away.
+  - **Saves.** The whole file is saved once during play, when the session reaches 200 keyframes (relocalization pauses
+    meanwhile), and again at shutdown.
+  - **Size.** Ours was 207 MB / 3934 keyframes; Pimax Play's on Windows was 65 MB.
+  - **`PIBRIDGE_WB_SLAM_MAP`:**
+    - `normal` (default);
+    - `loc`: kLabLoc on a pinned copy, `<serial>platMap_*` copied to `LabplatMap_*` when the copy is missing or older;
+      the map stops growing and no save runs during play;
+    - `fresh`: kLabMap.
   - **Pose time.** `PIBRIDGE_WB_CTRL_POSE_TS=1` stamps the pose with the engine's pose time instead of the IMU sample's
     (not yet A/B'd live).
 - IMU time: `ts` is the report's device timestamp (`ts_us`, le32 at byte 8), as Pimax Play passes it: in pass 5 the
