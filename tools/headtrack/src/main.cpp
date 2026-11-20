@@ -22,6 +22,8 @@ const char* USAGE =
     "  --slam-config  SLAM_CONFIG for engines that read one (Basalt)\n"
     "  --camera       camera source (default \"broker\": the camera broker's socket)\n"
     "  --cams         tiles handed to the engine (default 0,1,2,3)\n"
+    "  --shadow-vit LIB [--shadow-slam-config FILE] [--shadow-cams 0,1]: head shadow mode, a second engine logged\n"
+    "                 beside the first (head-shadow-*.csv), driving nothing\n"
     "  --fps          panel rate (default 90)\n"
     "  --calib        factory calibration XML (default: the usual search)\n"
     "  --pose-file    default /dev/shm/pibridge-crystal-pose (what CustomHeadsetOpenVR reads)\n";
@@ -82,6 +84,12 @@ int main(int argc, char** argv) {
                 o.calibration = val();
             } else if (a == "--pose-file") {
                 o.pose_file = val();
+            } else if (a == "--shadow-vit") {
+                o.shadow_vit = val();
+            } else if (a == "--shadow-slam-config") {
+                o.shadow_slam_config = val();
+            } else if (a == "--shadow-cams") {
+                o.shadow_cams = parse_cams(val());
             } else if (a == "--cam-offset-us") {
                 o.cam_offset_ns = std::stoll(val()) * 1000;
             } else if (a == "-h" || a == "--help") {

@@ -983,6 +983,10 @@ void IoSessionControl::startRoom() {
     spec.name = QStringLiteral("roommap");
     spec.program = setup_.roommap;
     spec.args = roomAutoArgs(setup_.roomName);
+    if (setup_.io.slam && setup_.io.slamEngine == SlamEngine::Basalt) {
+        // Basalt keeps no map of its own: the room map recognised every 10 s corrects its drift (auto --follow)
+        spec.args << QStringLiteral("--follow") << QString::number(kRoomFollowS);
+    }
     spec.logPath = session_->logDir() + QStringLiteral("/roommap.log");
     QString err;
     const auto alive = alive_;

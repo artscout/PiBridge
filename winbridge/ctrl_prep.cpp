@@ -29,6 +29,7 @@ namespace cam = pibridge::cam;
 struct Imu {
     uint32_t hand;
     uint64_t ts;
+    uint64_t dev = 0;  // the report's device time (u32 us)
     float a[3], g[3];
 };
 
@@ -38,7 +39,10 @@ static std::vector<Imu> read_imu(const char* path, uint32_t hand, const std::str
     std::ofstream ref(ref_path);
     ref << "frame_ns,px,py,pz,qx,qy,qz,qw,rms_px,leds,verdict\n";
     std::string line;
-    const double g0 = 9.80665, dps = M_PI / 180.0 / 16.4;
+    const double g0 = 9.80665;
+    // CTRL_PREP_GYRO_LSB: LSB per deg/s (16.4 as Monado; pibridge-headtrack feeds the LED engine with 8.2)
+    const char* lsb = std::getenv("CTRL_PREP_GYRO_LSB");
+    const double dps = M_PI / 180.0 / (lsb != nullptr ? std::atof(lsb) : 16.4);
     while (std::getline(f, line)) {
         if (line.size() < 3 || line[0] == '#') continue;
         std::vector<std::string> c;
@@ -48,6 +52,7 @@ static std::vector<Imu> read_imu(const char* path, uint32_t hand, const std::str
             Imu s{};
             s.hand = hand;
             s.ts = std::stoull(c[1]);
+            s.dev = std::stoull(c[2]);
             for (int i = 0; i < 3; ++i) s.g[i] = (float)(std::stod(c[3 + i]) * dps);
             for (int i = 0; i < 3; ++i) s.a[i] = (float)(std::stod(c[6 + i]) / 1024.0 * g0);
             v.push_back(s);
@@ -57,6 +62,19 @@ static std::vector<Imu> read_imu(const char* path, uint32_t hand, const std::str
             for (int i = 2; i <= 8; ++i) ref << ',' << c[i];
             ref << ',' << c[16] << ',' << c[17] << ',' << c[18] << '\n';
         }
+    }
+    // CTRL_PREP_DEVTS=1: the device time on the host clock with the least-delay offset (as pibridge-headtrack stamps the
+    // samples for the LED engine), instead of the arrival time
+    if (std::getenv("CTRL_PREP_DEVTS") != nullptr && !v.empty()) {
+        uint64_t wrap = 0, prev = v[0].dev;
+        int64_t best = INT64_MAX;
+        for (auto& s : v) {
+            if (s.dev < prev && prev - s.dev > 0x80000000ull) wrap += 0x100000000ull;
+            prev = s.dev;
+            s.dev += wrap;
+            best = std::min(best, (int64_t)s.ts - (int64_t)(s.dev * 1000));
+        }
+        for (auto& s : v) s.ts = (uint64_t)((int64_t)(s.dev * 1000) + best);
     }
     return v;
 }

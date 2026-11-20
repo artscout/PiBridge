@@ -183,7 +183,7 @@ Every row has a real receiver (`dash_settings.h`); its tag says when it takes ef
 | Headset | IPD 58-72 mm, 0.5 mm steps | `$XDG_RUNTIME_DIR/pibridge/ipd-request` (lens motors: Monado's Pimax driver or keepalived) + `ipd_mm` (`OXR_DEBUG_IPD_MM`) | lenses now, picture after a restart |
 | Headset | Volume, 5 % steps | the headset's PipeWire output (`pactl`, a thread of its own) | now |
 | Headset | Refresh rate 72 / 90 Hz | `refresh_hz` (`PIMAX_FPS`) | after a restart |
-| Tracking | Head tracking engine Pimax / Basalt | `io_slam_engine` | after a restart |
+| Tracking | Tracking engine (head and controllers) Pimax / Basalt | `io_slam_engine` | after a restart |
 | Tracking | Optical controller tracking | `io_ctrl_track` | after a restart |
 | Tracking | Camera rate 50 / 60 Hz | `io_cam_fps` | after a restart |
 | Controllers | Controller angle -20..70 deg | `$XDG_RUNTIME_DIR/pimax-ctrl-angle` + `io_ctrl_angle` | now |

@@ -21,7 +21,7 @@ session (START VR on the Dashboard; the settings are on the Tracking page, [TRAC
     position. Controllers from the LED engine through winbridge's extension, held by their own gyro for up to 4 s.
     Their IMU samples carry the report's device timestamp on the head IMU's clock, as in Pimax Play
     (`PIBRIDGE_CTRL_IMU_TS=host`: the arrival time, as before; [WINBRIDGE.md](WINBRIDGE.md)). pibridge-ctrltrack is
-    not used with this engine.
+    not used with this engine, except in the controller shadow mode (below).
   - `basalt`: Basalt with libpibridge-cam's output layer (`headpose::HeadTracker`, mid-exposure frame times, reset when
     the supervisor asks); controllers from `pibridge-ctrltrack`'s pose file fused with their IMU (`libpibridge-ctrl`).
 - **Auto-exposure** (`PIMAX_CAM_AE`: unset/0 off, `dry` compute only, `1` send): the same controller as before
@@ -36,6 +36,44 @@ session (START VR on the Dashboard; the settings are on the Tracking page, [TRAC
 - **Haptics**: CustomHeadsetOpenVR writes `$XDG_RUNTIME_DIR/pimax-haptic-request` ("SLOT AMP MS"), headtrack sends it.
 - **Output**: `/dev/shm/pibridge-crystal-pose` (`libpibridge-hmd` `pose_shm.h`, source 2 = headtrack) every 1 ms with
   the sample time and velocities; SteamVR predicts to the display time.
+
+## Controller shadow mode
+
+Compares our controller tracking with Pimax's LED engine on the same data and in the same session. Pimax's engine
+still drives the controllers in SteamVR, and the shadow mode changes nothing in what SteamVR gets.
+
+Turn it on with `PIBRIDGE_CTRL_SHADOW=1` in the app's extra environment (Tracking page, Advanced; `rec_env=`). It works
+with the Pimax engine and its LED engine (`pimaxCtrlEngine`). Then:
+
+- the app also starts `pibridge-ctrltrack live ... --out $XDG_RUNTIME_DIR/pibridge-ctrltrack-shadow.pose` (process
+  `ctrltrack-shadow`, log `ctrltrack-shadow.log` with the session's logs; if it ends, the session goes on);
+- pibridge-headtrack runs our fusers (`libpibridge-ctrl`) on that tracker's fixes and on the controller IMU, exactly as
+  with Basalt. They also write the hint file, so the tracker runs its IMU-led filter. Their pose is only logged.
+
+The log is `~/.local/share/pibridge/ctrl-shadow/ctrl-shadow-YYYYmmdd-HHMMSS.csv`: one row per hand every 20 ms, all
+poses in the world and the aim frame (before the controller angle). The columns:
+
+| Columns | Meaning |
+|---|---|
+| `t_ns`, `hand` | `CLOCK_MONOTONIC` time of the row, 0 left / 1 right |
+| `pimax_state` | 0 no pose, 1 Pimax's LED engine, 2 held by the gyro |
+| `pimax_t_ns`, `pimax_x..z`, `pimax_qx..qw` | Pimax's pose as published (extrapolated up to 25 ms, to `pimax_t_ns`) |
+| `ours_state`, `ours_x..z`, `ours_qx..qw` | our fuser at `t_ns`: 0 none, 1 optical, 2 held |
+| `fix_ns`, `fix_leds`, `fix_rms_px`, `fix_x..z`, `fix_qx..qw` | the shadow tracker's last optical fix (frame time, matched LEDs, RMS) |
+| `head_x..z`, `head_qx..qw` | the head pose at `t_ns` (the head origin, as published) |
+| `pimax_eng_ns`, `pimax_vx..vz`, `pimax_wx..wz` | the time of Pimax's engine pose before the prediction, and the published velocities |
+| `imu_age_ms`, `imu_reports` | age of the controller's last report, reports since the previous row |
+| `acc_x..z`, `gyro_x..z` | the last report's accelerometer (m/s²) and gyro (rad/s), the controller's raw axes |
+| `fix_cams`, `fix_kind`, `blobs0..3` | cameras in the fix; bit 0 few-LED path, bit 1 the IMU filter's pose; blobs per camera in that frame |
+
+Beside it, `ctrl-shadow-…-sys.csv` (`sysmon.{h,cpp}`), once a second:
+- the CPU time, run-queue wait and timeslices of every busy thread of winbridge, wineserver, pibridge-ctrltrack, headtrack,
+  the broker, vrserver and vrcompositor (`/proc/PID/task/TID/schedstat`);
+- the load, CPU pressure, CPU/GPU temperatures, CPU clocks and GPU busy.
+
+pibridge-ctrltrack's poses are relative to the calibration's body (IMU) frame; the fusers take the head pose of the
+IMU (`fuse_head`: the published head minus `head_in_imu`), as the Pimax path does. Before this, our controllers sat
+`head_in_imu` (~6 cm) off in Basalt and shadow mode.
 
 ## CustomHeadsetOpenVR
 

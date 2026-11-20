@@ -223,6 +223,36 @@ Under the Monado backend no layer is involved: PiBridge's Monado has a capture t
 `pibridge-record` encodes from it. In the headset, recording starts and stops from PiBridge World's **Record** button
 or the dashboard over a game (Headset page, **Record video**).
 
+### 4.3 SteamVR under Steam's 64-bit client (launch options, once)
+
+Steam's 64-bit client (`~/.local/share/Steam/steamrt64`, rolled out in November 2026) runs inside its own container.
+SteamVR starts `vrcompositor` and its apps through that container's launcher service, and its `bin/vrenv.sh` cannot
+find it (it calls `pgrep`, which the container lacks, in 2.19; it does not look at all in 2.18). Then `vrcompositor`
+never starts, `vrserver` aborts on its watchdog after about 21 s (`Failed Watchdog timeout in thread Connection`),
+and safe mode blocks CustomHeadsetOpenVR (`HmdNotFound` on the next start). `vrstartup-linux.txt` shows
+`steam-runtime-launch-client: E: Unable to connect to any of the specified bus names`.
+
+The fix that survives SteamVR updates and branch switches: Steam -> SteamVR -> Properties -> Launch Options
+
+```
+/home/<you>/.local/bin/pibridge-steamvr-env %command%
+```
+
+`pibridge-steamvr-env` (installed with PiBridge) sets `SRT_LAUNCHER_SERVICE_ALONGSIDE_STEAM` to the container's
+launcher before SteamVR's own scripts run, and `vrenv.sh` keeps a value that is set. Use a path in your home: the
+container does not see the host's `/usr/bin` (with the package, copy it once: `install -m755
+/usr/bin/pibridge-steamvr-env ~/.local/bin/`). It changes nothing under the old 32-bit client.
+
+Two more consequences of the same client switch:
+
+- **SteamVR Home** cannot start (`~/.steam/bin` now points at `steamrt32`, which has no `steam-runtime/run.sh`), and
+  `vrserver` retries it about five times a second; within seconds `vrcompositor` aborts with
+  `Vulkan transfer ring buffer overflow; transfer size 2315040`. Turn it off: SteamVR -> Settings -> General ->
+  SteamVR Home.
+- After a crash, safe mode may block CustomHeadsetOpenVR: SteamVR -> Settings -> Startup/Shutdown -> Manage Add-ons
+  -> Unblock (the setting is `blocked_by_safe_mode` under `driver_CustomHeadsetOpenVR` in
+  `~/.local/share/Steam/config/steamvr.vrsettings`).
+
 ## 5. Pimax Crystal Super (Lighthouse faceplate) and the original Crystal
 
 Who does what in this setup:
@@ -502,7 +532,7 @@ Common to both engines: CustomHeadsetOpenVR with all five patches, including `ch
 5.3); `pibridge-cam`, `pibridge-ctrltrack` and `pibridge-headtrack` (installed with the app, section 2); and the
 headset's factory **camera calibration**
 (`device_calibration_<serial>.xml`, copied below, or set as `rec_cam_calib`). Then pick one head-tracking engine on the
-Tracking page (**Head tracking engine**):
+Tracking page (**Tracking engine**):
 
 **A) Pimax — the default, matches Pimax Play.** Pimax Play's own head-SLAM and controller-LED engine, run under Wine
 (`winbridge`; the full design and rationale are in [WINBRIDGE.md](WINBRIDGE.md)). One-time setup:
@@ -529,7 +559,7 @@ Tracking page (**Head tracking engine**):
 
    The app finds the two files in `~/.local/share/pibridge/winbridge/`, in `<prefix>/lib/pibridge/winbridge/`, or in
    the source tree's `winbridge/`; `rec_winbridge=` and `rec_vit_winbridge=` in `pibridge.conf` name other paths.
-4. On the Tracking page choose **Head tracking engine: Pimax**; it tells you in plain words what is still missing
+4. On the Tracking page choose **Tracking engine: Pimax**; it tells you in plain words what is still missing
    (Wine, the kit, or the two files from step 3).
 5. **There is nothing to start by hand, and no service for it.** winbridge is not a daemon and pibridge-keepalived
    does not start it. The app runs it inside the tracking session: at every **START VR** it starts
@@ -547,7 +577,7 @@ loaded by `pibridge-headtrack` directly as a VIT library; the controllers come f
 finds it — `~/.local/lib/pibridge/`, `/usr/local/lib/`,
 `/usr/lib/`, or set `rec_basalt_lib`. PiBridge generates the base Basalt config from the headset calibration at start;
 the tunables (detection grid, camera count, accel/gyro bias, drift hold) are on the Tracking page, documented in
-[TRACKING.md](TRACKING.md). Choose **Head tracking engine: Basalt**.
+[TRACKING.md](TRACKING.md). Choose **Tracking engine: Basalt**.
 
 ## 7.2 The Monado backend (optional)
 

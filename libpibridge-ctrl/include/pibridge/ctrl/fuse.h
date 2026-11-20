@@ -220,6 +220,22 @@ struct Config {
     /// The shown position is the last fix as measured plus the inertial displacement since (not the display
     /// filter's position): no lag behind a hand that stops hard. Needs ins_s > 0.
     bool raw_anchor = false;
+    /// PiBridge: the optical tracker's velocity (optical_velocity) carries the last fix on to the query time (the
+    /// fix's age, ~40-50 ms live, at its full speed); without it the fix's own smoothed velocity, which lags a swing.
+    /// PIBRIDGE_CTRL_TRACK_VEL=0 turns it off.
+    bool track_vel = false;
+    /// PiBridge (Pimax's output: the state propagated with the IMU to the newest sample): with track_vel, the fix is
+    /// also carried by the accelerometer (rotated by the gyro orientation, less gravity) over its age, so a swing that
+    /// turns between two LED frames is followed instead of overshot. PIBRIDGE_CTRL_TRACK_ACC=0 turns it off.
+    bool track_acc = false;
+    /// PiBridge: with track_vel (the IMU-led optical tracker, which gates its fits by its own IMU), the fuser's
+    /// jump / turn tests against its cruder prediction are skipped: they dropped right fixes on fast swings (frozen,
+    /// then a jump). PIBRIDGE_CTRL_FUSE_GATE=1 keeps them.
+    bool trust_tracker = false;
+    /// PiBridge: with track_vel, the step each new fix makes in the shown pose (25 a second) is spread over this time
+    /// constant (s) instead of being shown at once (a 25 Hz jitter, seen doubled at 90 Hz); steps over 10 cm / 15 deg
+    /// are shown at once. 0 = off. PIBRIDGE_CTRL_SMOOTH_MS.
+    double smooth_s = 0.0;
     /// A few-LED fix whose orientation turned against the gyro is dropped (Rust: its position is kept, "pos-only").
     bool turn_drop = false;
     /// Keep the hand-identity state of imu_state() up to date also without a hint file (the offline bench).
@@ -296,6 +312,8 @@ public:
     static double gain(std::uint32_t leds, float rms_px, bool smooth);
     std::pair<State, P> get(std::uint64_t t, const P& head) { return get_with(t, head, std::nullopt); }
     std::pair<State, P> get_with(std::uint64_t t, const P& head, std::optional<V3> other);
+    /// The optical tracker's velocity of the controller at frame time t (world, m/s): give it before optical(t, ...).
+    void optical_velocity(std::uint64_t t, V3 v) { ext_vel_ = std::pair{t, v}; }
     void optical(std::uint64_t t, P w, const P& head, float rms_px, std::uint32_t leds) {
         optical_with(t, w, head, rms_px, leds, std::nullopt);
     }
@@ -359,6 +377,28 @@ private:
     std::optional<std::int64_t> clk_off_;
     std::uint64_t clk_t_ = 0;
     std::deque<std::pair<std::uint64_t, V3>> raw_;
+    /// Raw accelerometer samples (about 0.5 s) for track_acc.
+    std::deque<std::pair<std::uint64_t, V3>> acc_raw_;
+    /// smooth_s: the shown pose just before the newest fix (fix_t, at t), and the offset from the new fix's pose then.
+    struct Smooth {
+        std::uint64_t fix_t = 0;
+        std::uint64_t t = 0;
+        P old;
+        bool ready = false;
+        V3 dp{0.0, 0.0, 0.0};
+        V3 dq{0.0, 0.0, 0.0};
+    };
+    std::optional<Smooth> smooth_;
+    /// The newest pose the track_vel prediction gave (for the fix it came from, at t): what is shown when the next fix
+    /// comes in.
+    struct Shown {
+        std::uint64_t fix_t = 0;
+        std::uint64_t t = 0;
+        P p;
+    };
+    std::optional<Shown> shown_;
+    /// The accelerometer's displacement from `from` to `to` (world, gravity removed), starting at rest.
+    std::optional<V3> acc_disp(std::uint64_t from, std::uint64_t to);
     std::deque<std::pair<std::uint64_t, V3>> acc_;
     std::optional<Dr> dr_;
     std::deque<std::pair<std::uint64_t, Q>> q_ring_;
@@ -366,6 +406,7 @@ private:
     std::uint32_t rest_n_ = 0;
     V3 rest_sum_{0.0, 0.0, 0.0};
     std::optional<Fix> last_;
+    std::optional<std::pair<std::uint64_t, V3>> ext_vel_;
     std::deque<Fix> hist_;
     std::uint32_t seg_ = 0;
     V3 vel_{0.0, 0.0, 0.0};

@@ -208,6 +208,14 @@ cam::Result<std::string> write_offset(const Alignment& a, std::uint32_t pid) {
     return p;
 }
 
+cam::Result<std::string> write_offset_drift(const Alignment& a, std::uint32_t pid) {
+    const std::string p = anchor::offset_path();
+    if (auto w = anchor::write_offset_drift(p, pid, offset_pose(a)); !w) {
+        return cam::fail(w.error());
+    }
+    return p;
+}
+
 Alignment compose(const Alignment& a, const Alignment& b) {
     const cam::geom::Pose p = a.pose().compose(b.pose());
     return Alignment{align::wrap(a.yaw + b.yaw), p.t};

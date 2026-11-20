@@ -124,6 +124,12 @@ QString logReason(const QString& log);
 // core/inside_out.h (buildIoEnv) with the setup's inside-out settings; `recordDir` "" = no recording.
 RecProcSpec brokerSpec(const RecSetup& s, const QString& logDir);
 RecProcSpec ctrltrackSpec(const RecSetup& s, const QString& logDir);
+// Controller shadow mode (PIBRIDGE_CTRL_SHADOW=1 in the extra environment, rec_env=): with Pimax's LED engine driving the
+// controllers, a second pibridge-ctrltrack runs on the same LED frames into its own pose file, and pibridge-headtrack
+// logs its poses next to Pimax's (docs/pibridge-headtrack.md, "Controller shadow mode"). Nothing it does reaches
+// SteamVR.
+bool ctrlShadowWanted(const RecSetup& s);
+RecProcSpec ctrltrackShadowSpec(const RecSetup& s, const QString& logDir);
 // The Pimax SLAM engine: `wine winbridge.exe` with the kit as PIBRIDGE_WINDATA (a Z: path). Started next to the broker,
 // before Monado / SteamVR, when winbridgeWanted(); stopped by PID with the rest (wine execs into it: same PID).
 RecProcSpec winbridgeSpec(const RecSetup& s, const QString& logDir);

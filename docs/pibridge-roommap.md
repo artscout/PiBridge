@@ -25,8 +25,26 @@ common: --calib XML (default: the headset calibration)
 
 The flow the app needs: `build --source broker` (map the room), `relocalize --source broker --apply` (Recognise room),
 `auto` (detached at the session start: wait for the head ring, take the writer lease, relocalise in 15 s windows up
-to `--wait`, apply floor + centre + forward, status file), `setup fast|full` and `apply`. The offset goes through the
+to `--wait`, apply floor + centre + forward, status file), `setup fast|full` and `apply`.
+
+`auto --follow S` (the app adds `--follow 10` with the Basalt engine, which keeps no map of its own): once the room is in
+place, it recognises the room again every S seconds and writes only the offset, marked as a drift correction (`drift 1`,
+`docs/libpibridge-anchor.md`). The tracker glides to it, keeps the user's recenter and applies its vertical; SteamVR's
+chaperone and the bounds stay as the start set them. A fix counts when it is sure (sigma <= 1 cm / 0.5 deg, rms <= 1.5
+deg); a jump (> 25 cm or 5 deg from the offset in use) only when the next fix agrees. SteamVR backend only (Monado's
+offset carries the whole room setup). It ends with the session or when another writer takes the lease (a room setup). The offset goes through the
 writer lease (`docs/libpibridge-anchor.md`); the tracker glides to every change after the session's first.
+
+**Filtered follow (2026-11-20).** One fix is good to about +-2 cm, while Basalt drifts about 0.5 mm/s.
+- The follow therefore recognises the room every ~4 s: 1 s pause, 3 s of frames (`PIBRIDGE_ROOM_FOLLOW_GAP`,
+  `PIBRIDGE_ROOM_FOLLOW_WIN`).
+- Each sure fix moves a filtered offset by 1 - exp(-dt / 20 s) of its difference (`PIBRIDGE_ROOM_FOLLOW_TAU`, s).
+- The filtered offset is written once it changed by 1 mm or 0.02 deg.
+- A confirmed jump restarts the filter from the fix.
+- `PIBRIDGE_ROOM_FOLLOW_TAU=0` gives back the earlier behaviour: every fix written as it is, `--follow` seconds apart.
+- pibridge-headtrack glides a drift correction mostly while the head turns. The rate is 3 mm/s and 0.05 deg/s when
+  still, plus 0.6 mm/s and 0.01 deg/s per deg/s of head turn. `PIBRIDGE_DRIFT_GLIDE=old` gives back the plain slew
+  (5 cm/s, 2 deg/s).
 
 Not ported / different:
 - PiBridge changes (2026-10-19): under SteamVR (the session pid is pibridge-headtrack, or a vrserver with Monado's

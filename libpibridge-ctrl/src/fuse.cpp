@@ -638,6 +638,10 @@ Config Config::pibridge() {
     c.blend_mps = 1.0;
     c.grav_check_deg = 25.0;
     c.ins_jump_m = 0.06;
+    c.track_vel = true;
+    c.track_acc = true;
+    c.trust_tracker = true;
+    c.smooth_s = 0.03;
     return c;
 }
 
@@ -716,6 +720,18 @@ Config Config::from_env() {
     }
     if (const auto v = num("PIBRIDGE_CTRL_TURN_DROP"); v) {
         c.turn_drop = *v != 0.0;
+    }
+    if (const auto v = num("PIBRIDGE_CTRL_TRACK_VEL"); v) {
+        c.track_vel = *v != 0.0;
+    }
+    if (const char* e = std::getenv("PIBRIDGE_CTRL_TRACK_ACC")) {
+        c.track_acc = std::string_view(e) != "0";
+    }
+    if (const auto v = num("PIBRIDGE_CTRL_SMOOTH_MS"); v && *v >= 0.0) {
+        c.smooth_s = *v * 1e-3;
+    }
+    if (const char* e = std::getenv("PIBRIDGE_CTRL_FUSE_GATE")) {
+        c.trust_tracker = std::string_view(e) != "1";
     }
     if (const auto v = num("PIBRIDGE_CTRL_RAW_ANCHOR"); v) {
         c.raw_anchor = *v != 0.0;
@@ -968,6 +984,13 @@ void Fuser::sample_acc(std::uint64_t host_ns, std::uint32_t dev_ts, std::array<s
             }
         }
     }
+    if (acc && cfg.track_acc) {
+        acc_raw_.emplace_back(t, V3{static_cast<double>((*acc)[0]), static_cast<double>((*acc)[1]),
+                                    static_cast<double>((*acc)[2])});
+        while (!acc_raw_.empty() && acc_raw_.front().first + 500000000u < t) {
+            acc_raw_.pop_front();
+        }
+    }
     if (acc && (cfg.ins_s > 0.0 || cfg.tilt_fix)) {
         const V3 a = {static_cast<double>((*acc)[0]), static_cast<double>((*acc)[1]), static_cast<double>((*acc)[2])};
         if (cfg.tilt_fix && last_) {
@@ -995,6 +1018,46 @@ void Fuser::sample_acc(std::uint64_t host_ns, std::uint32_t dev_ts, std::array<s
             ins_sample(t, static_cast<double>(dt_us) * 1e-6, a);
         }
     }
+}
+
+std::optional<V3> Fuser::acc_disp(std::uint64_t from, std::uint64_t to) {
+    if (!last_ || acc_raw_.empty() || to <= from) {
+        return std::nullopt;
+    }
+    const auto c = active_calib();
+    if (!c) {
+        return std::nullopt;
+    }
+    V3 v{0.0, 0.0, 0.0};
+    V3 p{0.0, 0.0, 0.0};
+    std::uint64_t prev = from;
+    bool any = false;
+    for (const auto& [ts, a] : acc_raw_) {
+        if (ts <= from) {
+            continue;
+        }
+        const std::uint64_t b = std::min(ts, to);
+        const double dt = static_cast<double>(b - prev) * 1e-9;
+        if (dt > 0.0 && dt < 0.03) {
+            const auto dq = gyro_delta(last_->t, b);
+            const Q q = dq ? qnorm(qmul(last_->w.q, *dq)) : last_->w.q;
+            const V3 f = qrot(q, c->accel(a));
+            const V3 aw = {f[0], f[1] - ACCEL_G, f[2]};
+            p = add(p, add(scale(v, dt), scale(aw, 0.5 * dt * dt)));
+            v = add(v, scale(aw, dt));
+            any = true;
+        }
+        prev = b;
+        if (ts >= to) {
+            break;
+        }
+    }
+    if (!any) {
+        return std::nullopt;
+    }
+    // a bad sample or a wrong orientation must not throw the hand: at most 15 cm over a fix's age
+    const double n = norm(p);
+    return n > 0.15 ? scale(p, 0.15 / n) : p;
 }
 
 std::optional<Q> Fuser::gyro_world(std::uint64_t t) const {
@@ -1374,7 +1437,10 @@ std::optional<Fuser::ImuState> Fuser::imu_state(std::uint64_t t) const {
     }
     const double n = norm(acc_lp_);
     ImuState s{*q, n > 1e-6 ? scale(acc_lp_, 1.0 / n) : V3{0.0, 0.0, 0.0}, n > 0.9 * ACCEL_G && n < 1.1 * ACCEL_G,
-               still_now_ ? static_cast<double>(rs::sat_sub(t, still_since_)) * 1e-9 : 0.0, calib_from_file_};
+               still_now_ ? static_cast<double>(rs::sat_sub(t, still_since_)) * 1e-9 : 0.0,
+               // a saved or an online-fitted calibration: both can be trusted (calib_from_file_ turns false when the
+               // online fit replaces the saved one, which used to take the controller's IMU away from the tracker)
+               calib.has_value()};
     return s;
 }
 
@@ -1512,6 +1578,50 @@ std::pair<State, P> Fuser::predict(std::uint64_t t, const P& head) {
             return {State::Hold, P{q, p}};
         }
     }
+    if (age <= cfg.extrap_s && cfg.track_vel && ext_vel_ && ext_vel_->first == f.t && last_raw_) {
+        // the fix as measured (the tracker's filter already smooths it), carried on at the tracker's velocity: in
+        // full over the usual age of a fix (to 0.1 s), easing off after it
+        const double lin = std::min(age, 0.1);
+        const double more = age > 0.1 ? ex(age - 0.1) : 0.0;
+        const auto carry = [&](std::uint64_t tt) {
+            const double ag = static_cast<double>(rs::sat_sub(tt, f.t)) * 1e-9;
+            V3 pp = add(last_raw_->p, scale(ext_vel_->second, std::min(ag, 0.1) + (ag > 0.1 ? ex(ag - 0.1) : 0.0)));
+            if (cfg.track_acc) {
+                // and by the accelerometer over the same 0.1 s (the turn of a swing between LED frames)
+                if (const auto d = acc_disp(f.t, std::min(tt, f.t + 100000000u))) {
+                    pp = add(pp, *d);
+                }
+            }
+            return pp;
+        };
+        (void)lin;
+        (void)more;
+        V3 p = carry(t);
+        if (smooth_ && smooth_->fix_t == f.t && cfg.smooth_s > 0.0) {
+            Smooth& sm = *smooth_;
+            if (!sm.ready) {
+                // the offset of the old shown pose from the new fix's at the moment the fix came in
+                const auto d0 = gyro_delta(f.t, sm.t);
+                const Q q0 = d0 ? qnorm(qmul(f.w.q, *d0)) : f.w.q;
+                sm.dp = sub(sm.old.p, carry(sm.t));
+                sm.dq = qlog(qnorm(qmul(sm.old.q, qconj(q0))));
+                sm.ready = true;
+                if (norm(sm.dp) > 0.10 || rf::to_degrees(norm(sm.dq)) > 15.0) {
+                    sm.dp = {0.0, 0.0, 0.0};
+                    sm.dq = {0.0, 0.0, 0.0};
+                }
+            }
+            const double since = static_cast<double>(rs::sat_sub(t, sm.t)) * 1e-9;
+            const double k = std::exp(-since / cfg.smooth_s);
+            p = add(p, scale(sm.dp, k));
+            q = qnorm(qmul(qexp(scale(sm.dq, k)), q));
+        }
+        if (!shown_ || shown_->fix_t != f.t || t >= shown_->t) {
+            shown_ = Shown{f.t, t, P{q, p}};
+        }
+        hold_ = std::nullopt;
+        return {State::Optical, P{q, p}};
+    }
     if (age <= cfg.extrap_s) {
         const V3 p = add(f.w.p, scale(vel_, ex(age)));
         hold_ = std::nullopt;
@@ -1541,6 +1651,10 @@ std::pair<State, P> Fuser::predict(std::uint64_t t, const P& head) {
     }
     if (!hold_) {
         V3 p_end = add(f.w.p, scale(vel_, ex(cfg.extrap_s)));
+        if (cfg.track_vel && ext_vel_ && ext_vel_->first == f.t && last_raw_) {
+            // where the prediction above ended (no jump into the hold)
+            p_end = add(last_raw_->p, scale(ext_vel_->second, 0.1 + ex(std::max(0.0, cfg.extrap_s - 0.1))));
+        }
         if (arm) {
             const std::uint64_t t_end = f.t + rf::f64_to_u64(cfg.extrap_s * 1e9);
             const auto d = gyro_delta(f.t, std::min(t_end, t));
@@ -1886,6 +2000,10 @@ const char* Fuser::judge(std::uint64_t t, const P& w, const P& head, std::option
         return "ok";
     }
     std::string_view why = "ok";
+    if (cfg.trust_tracker && cfg.track_vel) {
+        rejects_ = 0;
+        return "ok";
+    }
     if (gyro_delta(f.t, t) && age < cfg.lost_s && rf::to_degrees(qangle(pred.q, w.q)) > cfg.max_jump_deg) {
         why = "turn";
     }
@@ -1930,6 +2048,11 @@ void Fuser::accept(std::uint64_t t, P w, const P& head, std::uint32_t leds, floa
         age = static_cast<double>(rs::sat_sub(t, prev->t)) * 1e-9;
     }
     const bool gap = !age || *age > cfg.gap_s;
+    // smooth_s: what is shown now, before this fix replaces the last one (the step it makes is spread out in predict)
+    smooth_ = std::nullopt;
+    if (cfg.smooth_s > 0.0 && cfg.track_vel && prev && !gap && shown_ && shown_->fix_t == prev->t) {
+        smooth_ = Smooth{t, shown_->t, shown_->p};
+    }
     if (gap && prev) {
         const std::uint64_t qt = std::max(last_query_t_, t);
         auto [s, shown] = predict(qt, head);
@@ -1940,7 +2063,12 @@ void Fuser::accept(std::uint64_t t, P w, const P& head, std::uint32_t leds, floa
                 shown.p = add(shown.p, scale(blend_->dp, wt));
             }
         }
-        if (s != State::None) {
+        // PiBridge: the IMU-led tracker's fix is right; a shown pose far from it (a hold that drifted) snaps there
+        // instead of gliding over half a second (Pimax shows the fix)
+        if (s != State::None && cfg.trust_tracker && cfg.track_vel && norm(sub(shown.p, w.p)) > 0.15) {
+            blend_ = std::nullopt;
+            stats.reacquires += 1;
+        } else if (s != State::None) {
             const V3 dp = sub(shown.p, w.p);
             const Q dq = qnorm(qmul(shown.q, qconj(w.q)));
             double dur = cfg.blend_s;

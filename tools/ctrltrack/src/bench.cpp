@@ -268,6 +268,22 @@ std::vector<FrameOut> run(const tr::Rig& rig, const std::vector<Frame>& frames, 
                      (unsigned long long)c.tentative_dropped, (unsigned long long)c.fallback_frames,
                      (unsigned long long)itk.stats().searches, (unsigned long long)c.miss_window,
                      (unsigned long long)c.miss_refined, (unsigned long long)c.miss_rms);
+        std::fprintf(stderr, "imutrack: refused tilt %llu turn %llu far %llu | candidates L %llu R %llu | parked L %llu R %llu\n",
+                     (unsigned long long)c.acq_tilt, (unsigned long long)c.acq_rot, (unsigned long long)c.acq_far,
+                     (unsigned long long)c.acq_cands[0], (unsigned long long)c.acq_cands[1],
+                     (unsigned long long)c.parked[0], (unsigned long long)c.parked[1]);
+        std::fprintf(stderr, "imutrack: twin checks %llu votes %llu flips %llu, accel error %.2f m/s, orientation resets %llu, "
+                             "LED updates %llu (%llu LEDs), P1P moves %llu\n",
+                     (unsigned long long)c.twin_checks, (unsigned long long)c.twin_votes, (unsigned long long)c.twin_flips,
+                     c.accel_err_n ? c.accel_err_sum / (double)c.accel_err_n : 0.0, (unsigned long long)c.orient_resets,
+                     (unsigned long long)c.led_updates, (unsigned long long)c.led_points,
+                     (unsigned long long)c.p1p_moves);
+        std::fprintf(stderr, "imutrack: hypotheses started %llu gyro drops %llu accepted %llu motion fails %llu ambiguous %llu other hand %llu | "
+                             "few-LED runs cut %llu, refused on the other controller %llu, contested blobs %llu, reanchors %llu\n",
+                     (unsigned long long)c.hyp_started, (unsigned long long)c.hyp_gyro_drops,
+                     (unsigned long long)c.hyp_accepted, (unsigned long long)c.hyp_motion_fail,
+                     (unsigned long long)c.hyp_ambiguous, (unsigned long long)c.hyp_other_hand, (unsigned long long)c.led_run_cut,
+                     (unsigned long long)c.acq_on_other, (unsigned long long)c.contested, (unsigned long long)c.reanchors);
     }
     if (std::getenv("BENCH_STATS") != nullptr) {
         const tr::Stats& s = tk.stats;
@@ -800,7 +816,7 @@ int main(int argc, char** argv) {
     if (const auto p = argv_of(a, "--leds")) {
         // per matched LED: its blob's brightness and size (LED modulation / identity study)
         std::FILE* f = std::fopen(p->c_str(), "w");
-        std::fprintf(f, "frame,ns,dev_frame,slot,model,led,cam,peak,area,w,h,u,v,dist_m\n");
+        std::fprintf(f, "frame,ns,dev_frame,slot,model,led,cam,peak,area,w,h,u,v,dist_m,pu,pv\n");
         for (std::size_t i = 0; i < ref.size(); i++) {
             for (const auto& fx : ref[i].fix) {
                 if (!fx) {
@@ -812,9 +828,12 @@ int main(int argc, char** argv) {
                         const tr::Blob& bl = L.frames[i].blobs[c][b];
                         const g::Vec3 pc = rig.cams[c].cam_from_body.compose(j.body_from_model).apply(
                             rig.models[fx->found.model].leds[l].p);
-                        std::fprintf(f, "%zu,%llu,%zu,%zu,%zu,%zu,%zu,%u,%u,%u,%u,%.2f,%.2f,%.3f\n", i,
+                        // the fit's projection of the LED (pu, pv): its residual against the blob
+                        const auto pr = rig.cams[c].intr.project(pc);
+                        std::fprintf(f, "%zu,%llu,%zu,%zu,%zu,%zu,%zu,%u,%u,%u,%u,%.2f,%.2f,%.3f,%.2f,%.2f\n", i,
                                      static_cast<unsigned long long>(L.frames[i].ns), i, fx->slot, fx->found.model, l,
-                                     c, bl.peak, bl.area, bl.w, bl.h, bl.x, bl.y, g::norm(pc));
+                                     c, bl.peak, bl.area, bl.w, bl.h, bl.x, bl.y, g::norm(pc), pr ? pr->first : -1.0,
+                                     pr ? pr->second : -1.0);
                     }
                 }
             }
@@ -833,7 +852,24 @@ int main(int argc, char** argv) {
             masks.push_back(Mask{k % 2, t_first + static_cast<std::uint64_t>(t * 1e9),
                                  t_first + static_cast<std::uint64_t>((t + D) * 1e9)});
         }
-        const auto got = run(rig, L.frames, cfg, masks, &ref);
+        // the same tracker and IMU as the reference run (a fresh IMU feed: it is read once, in order)
+        std::unique_ptr<pibridge::ctrlbench::ImuFeed> feed2;
+        if (const auto v = argv_of(a, "--imu")) {
+            const auto comma = v->find(',');
+            feed2 = std::make_unique<pibridge::ctrlbench::ImuFeed>(
+                v->substr(0, comma), comma == std::string::npos ? "" : v->substr(comma + 1),
+                argv_of(a, "--calib-json").value_or(""));
+        }
+        auto got = run(rig, L.frames, cfg, masks, &ref, nullptr, feed2.get(), imutrack);
+        if (imutrack && !has(a, "--measured")) {
+            for (auto& fo : got) {
+                for (auto& fx : fo.fix) {
+                    if (fx && fx->published) {
+                        fx->found.joint.body_from_model = *fx->published;
+                    }
+                }
+            }
+        }
         std::vector<double> lat_ms, lat_fr, err_mm;
         int relocked = 0, never = 0, wrong = 0, eligible = 0;
         for (const Mask& mk : masks) {
@@ -858,6 +894,20 @@ int main(int argc, char** argv) {
                         err_mm.push_back(e * 1000.0);
                         if (e > 0.10) {
                             wrong++;
+                            if (std::getenv("BENCH_WRONG") != nullptr) {
+                                const auto& gf = got[i].fix[mk.slot]->found;
+                                const auto& rf = ref[i].fix[mk.slot]->found;
+                                const g::Mat3 dr = g::mat_mul(g::transpose(rf.joint.body_from_model.r), gf.joint.body_from_model.r);
+                                const auto& ot = ref[i].fix[1 - mk.slot];
+                                std::fprintf(stderr,
+                                             "wrong relock: t %.3f slot %zu frame %zu (+%zu after mask) err %.0f mm turn %.0f deg | got model %zu "
+                                             "leds %zu cams %zu rms %.2f few %d | ref leds %zu | other hand %s at %.0f mm\n",
+                                             static_cast<double>(L.frames[i].ns) * 1e-9, mk.slot, i, i - i0, e * 1000.0,
+                                             std::acos(std::clamp((dr[0][0] + dr[1][1] + dr[2][2] - 1.0) / 2.0, -1.0, 1.0)) * 180.0 / M_PI,
+                                             gf.model, gf.joint.total(), gf.joint.cams(), gf.joint.rms_px, got[i].fix[mk.slot]->few ? 1 : 0,
+                                             rf.joint.total(), ot ? "tracked" : "none",
+                                             ot ? g::norm(g::sub(ot->found.joint.body_from_model.t, gf.joint.body_from_model.t)) * 1000.0 : 0.0);
+                            }
                         }
                     }
                     done = true;

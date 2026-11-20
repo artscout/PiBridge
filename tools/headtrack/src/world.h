@@ -78,6 +78,9 @@ private:
     // the room anchor (a Monado-era mechanism that conflicts with the chaperone floor). PIBRIDGE_ANCHOR_VERTICAL=1
     // restores it. The horizontal recenter (x, z, yaw) is unchanged either way.
     bool apply_vertical_ = true;
+    /// The offset in use is a drift correction (`drift 1`, pibridge-roommap auto --follow): it keeps the recenter and
+    /// carries a vertical correction even when the chaperone carries the floor.
+    bool drift_ = false;
 };
 
 /// a * b

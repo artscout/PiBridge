@@ -1,6 +1,6 @@
 # winbridge: Pimax's own head tracking engine under Wine
 
-`io_slam_engine=pimax` (Tracking page, **Head tracking engine: Pimax**) makes `pibridge-headtrack`
+`io_slam_engine=pimax` (Tracking page, **Tracking engine: Pimax**) makes `pibridge-headtrack`
 ([pibridge-headtrack.md](pibridge-headtrack.md)) track the head with Pimax Play's own SLAM engine (`pimax_slam.pi.dll`)
 and the headset's factory calibration, instead of Basalt. The engine runs under Wine in its own process;
 pibridge-headtrack reaches it through a VIT library (`--engine pimax --vit libpibridge_vit_winbridge.so`), the same
@@ -89,6 +89,15 @@ pibridge-ctrltrack is not started. Everything below is from the Frida traces of 
 - IMU: every controller report (500 Hz per hand) to `ControllerPutControllerImuData(hand, {u64 ts; accel[3];
   gyro[3]}, out, scratch)` in the controller's raw IMU axes (m/s^2, rad/s; the driver's scales 1024 LSB/g and
   8.2 LSB/(deg/s), see below); the pose comes back in `out` (quaternion, position, angular and linear velocity).
+  - **What `out` holds** (RE of LedObjectPoseEstimator 2.11.2, 2026-11-20):
+    - `out[23]` = 1.0 when the pose is valid: tracked, with a vision update within 66 ms.
+    - `out[24]` (byte) = 1 while the controller is in the 6DoF tracking state.
+    - `out[20..21]` (u64 ns) = the pose time: the IMU sample time less the engine's 5.4 ms.
+  - **Validity.** `out[]` is filled with the IMU-only propagation when the pose is not valid too. winbridge therefore
+    takes a pose only with `out[23]`; until 2026-11-20 any non-zero position passed, so stale poses drifted.
+    `PIBRIDGE_WB_CTRL_ANY=1` gives back the old test.
+  - **Pose time.** `PIBRIDGE_WB_CTRL_POSE_TS=1` stamps the pose with the engine's pose time instead of the IMU sample's
+    (not yet A/B'd live).
 - IMU time: `ts` is the report's device timestamp (`ts_us`, le32 at byte 8), as Pimax Play passes it: in pass 5 the
   head IMU, the controller IMU and the camera frames are on one clock (the headset's, us resolution, the same drift
   against QPC; controller steps are multiples of the ~1978 us sample period). pibridge-headtrack puts `ts_us` through

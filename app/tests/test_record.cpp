@@ -661,6 +661,54 @@ TEST(command_lines_and_environment) {
     const RecProcSpec c = ctrltrackSpec(s, QStringLiteral("/r/x/logs"));
     CHECK((c.args == QStringList{QStringLiteral("live"), QStringLiteral("--source"), QStringLiteral("broker:") + s.brokerSocket,
                                  QStringLiteral("--factory")}));
+    // the controller shadow tracker: the same command line into its own pose file and log, only when asked for
+    const RecProcSpec cs = ctrltrackShadowSpec(s, QStringLiteral("/r/x/logs"));
+    CHECK(cs.name == QStringLiteral("ctrltrack-shadow"));
+    CHECK((cs.args == c.args + QStringList{QStringLiteral("--out"), QFileInfo(s.brokerSocket).path() +
+                                                                        QStringLiteral("/pibridge-ctrltrack-shadow.pose")}));
+    CHECK(cs.logPath == QStringLiteral("/r/x/logs/ctrltrack-shadow.log"));
+    {
+        RecSetup p = s;
+        p.extraEnv = QStringList{QStringLiteral("PIBRIDGE_CTRL_SHADOW=1"), QStringLiteral("PIBRIDGE_CTRL_ACQ=quads"),
+                                 QStringLiteral("OTHER=1")};
+        const RecProcSpec ce = ctrltrackShadowSpec(p, QStringLiteral("/r/x/logs"));
+        CHECK(ce.env.contains(QStringLiteral("PIBRIDGE_CTRL_ACQ=quads")));
+        CHECK(!ce.env.contains(QStringLiteral("OTHER=1")));
+        // the main tracker (Basalt mode) gets them too
+        const RecProcSpec cm = ctrltrackSpec(p, QStringLiteral("/r/x/logs"));
+        CHECK(cm.env.contains(QStringLiteral("PIBRIDGE_CTRL_ACQ=quads")));
+        CHECK(!cm.env.contains(QStringLiteral("OTHER=1")));
+        CHECK(cm.env.contains(QStringLiteral("PIMAX_CAM_CALIB=") + p.calib.path));
+    }
+    {
+        RecSetup p = s;
+        p.io.slamEngine = SlamEngine::Pimax;
+        p.winCtrlModels = true;
+        CHECK(!ctrlShadowWanted(p)); // not without PIBRIDGE_CTRL_SHADOW=1
+        p.extraEnv << QStringLiteral("PIBRIDGE_CTRL_SHADOW=1");
+        CHECK(ctrlShadowWanted(p) == (pimaxCtrlEngine(p) && headtrackWanted(p)));
+        CHECK(!ctrlShadowWanted(s) || pimaxCtrlEngine(s)); // never beside our own tracker (Basalt)
+    }
+    {
+        // winbridge gets its own PIBRIDGE_WB_* switches from the extra environment, nothing else
+        RecSetup p = s;
+        p.extraEnv = QStringList{QStringLiteral("PIBRIDGE_WB_CAM_ARG6=1"), QStringLiteral("OTHER=1")};
+        const RecProcSpec w = winbridgeSpec(p, QStringLiteral("/r/x/logs"));
+        CHECK(w.env.contains(QStringLiteral("PIBRIDGE_WB_CAM_ARG6=1")));
+        CHECK(!w.env.contains(QStringLiteral("OTHER=1")));
+        CHECK(w.env.contains(QStringLiteral("WINEDEBUG=-all")));
+    }
+    {
+        // head shadow mode: Basalt beside Pimax's engine in pibridge-headtrack
+        RecSetup p = s;
+        p.io.slamEngine = SlamEngine::Pimax;
+        CHECK(!headtrackSpec(p, QStringLiteral("/r/x/logs")).args.contains(QStringLiteral("--shadow-vit")));
+        p.extraEnv << QStringLiteral("PIBRIDGE_HEAD_SHADOW=1");
+        const QStringList a = headtrackSpec(p, QStringLiteral("/r/x/logs")).args;
+        const qsizetype i = a.indexOf(QStringLiteral("--shadow-vit"));
+        CHECK(i >= 0 && i + 1 < a.size() && a[i + 1] == p.basalt.path);
+        CHECK(a.contains(QStringLiteral("--shadow-cams")));
+    }
     const QStringList e = monadoEnv(s, QStringLiteral("/r/x"));
     // the recorder uses the inside-out settings (core/inside_out.h): camera auto exposure on with the Crystal model
     for (const char* want : {"PIMAX_FPS=90", "PIMAX_CAM_SOURCE=broker", "PIMAX_SLAM=1", "PIMAX_CAM_AE=1",

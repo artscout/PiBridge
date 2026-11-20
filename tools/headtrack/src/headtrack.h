@@ -15,6 +15,7 @@
 // (CustomHeadsetOpenVR's poseTimeOffset), as driver_monado's poses were predicted by SteamVR too.
 #pragma once
 
+#include "sysmon.h"
 #include "vit_host.h"
 #include "world.h"
 
@@ -64,6 +65,11 @@ struct Options {
     std::filesystem::path pose_file = hmd::pose_shm::default_path();
     /// Factory calibration (head origin); empty = the default search.
     std::string calibration;
+    /// Head shadow mode (--shadow-vit): a second engine (Basalt) on the same frames and IMU, its raw poses logged
+    /// next to the driving engine's (head-shadow-*.csv); it drives nothing.
+    std::string shadow_vit;
+    std::string shadow_slam_config;
+    std::vector<std::uint32_t> shadow_cams{0, 1};
 };
 
 /// The IMU's device clock (u32 us) on CLOCK_MONOTONIC: unwrapped, the least delayed offset, relaxed by 1/16384 per
@@ -116,6 +122,7 @@ struct Hand {
     hmd::ControllerSamplePeriod period;
     std::optional<hmd::ControllerReport> report;
     std::int64_t report_ns = 0;
+    std::uint32_t reports = 0; // reports received (the shadow log's IMU rate)
     Orientation imu; // the controller IMU in its raw axes (only its changes are used)
     // output thread only
     bool eng_have = false;
@@ -132,6 +139,12 @@ struct Hand {
     bool recentered = false;
 };
 
+/// The shadow tracker's pose file: `pibridge-ctrltrack-shadow.pose` next to pibridge-ctrltrack's default one (the app
+/// starts `pibridge-ctrltrack live --out` it in shadow mode).
+std::string shadow_pose_path();
+/// The controller fusers' settings (Config::from_env, the hold as Pimax's).
+ctrl::fuse::Config fuse_config();
+
 class Daemon {
 public:
     Daemon(Options o, std::function<void(std::string_view)> say);
@@ -143,6 +156,7 @@ public:
 private:
     class Hid;
     void on_imu(const hmd::ImuSample& s);
+    void start_fuser_logs();
     void on_controller(const hmd::ControllerReport& r);
     hmd::pose_shm::Device controller(int side, std::int64_t now_ns);
     /// The controller angle (PIMAX_CTRL_ANGLE, live file) on an aim pose (output thread).
@@ -172,6 +186,58 @@ private:
     std::int64_t ctrl_open_at_ = 0, ht_poll_at_ = 0;
     hmd::pose_shm::Device basalt_head(std::int64_t now_ns, std::uint32_t& tracking);
     void optical_fixes(std::int64_t now_ns);
+    /// The pose file optical_fixes reads: pibridge-ctrltrack's default one, or the shadow tracker's.
+    std::string ctrl_pose_path_;
+    // Shadow mode (PIBRIDGE_CTRL_SHADOW=1 with the Pimax engine and its LED engine): a second pibridge-ctrltrack runs
+    // on the same LED frames and writes shadow_pose_path(); our fusers run on its fixes and the controller IMU exactly
+    // as with Basalt (they also write the hint file its IMU-led tracker reads), but only for a comparison log, never
+    // for the published pose: each hand's Pimax pose and ours, side by side (shadow_log, ctrl-shadow-*.csv).
+    std::unique_ptr<ctrl::fuse::Fuser> shadow_[2];
+    std::FILE* shadow_csv_ = nullptr;
+    std::string shadow_csv_path_;
+    std::int64_t shadow_log_ns_[2] = {0, 0};
+    std::uint64_t shadow_rows_ = 0;
+    /// The last optical fix of the shadow tracker per hand (world, aim frame), for the log (output thread).
+    struct ShadowFix {
+        std::uint64_t frame_ns = 0;
+        std::uint32_t leds = 0;
+        std::uint32_t cams = 0;
+        std::uint32_t kind = 0;
+        std::array<std::uint8_t, 4> blobs{};
+        float rms_px = 0;
+        Vec3 p{};
+        Quat q = cam::slam::QUAT_ID;
+    };
+    ShadowFix shadow_fix_[2];
+    /// The fuser optical fixes and controller reports go to: Basalt's, else the shadow one, else none.
+    ctrl::fuse::Fuser* optical_fuser(std::size_t i) const { return fuser_[i] ? fuser_[i].get() : shadow_[i].get(); }
+    /// Shadow mode: our fuser's pose at now next to Pimax's (`dll`, before the controller angle), one row per hand
+    /// every 20 ms (output thread).
+    void shadow_log(int side, std::int64_t now_ns, const hmd::pose_shm::Device& dll, int dll_state, std::int64_t eng_ns,
+                    const std::optional<hmd::ControllerReport>& rep, std::int64_t rep_ns, std::uint32_t reports);
+    std::uint32_t shadow_reports_[2] = {0, 0};
+    std::array<std::uint8_t, 4> frame_blobs_{}; // the shadow tracker's newest LED frame: blobs per camera
+    /// Our controllers' position is reported at the controller IMU (the LED models' ImuToDevice translation, device
+    /// frame), the point Pimax's engine reports, not the LED model origin (PIBRIDGE_CTRL_IMU_POINT=0: the origin).
+    std::array<Vec3, 2> imu_in_device_{};
+    Vec3 imu_point(int side, const Quat& q_aim, const Vec3& p) const;
+    std::uint64_t frame_blobs_ns_ = 0;
+    std::int64_t shadow_stats_ns_ = 0;
+    // head shadow mode (Options::shadow_vit): the second engine, the indices of its cameras in o_.cams, the log
+    std::unique_ptr<VitHost> hshadow_;
+    std::vector<std::size_t> hshadow_tiles_;
+    std::FILE* hshadow_csv_ = nullptr;
+    std::string hshadow_csv_path_;
+    std::int64_t hshadow_last_[2] = {0, 0};
+    std::int64_t hshadow_pose_ns_ = 0;    // the last Basalt pose (monotonic now)
+    std::int64_t hshadow_reset_ns_ = 0;   // the last reset
+    float hshadow_prev_p_[3] = {0, 0, 0};
+    bool hshadow_have_prev_ = false;
+    std::uint64_t hshadow_rows_ = 0, hshadow_resets_ = 0;
+    std::atomic<std::int64_t> hshadow_frame_ns_{0};
+    /// One engine pose to the head shadow log (src 0 the driving engine, 1 the shadow), at most every 5 ms per source.
+    void hshadow_log(int src, const EnginePose& e);
+    SysMon sysmon_;
     /// Poll the Pimax engine's room state (floor + localization) at a low rate, write room-state.json and log changes
     /// (output thread). This is the observe-and-pin-down step for GetGroundState / GetLocModeState.
     void room_state_poll(std::int64_t now_ns);
@@ -224,10 +290,22 @@ private:
         std::int64_t ts = 0;
         Vec3 pos{};
         Quat q = cam::slam::QUAT_ID;
+        /// Before the world transform (room offset, recenter, drift corrections): the frame our controller tracking
+        /// lives in, so those never disturb it (Pimax's engine also tracks the controllers in its own world).
+        Vec3 raw_pos{};
+        Quat raw_q = cam::slam::QUAT_ID;
     };
+    /// The world transform of the newest head (world = raw_to_world_ * raw), for our controllers' output.
+    RigidPose raw_to_world_{};
+    /// Our tracking frame -> the world: a pose of ours (raw frame) as the apps see it.
+    ctrl::fuse::P to_world_pose(const ctrl::fuse::P& raw) const;
+    void push_head(const hmd::pose_shm::Device& raw, const hmd::pose_shm::Device& world);
     std::vector<HeadAt> head_hist_;
     std::size_t head_next_ = 0;
     std::optional<HeadAt> head_at(std::int64_t ts) const;
+    /// The head pose the fusers take: the IMU's, not the head origin's. pibridge-ctrltrack's poses are relative to the
+    /// calibration's body (IMU) frame, as the engine's are before `head_in_imu_` is taken off (controller()).
+    ctrl::fuse::P fuse_head(const HeadAt& h) const;
     std::uint64_t ctrl_sample_[2] = {0, 0};
     std::uint64_t haptic_requests_ = 0; // vibration requests taken (output thread)
     std::int64_t haptic_logged_ns_ = 0;

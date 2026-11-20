@@ -21,11 +21,17 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include "allocwatch.h"
+
 #include <cstdlib>
 #include <cstring>
 #include "proto.h"
 
 typedef int (*InitialFn)(const char*, const char*, const char*, void*, void*);
+// pimax_slam's HeadsetInitialImpl: the 5th argument's low byte is the map mode (RE 2026-11-20): 0 kNormal (Pimax Play:
+// load <serial>platMap_orborb_K8L4.* to relocalize, save it back), 1 kLabMap (no load, saves LabplatMap_*),
+// 2 kLabLoc (loads LabplatMap_*, never saves)
+typedef int (*HeadInitialFn)(const char*, const char*, const char*, void*, uintptr_t);
 typedef int (*SetByteFn)(int);
 typedef int (*PutCamFn)(void*, void*, void*, void*, float);
 typedef int (*PutImuFn)(void*, void*);
@@ -189,10 +195,54 @@ static bool init_slam() {
     g_getGround = (GetStateFn)GetProcAddress(h, "HeadsetGetGroundState");
     g_getLoc = (GetStateFn)GetProcAddress(h, "HeadsetGetLocModeState");
     printf("room state: GroundState=%s LocModeState=%s\n", g_getGround ? "yes" : "no", g_getLoc ? "yes" : "no");
-    int r = initial(g_calib, g_slam, vocab, nullptr, nullptr);
-    int m = setMode(1);
+    // PIBRIDGE_WB_SLAM_MAP: normal (default, as Pimax Play), loc (relocalize in a pinned copy of the saved map, never
+    // save: the map stops growing and no 200 MB save runs during play), fresh (no map loaded, a new one saved to
+    // LabplatMap_*). loc copies <serial>platMap_* to LabplatMap_* when the Lab copy is missing or older.
+    uintptr_t map_mode = 0;
+    const char* map_env = getenv("PIBRIDGE_WB_SLAM_MAP");
+    if (map_env && strcmp(map_env, "loc") == 0) {
+        map_mode = 2;
+        char pat[MAX_PATH];
+        snprintf(pat, sizeof(pat), "%s\*platMap_orborb_K8L4.bin", g_slam);
+        WIN32_FIND_DATAA fd;
+        HANDLE fh = FindFirstFileA(pat, &fd);
+        std::string serial_bin;
+        if (fh != INVALID_HANDLE_VALUE) {
+            do {
+                if (strncmp(fd.cFileName, "Lab", 3) != 0) {
+                    serial_bin = fd.cFileName;
+                }
+            } while (FindNextFileA(fh, &fd));
+            FindClose(fh);
+        }
+        if (!serial_bin.empty()) {
+            const std::string stem = serial_bin.substr(0, serial_bin.size() - strlen("platMap_orborb_K8L4.bin"));
+            for (const char* ext : {".bin", ".yaml"}) {
+                const std::string src = std::string(g_slam) + "\\" + stem + "platMap_orborb_K8L4" + ext;
+                const std::string dst = std::string(g_slam) + "\\LabplatMap_orborb_K8L4" + ext;
+                WIN32_FILE_ATTRIBUTE_DATA a{}, b{};
+                const bool have_src = GetFileAttributesExA(src.c_str(), GetFileExInfoStandard, &a);
+                const bool have_dst = GetFileAttributesExA(dst.c_str(), GetFileExInfoStandard, &b);
+                if (have_src && (!have_dst || CompareFileTime(&a.ftLastWriteTime, &b.ftLastWriteTime) > 0)) {
+                    printf("SLAM map: pinned copy %s -> %s: %s\n", src.c_str(), dst.c_str(),
+                           CopyFileA(src.c_str(), dst.c_str(), FALSE) ? "ok" : "FAILED");
+                }
+            }
+        } else {
+            printf("SLAM map: no saved map to pin; relocalization has nothing to load\n");
+        }
+    } else if (map_env && strcmp(map_env, "fresh") == 0) {
+        map_mode = 1;
+    }
+    printf("SLAM map mode: %s\n", map_mode == 2 ? "loc (pinned LabplatMap, never saved)"
+                                   : map_mode == 1 ? "fresh (no map loaded, saved to LabplatMap)"
+                                                   : "normal (load and save the saved map, as Pimax Play)");
+    int r = ((HeadInitialFn)initial)(g_calib, g_slam, vocab, nullptr, map_mode);
+    // SetTrackingMode(1) as Pimax Play: the 6DoF / 3DoF switch, not the map handling (that is InitialImpl's 5th arg)
+    const int mode = 1;
+    int m = setMode(mode);
     int e = enable(1);
-    printf("SLAM: Initial=%d SetTrackingMode(1)=%d SetDeviceEnable(1)=%d\n", r, m, e);
+    printf("SLAM: Initial=%d SetTrackingMode(%d)=%d SetDeviceEnable(1)=%d\n", r, mode, m, e);
     return r == 0 && m == 0 && e == 0;
 }
 
@@ -341,7 +391,26 @@ static void ctrl_imu_process(const CtrlImuItem& in, CtrlPosePayload& p, CallStat
                in.hand, imuRet, out[13], out[14], out[15], out[16], out[17], out[18], out[19], out[20],
                out[21], out[22], out[23], out[24], out[25], out[26]);
     }
-    if (out[4] != 0.0f || out[5] != 0.0f || out[6] != 0.0f) {
+    // a pose only when the engine says it is valid (out[23] = 1: tracked and a vision update within 66 ms): out[] is
+    // filled with the IMU-only propagation otherwise, which drifts (RE of LedObjectPoseEstimator 2.11.2);
+    // PIBRIDGE_WB_CTRL_ANY=1: the old test (any non-zero position)
+    static const bool any_pose = [] {
+        const char* e = getenv("PIBRIDGE_WB_CTRL_ANY");
+        return e && strcmp(e, "1") == 0;
+    }();
+    const bool valid = any_pose ? (out[4] != 0.0f || out[5] != 0.0f || out[6] != 0.0f) : out[23] > 0.5f;
+    if (valid) {
+        // PIBRIDGE_WB_CTRL_POSE_TS=1: stamp the pose with the engine's own pose time, out[20..21] as u64 ns (the IMU
+        // sample time less its 5.4 ms); default: the IMU sample time as before (to A/B it first)
+        static const bool pose_ts = [] {
+            const char* e = getenv("PIBRIDGE_WB_CTRL_POSE_TS");
+            return e && strcmp(e, "1") == 0;
+        }();
+        uint64_t pts = 0;
+        memcpy(&pts, &out[20], sizeof(pts));
+        if (pose_ts && pts != 0) {
+            p.ts = pts;
+        }
         // from LED engine axes into the SLAM world: q = Q^-1 * q_led, vectors (x, -z, y)
         const float qinv[4] = {-kQ[0], -kQ[1], -kQ[2], kQ[3]};
         qmul(qinv, out, p.pose);
@@ -388,8 +457,19 @@ static void led_process(const LedHeader& lh, uint8_t (*leds)[640 * 480], CallSta
         qmul(kQ, head, hp.q);
         to_led(head + 4, hp.p);
     }
+    // PIBRIDGE_WB_CAM_ARG6=1: the sixth argument a zeroed buffer instead of nullptr (Pimax Play passes a heap object
+    // there, frida pass 5; A/B for the LED engine's growth over a session)
+    static const bool arg6 = [] {
+        const char* e = getenv("PIBRIDGE_WB_CAM_ARG6");
+        if (e && strcmp(e, "1") == 0) {
+            printf("LED engine: ControllerPutCameraImage gets a zeroed 1 MiB buffer as its sixth argument\n");
+            return true;
+        }
+        return false;
+    }();
+    static uint8_t* arg6buf = arg6 ? static_cast<uint8_t*>(calloc(1, 1 << 20)) : nullptr;
     const double t0 = now_ms();
-    const int camRet = g_ctrlCam(&lf[0], &lf[1], &lf[2], &lf[3], &hp, nullptr);
+    const int camRet = g_ctrlCam(&lf[0], &lf[1], &lf[2], &lf[3], &hp, arg6buf);
     st.add(now_ms() - t0);
     // DIAG (pibridge): ControllerPutCameraImage's return -- the candidate for how many LED points the
     // cameras matched this frame. Logged ~1/s so we can see it drop on fast swings / bad angles.
@@ -508,6 +588,15 @@ int main(int argc, char** argv) {
     if (const char* a = getenv("PIBRIDGE_WB_CTRL_THREAD")) g_ctrlThread = (atoi(a) != 0);
     if (!find_kit() || !init_slam()) return 1;
     init_ctrl();
+    // PIBRIDGE_WB_ALLOC=1: which code in the Pimax DLLs keeps heap memory, once a minute (allocwatch.h)
+    if (const char* aw = getenv("PIBRIDGE_WB_ALLOC"); aw && strcmp(aw, "1") == 0) {
+        if (const char* ev = getenv("PIBRIDGE_WB_ALLOC_EVERY"); ev && atoi(ev) > 0) {
+            allocwatch::every = static_cast<unsigned>(atoi(ev));
+        }
+        const int n = allocwatch::install();
+        printf("allocwatch: %d heap imports hooked in all, a report every 60 s\n", n);
+        allocwatch::start_reporter(60000);
+    }
     if (g_ctrlOn && g_ctrlThread) {
         HANDLE th = CreateThread(nullptr, 0, ctrl_worker, nullptr, 0, nullptr);
         if (th) {

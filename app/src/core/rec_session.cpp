@@ -186,22 +186,47 @@ RecProcSpec brokerSpec(const RecSetup& s, const QString& logDir) {
 }
 
 RecProcSpec ctrltrackSpec(const RecSetup& s, const QString& logDir) {
+    QStringList env{QStringLiteral("PIMAX_CAM_CALIB=") + s.calib.path};
+    // the tracker's own switches from the extra environment (PIBRIDGE_CTRL_ACQ, PIBRIDGE_CTRL_TRACKER, ...)
+    for (const QString& w : s.extraEnv) {
+        if (w.startsWith(QStringLiteral("PIBRIDGE_CTRL_"))) {
+            env << w;
+        }
+    }
     return {QStringLiteral("ctrltrack"),
             s.ctrl.path,
             {QStringLiteral("live"), QStringLiteral("--source"), QStringLiteral("broker:") + s.brokerSocket,
              QStringLiteral("--factory")},
-            {QStringLiteral("PIMAX_CAM_CALIB=") + s.calib.path},
+            env,
             logDir + QStringLiteral("/ctrltrack.log")};
+}
+
+bool ctrlShadowWanted(const RecSetup& s) {
+    return pimaxCtrlEngine(s) && headtrackWanted(s) && !s.ctrl.path.isEmpty() &&
+           s.extraEnv.contains(QStringLiteral("PIBRIDGE_CTRL_SHADOW=1"));
+}
+
+RecProcSpec ctrltrackShadowSpec(const RecSetup& s, const QString& logDir) {
+    RecProcSpec c = ctrltrackSpec(s, logDir);
+    c.name = QStringLiteral("ctrltrack-shadow");
+    // pibridge-headtrack's shadow_pose_path(): next to the default pose file, in $XDG_RUNTIME_DIR
+    c.args << QStringLiteral("--out")
+           << QFileInfo(s.brokerSocket).path() + QStringLiteral("/pibridge-ctrltrack-shadow.pose");
+    c.logPath = logDir + QStringLiteral("/ctrltrack-shadow.log"); // the env (and its PIBRIDGE_CTRL_*) as ctrltrackSpec
+    return c;
 }
 
 RecProcSpec winbridgeSpec(const RecSetup& s, const QString& logDir) {
     QString kit = QStringLiteral("Z:") + s.winKit;
     kit.replace(QLatin1Char('/'), QLatin1Char('\\'));
-    return {QStringLiteral("winbridge"),
-            s.wine,
-            {s.winbridge.path},
-            {QStringLiteral("WINEDEBUG=-all"), QStringLiteral("PIBRIDGE_WINDATA=") + kit},
-            logDir + QStringLiteral("/winbridge.log")};
+    QStringList env{QStringLiteral("WINEDEBUG=-all"), QStringLiteral("PIBRIDGE_WINDATA=") + kit};
+    // winbridge's own switches from the extra environment (PIBRIDGE_WB_CTRL_THREAD, PIBRIDGE_WB_CAM_ARG6, ...)
+    for (const QString& w : s.extraEnv) {
+        if (w.startsWith(QStringLiteral("PIBRIDGE_WB_"))) {
+            env << w;
+        }
+    }
+    return {QStringLiteral("winbridge"), s.wine, {s.winbridge.path}, env, logDir + QStringLiteral("/winbridge.log")};
 }
 
 // pibridge-headtrack (io_headtrack): the head tracking in its own process, its pose to CustomHeadsetOpenVR
@@ -216,6 +241,17 @@ RecProcSpec headtrackSpec(const RecSetup& s, const QString& logDir) {
         // Pimax's engine: all four cameras, its pose at IMU rate (one per camera frame otherwise)
         args << QStringLiteral("--vit") << s.vitBridge.path << QStringLiteral("--cams") << QStringLiteral("0,1,2,3");
         env << QStringLiteral("PIBRIDGE_VIT_POSE_RATE=imu");
+        // head shadow mode (PIBRIDGE_HEAD_SHADOW=1): Basalt beside it on the same frames, logged only
+        if (s.extraEnv.contains(QStringLiteral("PIBRIDGE_HEAD_SHADOW=1")) && !s.basalt.path.isEmpty()) {
+            const QString cfg = s.sessionSlamConfig.isEmpty() ? s.slamConfig.path : s.sessionSlamConfig;
+            // the cameras of the Basalt config this session made (four only when its four-camera calibration was made)
+            const bool four = !s.sessionSlamConfig.isEmpty() && s.sessionSlamCams == 4;
+            args << QStringLiteral("--shadow-vit") << s.basalt.path << QStringLiteral("--shadow-cams")
+                 << (four ? QStringLiteral("0,1,2,3") : QStringLiteral("0,1"));
+            if (!cfg.isEmpty()) {
+                args << QStringLiteral("--shadow-slam-config") << cfg;
+            }
+        }
     } else {
         args << QStringLiteral("--vit") << s.basalt.path << QStringLiteral("--cams")
              << (s.io.slamCams == 4 ? QStringLiteral("0,1,2,3") : QStringLiteral("0,1"));
@@ -666,6 +702,11 @@ bool RecSession::tick(qint64 nowMs) {
                 // the controller tracker, unless Pimax's LED engine in winbridge tracks the controllers
                 if (setup_.io.ctrlTrack && !pimaxCtrlEngine(setup_) && !setup_.ctrl.path.isEmpty() &&
                     !startProc(ctrltrackSpec(setup_, logDir()), nowMs)) {
+                    break;
+                }
+                // controller shadow mode: our tracker beside Pimax's LED engine, for pibridge-headtrack's comparison log
+                if (mode_ == Mode::LiveSteamVr && ctrlShadowWanted(setup_) &&
+                    !startProc(ctrltrackShadowSpec(setup_, logDir()), nowMs)) {
                     break;
                 }
                 // pibridge-headtrack: the head tracking without Monado, before SteamVR

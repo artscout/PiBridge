@@ -1,0 +1,33 @@
+#!/bin/sh
+# SteamVR launch-options wrapper (Steam -> SteamVR -> Properties -> Launch Options):
+#     pibridge-steamvr-env %command%
+#
+# Steam's 64-bit client (steamrt64, SteamRT3) runs inside its own container. SteamVR starts vrcompositor and its
+# apps through that container's launcher service, the D-Bus name
+# com.steampowered.PressureVessel.LaunchAlongsideSteam.Instance<PID of srt-client-container>. SteamVR's bin/vrenv.sh
+# looks the PID up with pgrep, which the container lacks (2.19.x), or not at all (2.18.x): vrcompositor then never
+# starts and vrserver aborts on its watchdog after ~21 s. vrenv.sh keeps a value that is already set, so setting it
+# here survives SteamVR updates and branch switches. Nothing is changed when it is set already or no container runs
+# (the old 32-bit client).
+if [ -z "${SRT_LAUNCHER_SERVICE_ALONGSIDE_STEAM:-}" ]; then
+    pid=""
+    for p in /proc/[0-9]*; do
+        n=${p#/proc/}
+        [ "$n" = "$$" ] && continue
+        case "$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)" in
+        *srt-client-container*)
+            if [ -z "$pid" ] || [ "$n" -lt "$pid" ]; then pid=$n; fi ;;
+        esac
+    done
+    if [ -n "$pid" ]; then
+        export SRT_LAUNCHER_SERVICE_ALONGSIDE_STEAM="com.steampowered.PressureVessel.LaunchAlongsideSteam.Instance$pid"
+        echo "pibridge-steamvr-env: Steam client container at PID $pid, $SRT_LAUNCHER_SERVICE_ALONGSIDE_STEAM" >&2
+    else
+        echo "pibridge-steamvr-env: no Steam client container (32-bit Steam client?), SteamVR decides" >&2
+    fi
+fi
+if [ "$#" -eq 0 ]; then
+    echo "usage: pibridge-steamvr-env %command%   (SteamVR's launch options in Steam)" >&2
+    exit 2
+fi
+exec "$@"

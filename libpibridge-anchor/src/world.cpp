@@ -427,6 +427,19 @@ cam::Result<void> write_offset_as(const std::string& path, std::uint32_t pid, st
     return write_rename(rs::with_extension(path, "offset.tmp"), path, offset_text(pid, o));
 }
 
+cam::Result<void> write_offset_drift(const std::string& path, std::uint32_t pid, const Pose& o) {
+    const std::uint32_t me = rs::process_id();
+    auto g_ = LeaseLock::take(path);
+    if (!g_) {
+        return cam::fail(g_.error());
+    }
+    const auto cur = read_lease(lease_path_for(path));
+    if (!lease_held_by(cur, pid, me)) {
+        return cam::fail(cam::IoError::custom(cam::ErrorKind::PermissionDenied, refused_text(cur, pid)));
+    }
+    return write_rename(rs::with_extension(path, "offset.tmp"), path, offset_text(pid, o) + "drift 1\n");
+}
+
 std::pair<double, double> pose_error(const Pose& a, const Pose& b) {
     const double dt = g::norm(g::sub(a.t, b.t));
     const g::Mat3 rel = g::mat_mul(g::transpose(a.r), b.r);

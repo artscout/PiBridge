@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Ported from omarchyvr pimax-ctrltrack/src/track.rs (MIT OR Apache-2.0).
 #include "pibridge/ctrl/track/rig.h"
+#include "pibridge/ctrl/track/quads.h"
 
 #include "pibridge/cam/frame.h"
 #include "pibridge/cam/io.h"
@@ -71,11 +72,29 @@ std::expected<Rig, std::string> Rig::try_load(std::span<const std::string> a) {
     for (const LedModel& m : rig.models) {
         rig.triples.push_back(m.neighbour_triples(0.045, 110.0));
     }
+    // PiBridge: the quad index instead of the brute-force acquisition, by default (PIBRIDGE_CTRL_ACQ=brute: the
+    // brute force; PIBRIDGE_CTRL_PARITY=1 keeps it too, as the Rust tool)
+    std::string acq_note;
+    const auto acq = env("PIBRIDGE_CTRL_ACQ");
+    const auto parity = env("PIBRIDGE_CTRL_PARITY");
+    if (!(acq && *acq == "brute") && !(parity && *parity == "1")) {
+        double ms = 0;
+        std::size_t entries = 0;
+        for (std::size_t mi = 0; mi < rig.models.size(); mi++) {
+            QuadParams qp;
+            qp.facing_deg = rig.prm.facing_deg;
+            rig.prm.quads[mi] = QuadIndex::build(rig.models[mi], qp);
+            ms += rig.prm.quads[mi]->build_ms();
+            entries += rig.prm.quads[mi]->entries();
+        }
+        acq_note = std::format(" | acquisition: quad index ({} entries, built in {} ms)", entries, rf::fixed(ms, 0));
+    }
     std::fprintf(stderr, "%s\n",
                  std::format("calibration {}{} ({}) | models {} ({} LEDs) / {} ({} LEDs) | LED triples {} / {}", cpath,
                              rig.calib.is_reference() ? " (the shipped Dream Air reference)" : "", ext_note,
                              rig.models[0].hand, rig.models[0].leds.size(), rig.models[1].hand,
                              rig.models[1].leds.size(), rig.triples[0].size(), rig.triples[1].size())
+                     .append(acq_note)
                      .c_str());
     std::fprintf(stderr, "controller models: %s\n", source.describe().c_str());
     return rig;
@@ -109,7 +128,9 @@ std::string debug_best(const std::optional<std::pair<std::size_t, CamSolve>>& be
 
 std::vector<Found> solve_frame(const LedFrame& f, std::span<const Cam> cams, const std::array<LedModel, 2>& models,
                                std::span<const std::vector<std::array<std::size_t, 3>>> triples, const Params& prm,
-                               const std::vector<Prior>* prior, std::span<const Found> pre, bool parallel) {
+                               const std::vector<Prior>* prior, std::span<const Found> pre, bool parallel,
+                               const std::array<std::optional<OrientPrior>, 2>* orient,
+                               const std::array<bool, 2>* search) {
     std::vector<CamObs> obs;
     obs.reserve(cams.size());
     for (std::size_t ci = 0; ci < cams.size() && ci < f.px.size(); ci++) {
@@ -149,6 +170,7 @@ std::vector<Found> solve_frame(const LedFrame& f, std::span<const Cam> cams, con
     }
     // single-camera acquisition: per camera, the better model first, then the other on the remaining blobs
     const bool debug = cam::env_os("CT_DEBUG").has_value();
+    const RigView view{cams, obs, used, orient};
     const auto per_cam = [&](std::size_t ci) {
         const Cam& cam = cams[ci];
         std::vector<bool> u = used[ci];
@@ -156,7 +178,12 @@ std::vector<Found> solve_frame(const LedFrame& f, std::span<const Cam> cams, con
         for (int round = 0; round < 2; round++) {
             std::optional<std::pair<std::size_t, CamSolve>> best;
             for (std::size_t mi = 0; mi < models.size(); mi++) {
-                auto s = acquire(models[mi], triples[mi], cam, ci, obs[ci], u, prm);
+                if (prm.quads[mi] && search != nullptr && !(*search)[mi]) {
+                    continue;
+                }
+                auto s = prm.quads[mi] ? acquire_quads(models[mi], *prm.quads[mi], cam, ci, obs[ci], u, prm, &view,
+                                                          orient != nullptr && (*orient)[mi] ? &*(*orient)[mi] : nullptr)
+                                       : acquire(models[mi], triples[mi], cam, ci, obs[ci], u, prm);
                 if (!s) {
                     continue;
                 }

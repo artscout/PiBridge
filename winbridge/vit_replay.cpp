@@ -69,23 +69,76 @@ static int run_ctrl(const Vit& v, void* h, const char* path, const char* prefix)
     uint64_t t0 = 0;
     long nLed = 0, nImu = 0, nPose[2] = {0, 0};
     int64_t last[2] = {0, 0};
+    // VIT_REPLAY_REPEAT=N: play the take N times back to back, the timestamps continuing (a long session from a short
+    // take, e.g. to watch the LED engine's cost over time); each pass is reported with its pose counts
+    const char* rep = getenv("VIT_REPLAY_REPEAT");
+    const int passes = rep ? atoi(rep) : 1;
+    const long data0 = ftell(f);
+    uint64_t off = 0, first_ts = 0, last_ts = 0;
+    int pass = 0;
+    long passPose[2] = {0, 0};
     for (;;) {
         uint8_t typ;
-        if (fread(&typ, 1, 1, f) != 1) break;
+        if (fread(&typ, 1, 1, f) != 1) {
+            printf("pass %d done: LED frames %ld, poses left %ld right %ld\n", pass, nLed, nPose[0] - passPose[0],
+                   nPose[1] - passPose[1]);
+            fflush(stdout);
+            passPose[0] = nPose[0];
+            passPose[1] = nPose[1];
+            if (++pass >= passes) break;
+            off += last_ts - first_ts + 40000000ull;
+            fseek(f, data0, SEEK_SET);
+            continue;
+        }
         if (typ == 1) {
             uint64_t ts; uint32_t sh;
             if (fread(&ts, 8, 1, f) != 1 || fread(&sh, 4, 1, f) != 1 || fread(tiles.data(), 1, tiles.size(), f) != tiles.size()) break;
+            if (!first_ts) first_ts = ts;
+            if (pass == 0) last_ts = ts;
+            ts += off;
             if (!t0) t0 = ts;
             std::this_thread::sleep_until(wall0 + std::chrono::nanoseconds(ts - t0));
+            // VIT_REPLAY_HEAD_IMU=1: the headset's IMU at 1 kHz up to the frame (at rest, gravity up in the driver's axes),
+            // so the head engine gives winbridge head poses for the LED engine as live
+            static const bool head_imu = getenv("VIT_REPLAY_HEAD_IMU") != nullptr;
+            static int64_t head_ts = 0;
+            if (head_imu) {
+                if (head_ts == 0) head_ts = (int64_t)ts - 50000000;
+                for (; head_ts < (int64_t)ts; head_ts += 1000000) {
+                    vit_imu_sample_t s{};
+                    s.timestamp = head_ts;
+                    s.ay = 9.80665f;
+                    s.wx = 0.0005f * (float)((head_ts / 1000000) % 7 - 3);
+                    // VIT_REPLAY_HEAD_TURN=1: the head turning (yaw +-1 rad/s on a 6 s cycle, pitch +-0.4 on 4.4 s), so
+                    // the head pose the LED engine gets keeps changing as live
+                    static const bool turn = getenv("VIT_REPLAY_HEAD_TURN") != nullptr;
+                    if (turn) {
+                        const double ts_s = (double)head_ts * 1e-9;
+                        s.wy = (float)(1.0 * sin(ts_s * 2.0 * M_PI / 6.0));
+                        s.wx += (float)(0.4 * sin(ts_s * 2.0 * M_PI / 4.4));
+                    }
+                    v.tracker_push_imu_sample(t, &s);
+                }
+            }
             const uint8_t* tp[4] = {&tiles[0], &tiles[640 * 480], &tiles[2 * 640 * 480], &tiles[3 * 640 * 480]};
             led((int64_t)ts, sh, 4, tp, strides);
             ++nLed;
         } else {
             uint32_t hand; uint64_t ts; float a[3], g[3];
             if (fread(&hand, 4, 1, f) != 1 || fread(&ts, 8, 1, f) != 1 || fread(a, 4, 3, f) != 3 || fread(g, 4, 3, f) != 3) break;
+            if (!first_ts) first_ts = ts;
+            if (pass == 0 && ts > last_ts) last_ts = ts;
+            ts += off;
             if (!t0) t0 = ts;
             imu(hand, (int64_t)ts, a, g);
             ++nImu;
+            // VIT_REPLAY_IMU_DUP=US: every sample a second time US microseconds later (pibridge-headtrack hands the
+            // engine both samples of a report, about twice the rate of these takes)
+            static const long dup_us = getenv("VIT_REPLAY_IMU_DUP") ? atol(getenv("VIT_REPLAY_IMU_DUP")) : 0;
+            if (dup_us > 0) {
+                imu(hand, (int64_t)ts + dup_us * 1000, a, g);
+                ++nImu;
+            }
         }
         for (uint32_t k = 0; k < 2; ++k) {  // like the driver: poll the latest pose
             pibridge_wb_ctrl_pose p;

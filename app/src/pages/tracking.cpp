@@ -123,6 +123,9 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
     headRow->addSpacing(12);
     message_ = new QLabel;
     message_->setObjectName(QStringLiteral("dim"));
+    // a long message (the saved extra environment) wraps instead of widening the window
+    message_->setWordWrap(true);
+    message_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     headRow->addWidget(message_, 1);
     auto* help = pibridge::ui::linkButton(QStringLiteral("How tracking works"));
     help->setIcon(pibridge::ui::lineIcon(pibridge::ui::Icon::Help, pibridge::ui::color::accentText));
@@ -201,7 +204,7 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
     connect(mode_, &pibridge::ui::Segmented::activated, this, [this](int i) {
         save(iokey::kMode, i == 1 ? QStringLiteral("inside-out") : QStringLiteral("lighthouse"));
     });
-    modeCard_->body()->addWidget(pibridge::ui::settingRow(QStringLiteral("Head tracking by"), mode_));
+    modeCard_->body()->addWidget(pibridge::ui::settingRow(QStringLiteral("Tracking by"), mode_));
     // the VR backend is chosen once, in the Dashboard's top bar (with the OpenXR runtime); the Session card says which
     modeText_ = new QLabel;
     modeText_->setWordWrap(true);
@@ -257,7 +260,7 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
     connect(&control_, &IoSessionControl::changed, this, &TrackingPage::updateSession);
 
     // ---- head tracking
-    auto* head = new pibridge::ui::Card(QStringLiteral("Head tracking (SLAM)"));
+    auto* head = new pibridge::ui::Card(QStringLiteral("Tracking engine: head and controllers"));
     slam_ = toggle(iokey::kSlam);
     addRow(head, QStringLiteral("6DoF head tracking"),
            QStringLiteral("The engine below follows the room in the two tracking cameras plus the IMU (PIMAX_SLAM). "
@@ -265,10 +268,12 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
            slam_, [](const IoSettings& io) { return io.slam; }, engineMissing);
     engine_ = seg({QStringLiteral("Basalt"), QStringLiteral("Pimax")}, iokey::kSlamEngine,
                   {QStringLiteral("basalt"), QStringLiteral("pimax")});
-    addRow(head, QStringLiteral("Head tracking engine"),
-           QStringLiteral("Basalt: the open-source tracker. Pimax: Pimax Play's own tracking engine with the headset's "
-                          "factory calibration, run under Wine while tracking runs (its files are copied from Pimax Play "
-                          "once, see docs/WINBRIDGE.md). Start and Stop start and stop it with SteamVR."),
+    addRow(head, QStringLiteral("Tracking engine"),
+           QStringLiteral("Chooses both the head and the controller tracking. Basalt: the open-source head tracker, and "
+                          "PiBridge's own controller tracker (pibridge-ctrltrack). Pimax: Pimax Play's own engines, the "
+                          "head tracker and the controllers' LED engine, with the headset's factory calibration, run "
+                          "under Wine while tracking runs (their files are copied from Pimax Play once, see "
+                          "docs/WINBRIDGE.md). Start and Stop start and stop them with SteamVR."),
            engine_, [](const IoSettings& io) { return io.slamEngine == SlamEngine::Pimax; },
            [engineMissing](const IoSettings& io, const RecSetup& s) { return engineMissing(io, s); });
     const auto needBase = [basaltOnly](const IoSettings& io, const RecSetup& s) -> QString {
@@ -394,7 +399,7 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
     auto* ctrl = new pibridge::ui::Card(QStringLiteral("Controllers"));
     ctrlTrack_ = toggle(iokey::kCtrlTrack);
     addRow(ctrl, QStringLiteral("Optical tracking"),
-           QStringLiteral("Finds the controllers' LEDs in the cameras. With the Pimax head tracking engine: Pimax's own "
+           QStringLiteral("Finds the controllers' LEDs in the cameras. With the Pimax tracking engine: Pimax's own "
                           "LED engine in the same winbridge, as in Pimax Play (PIMAX_CTRL_ENGINE); otherwise "
                           "pibridge-ctrltrack (PIMAX_CTRL_TRACK). Off: the controllers only turn, at a fixed place by the "
                           "head."),
@@ -515,6 +520,7 @@ void TrackingPage::say(const QString& text, bool error) {
     message_->style()->unpolish(message_);
     message_->style()->polish(message_);
     message_->setText(text);
+    message_->setToolTip(text);
 }
 
 void TrackingPage::save(std::string_view key, const QString& value) {
@@ -525,7 +531,7 @@ void TrackingPage::save(std::string_view key, const QString& value) {
         say(QStringLiteral("Could not write %1").arg(conf_.path()), true);
     } else {
         say(control_.active() ? QStringLiteral("Saved; applies at the next start (the running session keeps its settings).")
-                              : QStringLiteral("Saved (%1=%2).").arg(QString::fromUtf8(key.data(), qsizetype(key.size())), value));
+                              : QStringLiteral("Saved."));
     }
     load();
 }

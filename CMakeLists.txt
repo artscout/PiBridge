@@ -65,6 +65,8 @@ install(DIRECTORY devices/ DESTINATION ${CMAKE_INSTALL_DATADIR}/pibridge/devices
 install(DIRECTORY world/ DESTINATION ${CMAKE_INSTALL_DATADIR}/pibridge/world PATTERN ".godot" EXCLUDE PATTERN ".gitignore" EXCLUDE)
 # Godot itself is not shipped: pibridge-get-godot fetches the official build for the user (checked by its checksum)
 install(PROGRAMS tools/get-godot/pibridge-get-godot DESTINATION ${CMAKE_INSTALL_BINDIR})
+# SteamVR's launch-options wrapper for Steam's 64-bit (SteamRT3) client (docs/INSTALL.md 4.3)
+install(PROGRAMS tools/steamvr-env/pibridge-steamvr-env DESTINATION ${CMAKE_INSTALL_BINDIR})
 # Or the world exported into one standalone executable, <prefix>/lib/pibridge/pibridge-world (Godot's Linux release
 # template with the project embedded): the package does this, so its users need no Godot. It needs Godot
 # (PIBRIDGE_GODOT) and that version's export templates on the build machine (docs/world.md).

@@ -101,6 +101,53 @@ Measured in `docs/research/ctrl-tracking-improvements.md`. `track`, `scan`, `sho
     refuses left/right swaps in the search;
   - it was not better on the recordings with the synthetic IMU (research doc section 5).
 
+- **Pimax's scheme in the IMU-led tracker** (`imutrack`, 2026-11-20). It follows a reverse engineering of Pimax's LED
+  engine (LedObjectPoseEstimator 2.11.2); the reports are in `/mnt/g/omarchyvr-windows/re-dll/led-engine-2026-11-20/`.
+  All figures below are from `ctrl-imu-take2`.
+  - **Tracking hypotheses (P1P).** The gyro's rotation is kept. For each near (LED, blob) pair, the predicted position
+    moves so that the LED lands on its blob: within 150 px (300 px in the first 5 frames), at most 5 cm. The move that
+    matches the most LEDs in 4 px replaces the prediction. Result: misses 65 -> 45, jumps over 8 cm 7 -> 1, worst frames
+    2.5 -> 0.7 ms. `CT_P1P=0` turns it off; `CT_P1P_M` sets the largest move.
+  - **Cold acquisition by hypotheses (Pimax's ControllerDetect).** This applies to a controller with no orientation to go
+    by: none, older than `CT_KNOWN_S` (10 s), or lost over 1 m from the head.
+    - Every search fit and its refitted twin (the LED ring turned ~180 deg onto itself) becomes a hypothesis.
+    - The controller's gyro carries each hypothesis. A new fit within 0.3 rad (`CT_HYP_GYRO`) extends it; 4 frames
+      without one (`CT_HYP_MISS`) drop it.
+    - From 3 frames the IMU test runs on the change of velocity between the fits, against the accelerometer's specific
+      force under the hypothesis' orientation (when still, gravity's tilt too), at most 0.5 m/s (`CT_HYP_M`).
+    - A rival on the same blobs that explains the IMU nearly as well delays the acceptance (up to 12 frames).
+    - A hypothesis whose turns the other controller's gyro explains clearly better is refused.
+    - The hypothesis is accepted as tracked, with its velocity. `CT_HYP=0` gives the old single-frame tentative pick.
+    - Cold masks: wrong relocks 4 -> 0, relock p50 160 ms.
+  - **The other controller's blobs.**
+    - A search fit with a third of its blobs within 4 px of the other tracked controller's projected LEDs is refused,
+      as is one within 8 cm of that controller's state. A tracked controller claims its blobs first, as in Pimax.
+    - A failed pose fit tries its few-LED updates after both controllers' fits have claimed their blobs.
+    - Few-LED-only frames in a row are capped at 15 (Pimax's weak lost threshold; `CT_LED_RUN`).
+    - Masked relocks: 15/17 with 1 wrong -> 17/17 with none.
+  - **Frame time.** The LED frame's device timestamp goes through a least-delay host mapping, instead of the USB arrival
+    and its jitter. `PIBRIDGE_CTRL_FRAME_TS=host` gives back the arrival time. The log's second imutrack line shows the
+    mean arrival-minus-capture gap.
+
+- **beat1, a recorded Beat Saber session with Pimax as truth** (2026-11-20). The files are in
+  `~/gamedev/ext/slamrec/`: `beat1.pxcam` (180 s), `beat1-imu-{left,right}.csv` (`PIMAX_CTRL_IMU_LOG` from
+  pibridge-headtrack), and the shadow log `ctrl-shadow-20261120-063511.csv`.
+  - **The comparison script** is `cmp.py` in the session scratchpad. The shadow log's head pose sits (0.0006, 0.0779,
+    -0.0395) m from the tracker's body frame.
+  - **Result with the defaults:** fixes for 99 % of LED frames, error against Pimax p50 1.4-1.6 cm, p90 3.3-4.4 cm,
+    p99 7 cm.
+  - **Without P1P** the right hand is tracked in 55 % of frames.
+  - **`CT_SIGMA_A_REL`** (the process noise scaled by the acceleration) defaults to 0, because 0.1 tracked the left
+    hand 95.6 % instead of 99.2 %.
+  - **Distance guard:** a fix over 1.2 m from the head is not published; the controller is lost instead.
+- **Fuser, with the IMU-led tracker** (`track_vel`). In the shadow run, error p90 went 58 -> 6.5 cm, and 74 -> 7 cm on
+  swings of 2.5-5 m/s.
+  - **No jump / turn tests:** the tracker gates its fits by the IMU already (`trust_tracker`; `PIBRIDGE_CTRL_FUSE_GATE=1`
+    keeps the tests).
+  - **Carried by the accelerometer** over the fix's age (`track_acc`; `PIBRIDGE_CTRL_TRACK_ACC=0` turns it off).
+  - **Snap on re-entry:** a re-entry over 15 cm from the shown pose snaps to the fix instead of blending.
+- **Parked controllers** (gyro quiet for 5 s) are searched for every 5th frame instead of never.
+
 `pibridge_ctrltrack_csv_*` run with `PIBRIDGE_CTRL_PARITY=1`. `pibridge_ctrltrack_improved` tests the new paths.
 `pibridge_ctrltrack_take_steps` checks the controller take's guided steps (`tools/ctrltrack/ctrl-take-steps.json`).
 `pibridge_ctrlbench_imu_log` checks the replay of a fuser IMU log (`pibridge-ctrlbench --imu-log`).

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "headtrack.h"
+#include "pibridge/ctrl/track/model.h"
 
 #include "pibridge/cam/ae.h"
 #include "pibridge/cam/calib.h"
@@ -14,8 +15,10 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <ctime>
 #include <fstream>
 #include <sstream>
 #include <sys/stat.h>
@@ -240,7 +243,9 @@ bool Daemon::start() {
     if (auto c = cam::DeviceCalib::load_default(o_.calibration.empty() ? std::nullopt
                                                                         : std::optional<std::string>(o_.calibration))) {
         head_in_imu_ = slam::default_head_in_imu(c->first);
-        say_("head origin from " + c->second);
+        char b[128];
+        std::snprintf(b, sizeof b, " (head_in_imu %.4f %.4f %.4f m)", head_in_imu_[0], head_in_imu_[1], head_in_imu_[2]);
+        say_("head origin from " + c->second + b);
     } else {
         say_("no headset calibration: head origin at the IMU");
     }
@@ -272,6 +277,41 @@ bool Daemon::start() {
     }
     say_("SLAM engine " + o_.vit_library + ", " + std::to_string(o_.cams.size()) + " cameras" +
          (vit_->has_controllers() ? ", controllers by Pimax's LED engine" : ", no controller tracking"));
+    if (!o_.shadow_vit.empty()) {
+        for (const std::uint32_t c : o_.shadow_cams) {
+            const auto it = std::find(o_.cams.begin(), o_.cams.end(), c);
+            if (it != o_.cams.end()) {
+                hshadow_tiles_.push_back(static_cast<std::size_t>(it - o_.cams.begin()));
+            }
+        }
+        std::string serr;
+        if (hshadow_tiles_.size() != o_.shadow_cams.size()) {
+            say_("head shadow mode: its cameras must be among --cams; off");
+        } else if ((hshadow_ = VitHost::open(o_.shadow_vit, static_cast<std::uint32_t>(hshadow_tiles_.size()),
+                                             o_.shadow_slam_config, &serr))) {
+            std::filesystem::path dir;
+            if (const char* x = std::getenv("XDG_DATA_HOME"); x != nullptr && *x == '/') {
+                dir = x;
+            } else if (const char* home = std::getenv("HOME"); home != nullptr) {
+                dir = std::filesystem::path(home) / ".local/share";
+            }
+            dir /= "pibridge/head-shadow";
+            std::error_code ec;
+            std::filesystem::create_directories(dir, ec);
+            const std::time_t t = std::time(nullptr);
+            char name[64];
+            std::strftime(name, sizeof name, "head-shadow-%Y%m%d-%H%M%S.csv", std::localtime(&t));
+            hshadow_csv_path_ = (dir / name).string();
+            hshadow_csv_ = std::fopen(hshadow_csv_path_.c_str(), "w");
+            if (hshadow_csv_ != nullptr) {
+                std::fputs("t_ns,src,px,py,pz,qx,qy,qz,qw,vx,vy,vz,event\n", hshadow_csv_);
+            }
+            say_("head shadow mode: " + o_.shadow_vit + " on " + std::to_string(hshadow_tiles_.size()) +
+                 " cameras beside the engine, log " + hshadow_csv_path_);
+        } else {
+            say_("head shadow mode: " + serr + "; off");
+        }
+    }
     say_("controller forward-prediction cap: " + std::to_string(static_cast<int>(ctrl_predict_s_ * 1000.0 + 0.5)) +
          " ms (PIMAX_CTRL_PREDICT_MS; 0 = SteamVR predicts all, as for the head)");
     head_hist_.resize(2048);
@@ -281,10 +321,66 @@ bool Daemon::start() {
         ht_ = std::make_unique<cam::headpose::HeadTracker>(slam::SupervisorParams{}, cam::headpose::HeadParams::from_env(),
                                                             head_in_imu_);
         for (std::size_t h = 0; h < 2; h++) {
-            fuser_[h] = std::make_unique<ctrl::fuse::Fuser>(h, ctrl::fuse::Config::from_env(),
+            fuser_[h] = std::make_unique<ctrl::fuse::Fuser>(h, fuse_config(),
                                                             ctrl::fuse::calib_or_default(ctrl::fuse::calib_path(), h));
         }
         say_("Basalt: PiBridge's output layer (" + ht_->p.describe() + "), controllers from pibridge-ctrltrack");
+    }
+    ctrl_pose_path_ = ctrl::track::shm::default_path();
+    start_fuser_logs();
+    if (const char* ip = std::getenv("PIBRIDGE_CTRL_IMU_POINT"); !(ip != nullptr && std::string_view(ip) == "0")) {
+        if (auto m = ctrl::track::LedModel::resolve(std::nullopt, std::nullopt, ctrl::track::process_env())) {
+            for (std::size_t h = 0; h < 2; h++) {
+                imu_in_device_[h] = m->first[h].imu_to_device.t;
+            }
+            char b[160];
+            std::snprintf(b, sizeof b, "our controllers reported at their IMU: left (%.3f %.3f %.3f), right (%.3f %.3f %.3f) m in the device frame",
+                          imu_in_device_[0][0], imu_in_device_[0][1], imu_in_device_[0][2], imu_in_device_[1][0],
+                          imu_in_device_[1][1], imu_in_device_[1][2]);
+            say_(b);
+        }
+    }
+    if (const char* sh = std::getenv("PIBRIDGE_CTRL_SHADOW");
+        !ht_ && vit_->has_controllers() && sh != nullptr && std::string_view(sh) == "1") {
+        ctrl_pose_path_ = shadow_pose_path();
+        for (std::size_t h = 0; h < 2; h++) {
+            shadow_[h] = std::make_unique<ctrl::fuse::Fuser>(h, fuse_config(),
+                                                             ctrl::fuse::calib_or_default(ctrl::fuse::calib_path(), h));
+        }
+        start_fuser_logs();
+        std::filesystem::path dir;
+        if (const char* x = std::getenv("XDG_DATA_HOME"); x != nullptr && *x == '/') {
+            dir = x;
+        } else if (const char* home = std::getenv("HOME"); home != nullptr) {
+            dir = std::filesystem::path(home) / ".local/share";
+        }
+        dir /= "pibridge/ctrl-shadow";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        const std::time_t t = std::time(nullptr);
+        char name[64];
+        std::strftime(name, sizeof name, "ctrl-shadow-%Y%m%d-%H%M%S.csv", std::localtime(&t));
+        shadow_csv_path_ = (dir / name).string();
+        shadow_csv_ = std::fopen(shadow_csv_path_.c_str(), "w");
+        if (shadow_csv_ != nullptr) {
+            std::fputs("t_ns,hand,pimax_state,pimax_t_ns,pimax_x,pimax_y,pimax_z,pimax_qx,pimax_qy,pimax_qz,pimax_qw,"
+                       "ours_state,ours_x,ours_y,ours_z,ours_qx,ours_qy,ours_qz,ours_qw,"
+                       "fix_ns,fix_leds,fix_rms_px,fix_x,fix_y,fix_z,fix_qx,fix_qy,fix_qz,fix_qw,"
+                       "head_x,head_y,head_z,head_qx,head_qy,head_qz,head_qw,pimax_eng_ns,"
+                       "pimax_vx,pimax_vy,pimax_vz,pimax_wx,pimax_wy,pimax_wz,"
+                       "imu_age_ms,imu_reports,acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,"
+                       "fix_cams,fix_kind,blobs0,blobs1,blobs2,blobs3,"
+                       "frame_ns,frame_blobs0,frame_blobs1,frame_blobs2,frame_blobs3\n",
+                       shadow_csv_);
+        }
+        std::string sys_path = shadow_csv_path_;
+        sys_path.replace(sys_path.size() - 4, 4, "-sys.csv");
+        if (!sysmon_.start(sys_path)) {
+            say_("controller shadow mode: cannot write " + sys_path);
+        }
+        say_("controller shadow mode: Pimax's LED engine drives the controllers; pibridge-ctrltrack (" + ctrl_pose_path_ +
+             ") and our fusers run beside it for the log " +
+             (shadow_csv_ != nullptr ? shadow_csv_path_ : std::string("(cannot write ") + shadow_csv_path_ + ")"));
     }
     hmd::Config cfg;
     cfg.log = [this](std::string_view l) { say_(l); };
@@ -319,6 +415,19 @@ void Daemon::stop() {
     }
     if (pub_) {
         pub_->gone(monotonic_ns());
+    }
+    sysmon_.stop();
+    if (hshadow_csv_ != nullptr) {
+        std::fclose(hshadow_csv_);
+        hshadow_csv_ = nullptr;
+        say_("head shadow log: " + std::to_string(hshadow_rows_) + " rows, " + std::to_string(hshadow_resets_) +
+             " resets of the shadow engine, " + hshadow_csv_path_);
+    }
+    hshadow_.reset();
+    if (shadow_csv_ != nullptr) {
+        std::fclose(shadow_csv_);
+        shadow_csv_ = nullptr;
+        say_("controller shadow log: " + std::to_string(shadow_rows_) + " rows in " + shadow_csv_path_);
     }
     session_.reset();
     vit_.reset();
@@ -365,6 +474,28 @@ void Daemon::serials_loop() {
     }
 }
 
+// PIMAX_CTRL_IMU_LOG=PREFIX (as the Monado driver's ctrlfuse): our fusers (Basalt's, or the shadow's) log their IMU,
+// fixes and shown poses to PREFIX-left.csv / PREFIX-right.csv for PIMAX_CTRL_IMU_LOG_MIN minutes (default 30), the
+// input of pibridge-ctrlbench --imu next to a `pibridge-cam record` of the same session
+void Daemon::start_fuser_logs() {
+    const char* prefix = std::getenv("PIMAX_CTRL_IMU_LOG");
+    if (prefix == nullptr || *prefix == 0) {
+        return;
+    }
+    double minutes = 30.0;
+    if (const char* m = std::getenv("PIMAX_CTRL_IMU_LOG_MIN")) {
+        minutes = std::atof(m) > 0.0 ? std::atof(m) : minutes;
+    }
+    for (std::size_t h = 0; h < 2; h++) {
+        ctrl::fuse::Fuser* f = shadow_[h] ? shadow_[h].get() : fuser_[h].get();
+        if (f == nullptr) {
+            continue;
+        }
+        const std::string p = std::string(prefix) + (h == 0 ? "-left.csv" : "-right.csv");
+        say_(std::string("controller IMU log: ") + p + (f->start_log(p, minutes) ? "" : " (cannot open)"));
+    }
+}
+
 void Daemon::on_imu(const hmd::ImuSample& s) {
     const std::int64_t ts = time_.map(s.ts_us, monotonic_ns());
     // OpenXR head axes (pimax_hmd.c map_axes, PIMAX_AXIS_MODE=1): (x, y, z) -> (-x, y, -z)
@@ -384,6 +515,9 @@ void Daemon::on_imu(const hmd::ImuSample& s) {
     }
     if (vit_) {
         vit_->push_imu(ts, a, g);
+    }
+    if (hshadow_) {
+        hshadow_->push_imu(ts, a, g);
     }
 }
 
@@ -611,6 +745,19 @@ void Daemon::camera_loop() {
             adj += sum * 500 / static_cast<std::int64_t>(o_.cams.size());
         }
         vit_->push_frames(ts + adj, ptrs, cam::TILE_W, cam::TILE_H);
+        if (hshadow_) {
+            // Basalt: its cameras, the mid-exposure time
+            std::vector<const std::uint8_t*> sp;
+            std::int64_t sum = 0;
+            for (const std::size_t k : hshadow_tiles_) {
+                sp.push_back(ptrs[k]);
+                const std::uint32_t c = o_.cams[k];
+                sum += c < fi.exposure.size() ? fi.exposure[c] : 0;
+            }
+            hshadow_->push_frames(ts + o_.cam_offset_ns + sum * 500 / static_cast<std::int64_t>(sp.size()), sp,
+                                  cam::TILE_W, cam::TILE_H);
+            hshadow_frame_ns_.store(ts);
+        }
         if (++sets == 1) {
             say_("first frame set to the engine");
         }
@@ -624,6 +771,7 @@ void Daemon::to_world(ps::Device& d, bool position_valid, std::int64_t now_ns) {
                         {d.orientation[0], d.orientation[1], d.orientation[2], d.orientation[3]}};
     const double dps = geom::norm(v3(d.angular_velocity.data())) * 180.0 / M_PI;
     const RigidPose t = world_->update(d.t_ns, raw, position_valid, dps, now_ns);
+    raw_to_world_ = t;
     const RigidPose w = compose(t, raw);
     put(d.position, w.p);
     put(d.orientation, w.q);
@@ -761,6 +909,7 @@ void Daemon::on_controller(const hmd::ControllerReport& r) {
         }
         hd.report = r;
         hd.report_ns = now;
+        hd.reports++;
         hd.imu.update(now, v3(a), v3(g));
         // the Pimax button: recenter on a long press (~0.8 s), so a brief touch never recenters (pimax_ctrl.c)
         const bool down = (r.buttons & hmd::BTN_MENU) != 0;
@@ -824,9 +973,9 @@ void Daemon::on_controller(const hmd::ControllerReport& r) {
                       side == 0 ? "left" : "right", names[ts_mode], ts_lag_ms);
         say_(b);
     }
-    if (fuser_[side]) {
+    if (auto* f = optical_fuser(side)) {
         std::lock_guard l(ht_mu_);
-        fuser_[side]->report(static_cast<std::uint64_t>(now), r.raw.data());
+        f->report(static_cast<std::uint64_t>(now), r.raw.data());
     }
     if (buttonsChanged) {
         // which bits each physical button sets, per hand (A 0x2, B 0x1, menu 0x4, stick 0x8, Pimax 0x10)
@@ -917,11 +1066,13 @@ ps::Device Daemon::controller(int side, std::int64_t now_ns) {
     std::optional<hmd::ControllerReport> rep;
     std::int64_t rep_ns = 0;
     Quat imu_now = slam::QUAT_ID;
+    std::uint32_t reports = 0;
     {
         std::lock_guard l(hd.mu);
         rep = hd.report;
         rep_ns = hd.report_ns;
         imu_now = hd.imu.q();
+        reports = hd.reports;
     }
     ps::Device d;
     if (!rep || now_ns - rep_ns > 1'000'000'000) {
@@ -953,9 +1104,7 @@ ps::Device Daemon::controller(int side, std::int64_t now_ns) {
         // Basalt: the fuser's answer at now (fresh optical + gyro, out of view an arm-model hold, then nothing)
         const auto head = head_at(now_ns);
         if (head) {
-            ctrl::fuse::P hp;
-            hp.q = head->q;
-            hp.p = head->pos;
+            const ctrl::fuse::P hp = fuse_head(*head);
             std::pair<ctrl::fuse::State, ctrl::fuse::P> got;
             {
                 std::lock_guard l(ht_mu_);
@@ -963,7 +1112,8 @@ ps::Device Daemon::controller(int side, std::int64_t now_ns) {
             }
             const int fstate = static_cast<int>(got.first);
             if (got.first != ctrl::fuse::State::None) {
-                put(d.position, got.second.p);
+                got.second = to_world_pose(got.second); // our tracking frame -> the world as the apps see it
+                put(d.position, imu_point(side, got.second.q, got.second.p));
                 put(d.orientation, got.second.q);
                 d.state = got.first == ctrl::fuse::State::Optical ? 7 : 5;
             }
@@ -1057,6 +1207,9 @@ ps::Device Daemon::controller(int side, std::int64_t now_ns) {
         say_(std::string(side == 0 ? "left" : "right") + " controller: " + names[state]);
         hd.logged_state = state;
     }
+    if (shadow_[side]) {
+        shadow_log(side, now_ns, d, state, e ? e->ts_ns : 0, rep, rep_ns, reports);
+    }
     aim_out(d, now_ns);
     d.sample = ++ctrl_sample_[side];
     return d;
@@ -1145,21 +1298,25 @@ void Daemon::optical_fixes(std::int64_t now_ns) {
     // that time, to the fusers (pimax_ctrl.c track_thread)
     if (!ctrl_reader_ && now_ns >= ctrl_open_at_) {
         ctrl_open_at_ = now_ns + 1'000'000'000;
-        if (auto r = ctrl::track::shm::PoseReader::open(ctrl::track::shm::default_path())) {
+        if (auto r = ctrl::track::shm::PoseReader::open(ctrl_pose_path_)) {
             ctrl_reader_ = std::move(*r);
-            say_("controllers: optical poses from " + ctrl::track::shm::default_path());
+            say_("controllers: optical poses from " + ctrl_pose_path_);
         }
     }
     if (!ctrl_reader_) {
         return;
     }
-    const auto hands = ctrl_reader_->read();
-    if (!hands) {
+    const auto all = ctrl_reader_->read_all();
+    if (!all) {
         return;
     }
+    const auto hands = std::optional<std::array<ctrl::track::shm::HandPose, 2>>(all->first);
+    frame_blobs_ = all->second.blobs;
+    frame_blobs_ns_ = all->second.blobs_ns;
     for (std::size_t i = 0; i < 2; i++) {
         const auto& h = (*hands)[i];
-        if (!fuser_[i] || h.frame_ns == 0 || h.frame_ns == ctrl_seen_[i]) {
+        auto* const fuser = optical_fuser(i);
+        if (fuser == nullptr || h.frame_ns == 0 || h.frame_ns == ctrl_seen_[i]) {
             continue;
         }
         ctrl_seen_[i] = h.frame_ns;
@@ -1170,14 +1327,149 @@ void Daemon::optical_fixes(std::int64_t now_ns) {
         if (!head) {
             continue;
         }
-        ctrl::fuse::P wh;
-        wh.q = head->q;
-        wh.p = head->pos;
+        const ctrl::fuse::P wh = fuse_head(*head);
         ctrl::fuse::P body;
         body.q = slam::qnorm({h.quat[0], h.quat[1], h.quat[2], h.quat[3]});
         body.p = {h.pos[0], h.pos[1], h.pos[2]};
+        const ctrl::fuse::P world = wh.mul(body);
+        if (shadow_[i]) {
+            const ctrl::fuse::P fw = to_world_pose(world); // the log compares in the apps' world
+            shadow_fix_[i] = ShadowFix{h.frame_ns, h.leds, h.cams, h.kind, h.blobs, h.rms_px, fw.p, fw.q};
+        }
         std::lock_guard l(ht_mu_);
-        fuser_[i]->optical(h.frame_ns, wh.mul(body), wh, h.rms_px, h.leds);
+        if (h.vel[0] != 0.0f || h.vel[1] != 0.0f || h.vel[2] != 0.0f) {
+            // the tracker's velocity (head frame) into the world: the fuser carries the fix on to the query time
+            fuser->optical_velocity(h.frame_ns, slam::qrot(wh.q, Vec3{h.vel[0], h.vel[1], h.vel[2]}));
+        }
+        fuser->optical(h.frame_ns, world, wh, h.rms_px, h.leds);
+    }
+}
+
+void Daemon::hshadow_log(int src, const EnginePose& e) {
+    if (hshadow_csv_ == nullptr || e.ts_ns - hshadow_last_[src] < 5'000'000) {
+        return;
+    }
+    hshadow_last_[src] = e.ts_ns;
+    std::fprintf(hshadow_csv_, "%lld,%d,%.5f,%.5f,%.5f,%.6f,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,\n",
+                 static_cast<long long>(e.ts_ns), src, e.p[0], e.p[1], e.p[2], e.q[0], e.q[1], e.q[2], e.q[3], e.v[0],
+                 e.v[1], e.v[2]);
+    if (++hshadow_rows_ % 1000 == 0) {
+        std::fflush(hshadow_csv_);
+    }
+}
+
+std::string shadow_pose_path() {
+    return (std::filesystem::path(ctrl::track::shm::default_path()).parent_path() / "pibridge-ctrltrack-shadow.pose")
+        .string();
+}
+
+Vec3 Daemon::imu_point(int side, const Quat& q_aim, const Vec3& p) const {
+    // world_from_device = world_from_aim * aim_from_device
+    const Quat wd = slam::qmul(q_aim, slam::qconj(DEVICE_FROM_AIM));
+    return geom::add(p, slam::qrot(wd, imu_in_device_[static_cast<std::size_t>(side)]));
+}
+
+ctrl::fuse::Config fuse_config() {
+    // as Pimax's engine (and our Pimax path): out of view the controller is held by its gyro for lost_s (4 s), then it
+    // has no pose; the keep-while-the-gyro-streams hold of the Monado driver kept a hidden controller turning forever
+    // (PIBRIDGE_CTRL_KEEP_S=S brings it back)
+    ctrl::fuse::Config c = ctrl::fuse::Config::from_env();
+    if (std::getenv("PIBRIDGE_CTRL_KEEP_S") == nullptr) {
+        c.keep_tau_s = 0.0;
+    }
+    return c;
+}
+
+ctrl::fuse::P Daemon::fuse_head(const HeadAt& h) const {
+    // the raw frame (before the room offset / recenter / drift corrections): our controllers' tracking frame
+    ctrl::fuse::P p;
+    p.q = h.raw_q;
+    p.p = geom::sub(h.raw_pos, slam::qrot(h.raw_q, head_in_imu_));
+    return p;
+}
+
+void Daemon::push_head(const ps::Device& raw, const ps::Device& world) {
+    head_hist_[head_next_++ % head_hist_.size()] =
+        HeadAt{world.t_ns,
+               {world.position[0], world.position[1], world.position[2]},
+               {world.orientation[0], world.orientation[1], world.orientation[2], world.orientation[3]},
+               {raw.position[0], raw.position[1], raw.position[2]},
+               {raw.orientation[0], raw.orientation[1], raw.orientation[2], raw.orientation[3]}};
+}
+
+ctrl::fuse::P Daemon::to_world_pose(const ctrl::fuse::P& raw) const {
+    ctrl::fuse::P w;
+    w.q = slam::qnorm(slam::qmul(raw_to_world_.q, raw.q));
+    w.p = geom::add(slam::qrot(raw_to_world_.q, raw.p), raw_to_world_.p);
+    return w;
+}
+
+void Daemon::shadow_log(int side, std::int64_t now_ns, const ps::Device& dll, int dll_state, std::int64_t eng_ns,
+                        const std::optional<hmd::ControllerReport>& rep, std::int64_t rep_ns, std::uint32_t reports) {
+    const auto head = head_at(now_ns);
+    if (!head) {
+        return;
+    }
+    const ctrl::fuse::P hp = fuse_head(*head);
+    std::pair<ctrl::fuse::State, ctrl::fuse::P> got;
+    {
+        std::lock_guard l(ht_mu_);
+        got = shadow_[side]->get(static_cast<std::uint64_t>(now_ns), hp); // also writes the tracker's hint file
+    }
+    if (shadow_csv_ == nullptr || now_ns - shadow_log_ns_[side] < 20'000'000) {
+        return;
+    }
+    shadow_log_ns_[side] = now_ns;
+    const ShadowFix& f = shadow_fix_[side];
+    auto o = to_world_pose(got.second);
+    o.p = imu_point(side, o.q, o.p);
+    // the controller's last report: accelerometer m/s^2, gyro rad/s (its raw axes), age
+    double acc[3] = {0, 0, 0}, gyr[3] = {0, 0, 0};
+    if (rep) {
+        for (int k = 0; k < 3; k++) {
+            acc[k] = rep->raw_accel[k] / 1024.0 * G;
+            gyr[k] = rep->raw_gyro[k] * CTRL_GYRO_SCALE;
+        }
+    }
+    const std::uint32_t nrep = reports - shadow_reports_[side];
+    shadow_reports_[side] = reports;
+    std::fprintf(shadow_csv_,
+                 "%lld,%d,%d,%lld,%.5f,%.5f,%.5f,%.6f,%.6f,%.6f,%.6f,%d,%.5f,%.5f,%.5f,%.6f,%.6f,%.6f,%.6f,"
+                 "%llu,%u,%.3f,%.5f,%.5f,%.5f,%.6f,%.6f,%.6f,%.6f,"
+                 "%.5f,%.5f,%.5f,%.6f,%.6f,%.6f,%.6f,%lld,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,"
+                 "%.1f,%u,%.3f,%.3f,%.3f,%.4f,%.4f,%.4f,%u,%u,%u,%u,%u,%u,%llu,%u,%u,%u,%u\n",
+                 static_cast<long long>(now_ns), side, dll_state, static_cast<long long>(dll.t_ns), dll.position[0],
+                 dll.position[1], dll.position[2], dll.orientation[0], dll.orientation[1], dll.orientation[2],
+                 dll.orientation[3], static_cast<int>(got.first), o.p[0], o.p[1], o.p[2], o.q[0], o.q[1], o.q[2], o.q[3],
+                 static_cast<unsigned long long>(f.frame_ns), f.leds, static_cast<double>(f.rms_px), f.p[0], f.p[1],
+                 f.p[2], f.q[0], f.q[1], f.q[2], f.q[3], head->pos[0], head->pos[1], head->pos[2], head->q[0],
+                 head->q[1], head->q[2], head->q[3], static_cast<long long>(eng_ns), dll.linear_velocity[0],
+                 dll.linear_velocity[1], dll.linear_velocity[2], dll.angular_velocity[0], dll.angular_velocity[1],
+                 dll.angular_velocity[2], rep ? static_cast<double>(now_ns - rep_ns) * 1e-6 : -1.0, nrep, acc[0], acc[1],
+                 acc[2], gyr[0], gyr[1], gyr[2], f.cams, f.kind, f.blobs[0], f.blobs[1], f.blobs[2], f.blobs[3],
+                 static_cast<unsigned long long>(frame_blobs_ns_), frame_blobs_[0], frame_blobs_[1], frame_blobs_[2],
+                 frame_blobs_[3]);
+    // every 10 s: what our fusers did (fixes taken and refused, IMU calibration refits, the IMU state for the tracker)
+    if (side == 1 && now_ns - shadow_stats_ns_ >= 10'000'000'000) {
+        shadow_stats_ns_ = now_ns;
+        for (int h = 0; h < 2; h++) {
+            const auto& st = shadow_[h]->stats;
+            const auto im = shadow_[h]->imu_state(static_cast<std::uint64_t>(now_ns));
+            char b[256];
+            std::snprintf(b, sizeof b,
+                          "shadow fuser %s: fixes %llu, refused %llu (body %llu, tilt %llu), reacquires %llu, IMU "
+                          "calibration refits %llu, IMU to the tracker %s",
+                          h == 0 ? "left" : "right", static_cast<unsigned long long>(st.fixes),
+                          static_cast<unsigned long long>(st.rejected), static_cast<unsigned long long>(st.rejected_body),
+                          static_cast<unsigned long long>(st.rejected_tilt),
+                          static_cast<unsigned long long>(st.reacquires),
+                          static_cast<unsigned long long>(st.fit_updates),
+                          !im ? "none" : im->calibrated ? (im->up_ok ? "yes, up ok" : "yes") : "uncalibrated");
+            say_(b);
+        }
+    }
+    if (++shadow_rows_ % 500 == 0) {
+        std::fflush(shadow_csv_);
     }
 }
 
@@ -1255,30 +1547,72 @@ void Daemon::output_loop() {
             st.devices[0] = basalt_head(now, tracking);
             st.tracking = tracking;
             if (st.devices[0].state != 0) {
+                const ps::Device raw = st.devices[0];
                 to_world(st.devices[0], tracking == 3, now);
                 st.devices[0].sample = ++sample_;
-                head_hist_[head_next_++ % head_hist_.size()] =
-                    HeadAt{st.devices[0].t_ns,
-                           {st.devices[0].position[0], st.devices[0].position[1], st.devices[0].position[2]},
-                           {st.devices[0].orientation[0], st.devices[0].orientation[1], st.devices[0].orientation[2],
-                            st.devices[0].orientation[3]}};
+                push_head(raw, st.devices[0]);
             }
             optical_fixes(now);
         }
         auto poses = ht_ ? std::vector<EnginePose>{} : vit_->poses();
+        if (hshadow_) {
+            for (const EnginePose& e : poses) {
+                hshadow_log(0, e);
+            }
+            const auto sh = hshadow_->poses();
+            bool diverged = false;
+            for (const EnginePose& e : sh) {
+                hshadow_log(1, e);
+                // diverged (no features, e.g. the headset lying still): a head does not run 3 m/s, jump 0.5 m between
+                // two poses or wander 50 m off
+                const double v = std::sqrt(e.v[0] * e.v[0] + e.v[1] * e.v[1] + e.v[2] * e.v[2]);
+                const double r = std::sqrt(e.p[0] * e.p[0] + e.p[1] * e.p[1] + e.p[2] * e.p[2]);
+                const double dx = e.p[0] - hshadow_prev_p_[0], dy = e.p[1] - hshadow_prev_p_[1],
+                             dz = e.p[2] - hshadow_prev_p_[2];
+                if (v > 3.0 || r > 50.0 || (hshadow_have_prev_ && std::sqrt(dx * dx + dy * dy + dz * dz) > 0.5)) {
+                    diverged = true;
+                }
+                std::copy(e.p, e.p + 3, hshadow_prev_p_);
+                hshadow_have_prev_ = true;
+            }
+            if (diverged && now - hshadow_reset_ns_ > 1'000'000'000) {
+                hshadow_->reset();
+                hshadow_reset_ns_ = now;
+                hshadow_resets_++;
+                hshadow_have_prev_ = false;
+                say_("head shadow: Basalt diverged (speed, jump or distance), started it over");
+                if (hshadow_csv_ != nullptr) {
+                    std::fprintf(hshadow_csv_, "%lld,1,,,,,,,,,,,diverged\n", static_cast<long long>(now));
+                }
+            }
+            if (!sh.empty()) {
+                hshadow_pose_ns_ = now;
+            }
+            // lost: no pose for 2 s while frames come: start it over (as the supervisor's RESET_WANTED in Basalt mode)
+            if (hshadow_reset_ns_ == 0) {
+                hshadow_reset_ns_ = now; // the 2 s without a pose count from the start, not from 0
+            }
+            const std::int64_t fr = hshadow_frame_ns_.load();
+            if (fr != 0 && now - fr < 500'000'000 && now - std::max(hshadow_pose_ns_, hshadow_reset_ns_) > 2'000'000'000) {
+                hshadow_->reset();
+                hshadow_reset_ns_ = now;
+                say_("head shadow: no Basalt pose for 2 s, started it over");
+                hshadow_resets_++;
+                if (hshadow_csv_ != nullptr) {
+                    std::fprintf(hshadow_csv_, "%lld,1,,,,,,,,,,,reset\n", static_cast<long long>(now));
+                }
+            }
+        }
         if (ht_) {
             // the Basalt head is done above
         } else if (!poses.empty()) {
             last_pose_ns = now;
             st.tracking = 3; // orientation and position
             st.devices[0] = head_from_engine(poses.back());
+            const ps::Device raw = st.devices[0];
             to_world(st.devices[0], true, now);
             st.devices[0].sample = ++sample_;
-            head_hist_[head_next_++ % head_hist_.size()] =
-                HeadAt{st.devices[0].t_ns,
-                       {st.devices[0].position[0], st.devices[0].position[1], st.devices[0].position[2]},
-                       {st.devices[0].orientation[0], st.devices[0].orientation[1], st.devices[0].orientation[2],
-                        st.devices[0].orientation[3]}};
+            push_head(raw, st.devices[0]);
             if (!tracking_) {
                 tracking_ = true;
                 acquired_++;
@@ -1316,6 +1650,9 @@ void Daemon::output_loop() {
                      " ms" + (ok ? "" : " (refused)") + "; " + std::to_string(haptic_requests_) + " requests, " +
                      std::to_string(sent) + " sent, " + std::to_string(replaced) + " replaced");
             }
+        }
+        if (!ht_ && shadow_[0]) {
+            optical_fixes(now); // shadow mode: the shadow tracker's fixes to our fusers (Basalt does it above)
         }
         st.devices[1] = controller(0, now);
         st.devices[2] = controller(1, now);

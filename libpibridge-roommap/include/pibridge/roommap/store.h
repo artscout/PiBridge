@@ -56,6 +56,8 @@ struct RelocResult {
 cam::geom::Pose offset_pose(const Alignment& a);
 /// Write the offset file for Monado `pid` (atomic, needs the writer lease); the path.
 cam::Result<std::string> write_offset(const Alignment& a, std::uint32_t pid);
+/// The same as a drift correction (anchor::write_offset_drift).
+cam::Result<std::string> write_offset_drift(const Alignment& a, std::uint32_t pid);
 /// a * b (both yaw + translation).
 Alignment compose(const Alignment& a, const Alignment& b);
 Alignment inverse(const Alignment& a);

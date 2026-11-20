@@ -17,12 +17,18 @@
 //   +48 u32 leds        matched LEDs over all cameras
 //   +52 u32 cams        cameras with matches
 //   +56 f32 aim_from_imu[4]  rotation x y z w (controller IMU axes in the aim frame, for gyro deltas)
+//   +72 u32 kind        how the fix was made: bit 0 the constrained few-LED path, bit 1 the published pose is the
+//                       IMU filter's, not the optical fit (0 in older writers)
+//   +76 u8  blobs[4]    blobs detected per camera in that LED frame (capped at 255; 0 in older writers)
+//   +80 f32 vel[3]      the tracker's velocity of the controller at the frame, head (body) frame, m/s (0 = none)
 // 208 heartbeat (same version: older readers ignore it; 0 = an older writer):
 //   208 u64 beat_ns     CLOCK_MONOTONIC time of the writer's last loop pass (at least every 0.5 s while alive,
 //                       with or without frames or controllers): the liveness signal for omarchyvrd / Monado
 //   216 u64 led_frames  LED frames processed since start
 //   224 u32 source_up   1 = camera frames arriving, 0 = source reopening (broker or camera gone)
 //   228 u32 reopens     times the source came back (broker restart, camera reopen)
+//   232 u8  blobs[4]    blobs per camera in the newest LED frame (capped at 255; 0 in older writers)
+//   240 u64 blobs_ns    that frame's time
 #pragma once
 
 #include "pibridge/cam/io.h"
@@ -44,7 +50,7 @@ inline constexpr std::size_t SIZE = 256;
 inline constexpr std::size_t HAND_OFF = 16;
 inline constexpr std::size_t HAND_STRIDE = 96;
 inline constexpr std::size_t BEAT_OFF = HAND_OFF + 2 * HAND_STRIDE;
-static_assert(BEAT_OFF + 24 <= SIZE);
+static_assert(BEAT_OFF + 40 <= SIZE);
 
 /// The writer's heartbeat (offset BEAT_OFF).
 struct Beat {
@@ -52,6 +58,8 @@ struct Beat {
     std::uint64_t led_frames = 0;
     bool source_up = false;
     std::uint32_t reopens = 0;
+    std::array<std::uint8_t, 4> blobs{};
+    std::uint64_t blobs_ns = 0;
     /// Age of the heartbeat at now_ns; nullopt when the writer never wrote one (older writer).
     std::optional<std::uint64_t> age_ns(std::uint64_t now_ns) const {
         if (beat_ns == 0) {
@@ -72,6 +80,9 @@ struct HandPose {
     std::uint32_t leds = 0;
     std::uint32_t cams = 0;
     std::array<float, 4> aim_from_imu{};
+    std::uint32_t kind = 0;
+    std::array<std::uint8_t, 4> blobs{};
+    std::array<float, 3> vel{};
     bool operator==(const HandPose&) const = default;
 };
 

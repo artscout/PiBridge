@@ -173,11 +173,22 @@ void PoseWriter::flush() {
         put(p_, o + 44, h.rms_px);
         put(p_, o + 48, h.leds);
         put(p_, o + 52, h.cams);
+        put(p_, o + 72, h.kind);
+        for (std::size_t k = 0; k < 4; k++) {
+            put(p_, o + 76 + k, h.blobs[k]);
+        }
+        for (std::size_t k = 0; k < 3; k++) {
+            put(p_, o + 80 + 4 * k, h.vel[k]);
+        }
     }
     put(p_, BEAT_OFF, beat_.beat_ns);
     put(p_, BEAT_OFF + 8, beat_.led_frames);
     put<std::uint32_t>(p_, BEAT_OFF + 16, beat_.source_up ? 1u : 0u);
     put(p_, BEAT_OFF + 20, beat_.reopens);
+    for (std::size_t k = 0; k < 4; k++) {
+        put(p_, BEAT_OFF + 24 + k, beat_.blobs[k]);
+    }
+    put(p_, BEAT_OFF + 32, beat_.blobs_ns);
     std::atomic_thread_fence(std::memory_order_release);
     v = s.load(std::memory_order_relaxed);
     s.store((v + 1) & ~1u, std::memory_order_release);
@@ -230,12 +241,21 @@ std::optional<std::pair<std::array<HandPose, 2>, Beat>> PoseReader::read_all() c
             h.cams = get<std::uint32_t>(p_, o + 52);
             h.aim_from_imu = {get<float>(p_, o + 56), get<float>(p_, o + 60), get<float>(p_, o + 64),
                               get<float>(p_, o + 68)};
+            h.kind = get<std::uint32_t>(p_, o + 72);
+            for (std::size_t k = 0; k < 4; k++) {
+                h.blobs[k] = get<std::uint8_t>(p_, o + 76 + k);
+            }
+            h.vel = {get<float>(p_, o + 80), get<float>(p_, o + 84), get<float>(p_, o + 88)};
         }
         Beat beat;
         beat.beat_ns = get<std::uint64_t>(p_, BEAT_OFF);
         beat.led_frames = get<std::uint64_t>(p_, BEAT_OFF + 8);
         beat.source_up = get<std::uint32_t>(p_, BEAT_OFF + 16) != 0;
         beat.reopens = get<std::uint32_t>(p_, BEAT_OFF + 20);
+        for (std::size_t k = 0; k < 4; k++) {
+            beat.blobs[k] = get<std::uint8_t>(p_, BEAT_OFF + 24 + k);
+        }
+        beat.blobs_ns = get<std::uint64_t>(p_, BEAT_OFF + 32);
         std::atomic_thread_fence(std::memory_order_acquire);
         if (s.load(std::memory_order_relaxed) == s1) {
             return std::pair{out, beat};

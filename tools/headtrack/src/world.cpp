@@ -9,6 +9,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <string_view>
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
@@ -229,7 +230,7 @@ void World::refresh_offset(std::int64_t now_ns) {
     mtime_s_ = st.st_mtim.tv_sec;
     mtime_ns_ = st.st_mtim.tv_nsec;
     std::ifstream f(offset_path_);
-    std::string l1, l2, l3;
+    std::string l1, l2, l3, l4;
     unsigned pid = 0;
     double v[7];
     const bool ok = std::getline(f, l1) && l1.rfind("pimax-anchor-offset 1", 0) == 0 && std::getline(f, l2) &&
@@ -241,9 +242,20 @@ void World::refresh_offset(std::int64_t now_ns) {
         return;
     }
     offset_ = RigidPose{{v[0], v[1], v[2]}, slam::qnorm({v[3], v[4], v[5], v[6]})};
+    drift_ = std::getline(f, l4) && l4.rfind("drift 1", 0) == 0;
+    if (!apply_vertical_ && !drift_) {
+        offset_.p[1] = 0.0; // the chaperone carries the floor: a room offset's vertical is not ours
+    }
     have_offset_ = true;
-    generation_++;
-    if (log_) {
+    if (!drift_) {
+        generation_++; // a new room (recognised, set up): replaces the recenter; a drift correction does not
+    }
+    if (log_ && drift_) {
+        char b[200];
+        std::snprintf(b, sizeof b, "floor/anchor: drift correction from the room map: p(%.3f %.3f %.3f) m (glides)",
+                      offset_.p[0], offset_.p[1], offset_.p[2]);
+        say(b);
+    } else if (log_) {
         const Vec3 fwd = slam::qrot(offset_.q, Vec3{0, 0, -1});
         const double yaw = std::atan2(-fwd[0], -fwd[2]) * 180.0 / M_PI;
         char b[260];
@@ -268,12 +280,22 @@ void World::step(std::int64_t now_ns, double head_dps) {
     }
     // faster while the head turns: 1x up to 20 deg/s, 3x from 60 deg/s
     const double boost = 1.0 + 2.0 * std::clamp((head_dps - 20.0) / 40.0, 0.0, 1.0);
+    // PiBridge (2026-11-20): a drift correction (the room map's filtered offset, small steps every few seconds) moves
+    // the world mostly while the head turns, where it cannot be seen: 3 mm/s and 0.05 deg/s still, plus 0.6 mm/s and
+    // 0.01 deg/s per deg/s of head turn (60 deg/s: 4 cm/s, 0.65 deg/s). PIBRIDGE_DRIFT_GLIDE=old: the slew above.
+    static const bool old_glide = [] {
+        const char* e = std::getenv("PIBRIDGE_DRIFT_GLIDE");
+        return e != nullptr && std::string_view(e) == "old";
+    }();
+    const bool hidden = drift_ && !old_glide;
+    const double slew_m = hidden ? 0.003 + 0.0006 * head_dps : SLEW_M_S * boost;
+    const double slew_deg = hidden ? 0.05 + 0.01 * head_dps : SLEW_DEG_S * boost;
     const Vec3 dp = geom::sub(offset_.p, applied_.p);
     const double dist = geom::norm(dp);
-    const double max_d = SLEW_M_S * boost * dt;
+    const double max_d = slew_m * dt;
     applied_.p = dist <= max_d ? offset_.p : geom::add(applied_.p, geom::scale(dp, max_d / dist));
     const double ang = quat_angle(applied_.q, offset_.q);
-    const double max_a = SLEW_DEG_S * boost * M_PI / 180.0 * dt;
+    const double max_a = slew_deg * M_PI / 180.0 * dt;
     applied_.q = ang <= max_a || ang < 1e-6 ? offset_.q : slerp(applied_.q, offset_.q, max_a / ang);
     if (apply_vertical_) {
         applied_.p[1] = offset_.p[1]; // the floor (y) is held: snap to target, never glide; only x/z glide
@@ -282,7 +304,7 @@ void World::step(std::int64_t now_ns, double head_dps) {
     const double gap = geom::norm(geom::sub(offset_.p, applied_.p));
     if (gap > 1e-4 || quat_angle(applied_.q, offset_.q) > 1e-4) {
         gliding_ = true;
-        if (log_ && now_ns - last_glide_log_ns_ > 500'000'000) {
+        if (log_ && now_ns - last_glide_log_ns_ > (hidden ? 10'000'000'000 : 500'000'000)) {
             last_glide_log_ns_ = now_ns;
             char b[220];
             std::snprintf(b, sizeof b,
@@ -329,10 +351,8 @@ RigidPose World::update(std::int64_t ts_ns, const RigidPose& raw, bool position_
         say(b);
     }
     RigidPose out = compose(recenter_, off);
-    if (!apply_vertical_) {
-        // the anchor's vertical floor shift is disabled: keep the raw head height, let SteamVR's chaperone set the floor
-        out.p[1] = 0.0;
-    }
+    // without apply_vertical_ a room offset's y is 0 (refresh_offset): the chaperone sets the floor; what is left in y
+    // is a drift correction's vertical (gliding like the rest)
     // floor diagnostic (~1 Hz): the raw head height (SLAM), the stored offset vertical, what we apply, and the final
     // head y we hand out. Shows whether the start drift is the raw SLAM y settling, and whether applying the anchor
     // floor would double with the chaperone's own standing height.

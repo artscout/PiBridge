@@ -104,6 +104,10 @@ std::optional<std::pair<std::uint32_t, Pose>> read_offset(const std::string& pat
 /// Write the offset for Monado `pid` atomically as this process; refused (PermissionDenied) unless this process
 /// holds the writer lease of that session.
 cam::Result<void> write_offset(const std::string& path, std::uint32_t pid, const Pose& o);
+/// PiBridge: write_offset with a fourth line `drift 1`: a drift correction of the same room (pibridge-roommap auto
+/// --follow). The tracker glides to it, keeps the user's recenter and applies its vertical (older readers ignore the
+/// line: they read the first three).
+cam::Result<void> write_offset_drift(const std::string& path, std::uint32_t pid, const Pose& o);
 /// write_offset as writer `me` (tests pass a fake writer pid).
 cam::Result<void> write_offset_as(const std::string& path, std::uint32_t pid, std::uint32_t me, const Pose& o);
 

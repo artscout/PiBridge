@@ -9,6 +9,7 @@
 // blob detection as before 2026-10-15 (A/B). `show` prints what Monado would read; `health` the heartbeat as JSON.
 #include "cli.h"
 
+#include "pibridge/cam/clock.h"
 #include "pibridge/cam/frame.h"
 #include "pibridge/cam/rustfmt.h"
 #include "pibridge/cam/source.h"
@@ -143,6 +144,13 @@ int cmd_live(std::span<const std::string> a) {
     shm::Beat beat;
     std::uint64_t gen = src->generation();
     std::uint64_t inhand_checked = 0;
+    cam::HostClockMap frame_clock;
+    const bool frame_ts_host = [] {
+        const char* e = std::getenv("PIBRIDGE_CTRL_FRAME_TS");
+        return e != nullptr && std::string_view(e) == "host";
+    }();
+    double frame_lag_sum = 0.0;
+    std::uint64_t frame_lag_n = 0;
     for (;;) {
         if (secs_since(t_start) > secs) {
             break;
@@ -186,6 +194,10 @@ int cmd_live(std::span<const std::string> a) {
         if (!m) {
             continue;
         }
+        // the frame's capture time: its device timestamp on a least-delay host mapping (fed by every frame), not the
+        // USB arrival with its jitter (Pimax's engine takes the camera's own timestamp). PIBRIDGE_CTRL_FRAME_TS=host:
+        // the arrival time, as before
+        const std::uint64_t mapped_ns = frame_clock.map(m->ts_us, fr.host_ts_ns);
         if (m->kind() != cam::FrameKind::Led) {
             continue;
         }
@@ -193,7 +205,9 @@ int cmd_live(std::span<const std::string> a) {
         if (!tracker.wanted[0] && !tracker.wanted[1]) {
             continue; // both controllers put down: no blob work at all
         }
-        const std::uint64_t frame_ns = fr.host_ts_ns;
+        const std::uint64_t frame_ns = frame_ts_host ? fr.host_ts_ns : mapped_ns;
+        frame_lag_sum += static_cast<double>(sat_sub(fr.host_ts_ns, mapped_ns)) * 1e-6;
+        frame_lag_n += 1;
         const auto t0 = Clock::now();
         if (cfg.use_hint || cfg.imu_id) {
             if (!hint_reader && sat_sub(now, hint_tried) > 1'000'000'000) {
@@ -257,6 +271,10 @@ int cmd_live(std::span<const std::string> a) {
             }
             lf.px.push_back(std::move(px));
         }
+        for (std::size_t c = 0; c < beat.blobs.size(); c++) {
+            beat.blobs[c] = static_cast<std::uint8_t>(c < lf.px.size() ? std::min<std::size_t>(lf.px[c].size(), 255) : 0);
+        }
+        beat.blobs_ns = frame_ns;
         if (itk) {
             itk->wanted = tracker.wanted;
         }
@@ -282,6 +300,14 @@ int cmd_live(std::span<const std::string> a) {
             h.leds = static_cast<std::uint32_t>(f.joint.total());
             h.cams = static_cast<std::uint32_t>(f.joint.cams());
             h.aim_from_imu = aim_from_imu[slot];
+            h.kind = (fx.few ? 1u : 0u) | (fx.published ? 2u : 0u);
+            if (fx.velocity) {
+                h.vel = {static_cast<float>((*fx.velocity)[0]), static_cast<float>((*fx.velocity)[1]),
+                         static_cast<float>((*fx.velocity)[2])};
+            }
+            for (std::size_t c = 0; c < h.blobs.size() && c < lf.px.size(); c++) {
+                h.blobs[c] = static_cast<std::uint8_t>(std::min<std::size_t>(lf.px[c].size(), 255));
+            }
             w->set(slot, h);
         }
         solve_ms += secs_since(t0) * 1e3;
@@ -301,6 +327,32 @@ int cmd_live(std::span<const std::string> a) {
                                          rf::fixed(ba.t[0], 3, true), rf::fixed(ba.t[1], 3, true),
                                          rf::fixed(ba.t[2], 3, true)));
                 }
+            }
+            if (itk) {
+                // the IMU-led tracker's own counts in this interval: why predicted controllers were missed and why
+                // search candidates were refused (diagnostics for the shadow mode)
+                const auto& c = itk->counts;
+                eprintln(std::format(
+                    "   imutrack: updates {}, misses {} (window {}, refined {}, rms {}), gate rejects {}, "
+                    "search candidates {}/{}, acquisitions {}, refused {} (tilt {}, turn {}, far {}), parked {}/{}, twin checks {} "
+                    "votes {} flips {}, accel error {} m/s, orientation resets {}, LED updates {} ({} LEDs), P1P moves {} | {}",
+                    c.updates, c.misses, c.miss_window, c.miss_refined, c.miss_rms, c.gate_rejects, c.acq_cands[0],
+                    c.acq_cands[1], c.acquisitions, c.acq_refused, c.acq_tilt, c.acq_rot, c.acq_far, c.parked[0],
+                    c.parked[1], c.twin_checks, c.twin_votes, c.twin_flips,
+                    rf::fixed(c.accel_err_n > 0 ? c.accel_err_sum / static_cast<double>(c.accel_err_n) : 0.0, 2),
+                    c.orient_resets, c.led_updates, c.led_points, c.p1p_moves, itk->describe_slots()));
+                eprintln(std::format(
+                    "   imutrack: hypotheses {} (gyro drops {}, accepted {}, motion fails {}, ambiguous {}, other hand {}), "
+                    "few-LED runs cut {}, refused on the other controller {}, contested blobs {}, reanchors {} | frame time {} (arrival - capture mapping "
+                    "{} ms mean)",
+                    c.hyp_started, c.hyp_gyro_drops, c.hyp_accepted, c.hyp_motion_fail, c.hyp_ambiguous,
+                    c.hyp_other_hand, c.led_run_cut, c.acq_on_other, c.contested, c.reanchors, frame_ts_host ? "arrival" : "capture",
+                    rf::fixed(frame_lag_n > 0 ? frame_lag_sum / static_cast<double>(frame_lag_n) : 0.0, 2)));
+                frame_lag_sum = 0.0;
+                frame_lag_n = 0;
+                const std::uint64_t keep_fallback = c.fallback_frames;
+                itk->counts = tr::ImuTracker::Counts{};
+                itk->counts.fallback_frames = keep_fallback;
             }
             t_stats = Clock::now();
             tracker.stats = tr::Stats{};

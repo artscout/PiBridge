@@ -60,10 +60,14 @@ using Prior = std::optional<std::tuple<std::size_t, cam::geom::Pose, std::uint64
 
 /// Solve one LED frame. With `prior`, track each previous controller first; acquisition is skipped. `pre` are fixes
 /// already made this frame (their blobs are not used again). `parallel` runs the per-camera acquisition on one thread
-/// per camera (the result is the same).
+/// per camera (the result is the same). `orient`: the controllers' IMU orientation per model, for the quad
+/// acquisition to keep only agreeing hypotheses; `search`: the models looked for (the quad acquisition skips the
+/// others, so a controller already tracked does not claim the other one's blobs as its mirror image).
 std::vector<Found> solve_frame(const LedFrame& f, std::span<const Cam> cams, const std::array<LedModel, 2>& models,
                                std::span<const std::vector<std::array<std::size_t, 3>>> triples, const Params& prm,
-                               const std::vector<Prior>* prior, std::span<const Found> pre, bool parallel);
+                               const std::vector<Prior>* prior, std::span<const Found> pre, bool parallel,
+                               const std::array<std::optional<OrientPrior>, 2>* orient = nullptr,
+                               const std::array<bool, 2>* search = nullptr);
 
 /// Mark the blobs of a joint solve as used.
 void claim(std::vector<std::vector<bool>>& used, const JointSolve& j);

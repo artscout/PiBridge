@@ -46,6 +46,7 @@ add_library(pibridge_ctrltrack_obj OBJECT
     src/track/p3p.cpp
     src/track/model.cpp
     src/track/extrinsics.cpp
+    src/track/quads.cpp
     src/track/solve.cpp
     src/track/shm.cpp
     src/track/rig.cpp
@@ -65,7 +66,7 @@ target_link_libraries(pibridge_ctrltrack PUBLIC pibridge_cam Threads::Threads)
 
 if(PIBRIDGE_BUILD_TESTS)
     # Twins of the Rust #[test]s of pimax-ctrltrack's library modules and the binary's tracker.rs.
-    foreach(t blob assign p3p model extrinsics solve shm tracker improved)
+    foreach(t blob assign p3p model extrinsics solve shm tracker improved quads)
         add_executable(pibridge_ctrltrack_test_${t} tests/track/test_${t}.cpp)
         target_link_libraries(pibridge_ctrltrack_test_${t} PRIVATE pibridge_ctrltrack pibridge_common)
         target_compile_options(pibridge_ctrltrack_test_${t} PRIVATE -ffp-contract=off)

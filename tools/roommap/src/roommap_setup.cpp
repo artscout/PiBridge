@@ -1195,6 +1195,132 @@ R<void> cmd_setup(Args v) {
     return std::unexpected("unknown setup command " + rf::debug_str(x) + "\n" + SETUP_HELP);
 }
 
+// auto --follow S: after the room is in place, recognise it again every S seconds and correct the tracker's drift (an
+// odometry without a map, Basalt): only the offset, marked `drift 1` (the tracker glides to it, keeps the user's recenter
+// and applies its vertical); SteamVR's chaperone and the bounds stay as the start set them. A fix is taken when it is
+// sure (sigma <= 1 cm / 0.5 deg, rms <= 1.5 deg); a jump (> 25 cm or 5 deg from the offset in use) only when the next
+// fix agrees with it.
+R<void> follow_room(const std::string& dir, const std::string& name, std::uint32_t pid, double every_s, const MapId& map_id) {
+    if (pibridge::anchor::backend_from_env() != pibridge::anchor::Backend::SteamVr) {
+        std::printf("follow: only with SteamVR (Monado's offset carries the whole room setup): off\n");
+        return {};
+    }
+    auto first = store::RelocResult::load(cam::path_join(dir, "last-reloc.toml"));
+    if (!first) {
+        std::printf("follow: no first fix to follow from (%s): off\n", first.error().c_str());
+        return {};
+    }
+    // the SteamVR offset has y = 0 (the chaperone carries the floor): the drift is the change of y since this fix
+    const double base_y = first->align.t[1];
+    Alignment written = first->align;
+    written.t[1] = 0.0;
+    std::optional<Alignment> pending;
+    const std::string tmp = cam::path_join(anchor::runtime_dir(), "pibridge-roommap-follow.toml");
+    // PiBridge (2026-11-20): many short recognitions, filtered. One fix is good to about +-2 cm while the tracker drifts
+    // about 0.5 mm/s, so each fix moves a filtered offset by 1 - exp(-dt / tau) of its difference and the filtered
+    // offset is written in small steps (the session glides them in while the head moves).
+    // PIBRIDGE_ROOM_FOLLOW_TAU=0: every fix written as it is, every_s apart (the earlier behaviour).
+    const auto env_num = [](const char* n, double d) {
+        const char* e = std::getenv(n);
+        return e != nullptr && *e != 0 ? std::atof(e) : d;
+    };
+    const double tau = env_num("PIBRIDGE_ROOM_FOLLOW_TAU", 20.0);
+    const double win_s = env_num("PIBRIDGE_ROOM_FOLLOW_WIN", tau > 0.0 ? 3.0 : 6.0);
+    const double gap_s = tau > 0.0 ? env_num("PIBRIDGE_ROOM_FOLLOW_GAP", 1.0) : every_s;
+    const std::string win_arg = rf::fixed(win_s, 1);
+    Alignment filt = written;
+    auto last_fix = std::chrono::steady_clock::now();
+    std::printf("follow: recognising the room every %s s (%s s of frames) to correct the tracker's drift%s\n",
+                rf::fixed(gap_s + win_s, 0).c_str(), win_arg.c_str(),
+                tau > 0.0 ? (", filtered (tau " + rf::fixed(tau, 0) + " s)").c_str() : "");
+    std::fflush(stdout);
+    std::size_t applied = 0, unsure = 0, missed = 0;
+    for (;;) {
+        for (double w = 0; w < gap_s; w += 1.0) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            if (!alive(pid) || ring_owner() != pid) {
+                std::printf("follow: the session ended (%zu corrections, %zu unsure, %zu not recognised)\n", applied,
+                            unsure, missed);
+                return {};
+            }
+        }
+        if (const auto why = auto_must_stop(anchor::offset_path(), pid, rs::process_id(), map_id, map_identity(dir))) {
+            std::printf("follow: stopped: %s\n", why->c_str());
+            return {};
+        }
+        const auto r = cmd_relocalize(s({"--source", "broker", "--seconds", win_arg.c_str(), "--name", name.c_str(),
+                                         "--result", tmp.c_str()}));
+        if (!r) {
+            missed++;
+            continue;
+        }
+        auto res = store::RelocResult::load(tmp);
+        if (!res) {
+            missed++;
+            continue;
+        }
+        if (res->pid != 0 && res->pid != pid) {
+            std::printf("follow: the fix is for another session: stopped\n");
+            return {};
+        }
+        if (res->sigma_m > 0.01 || res->sigma_deg > 0.5 || res->rms_deg > 1.5) {
+            unsure++;
+            std::printf("follow: fix not sure enough (sigma %s mm / %s deg, rms %s deg): skipped\n",
+                        rf::fixed(res->sigma_m * 1e3, 1).c_str(), rf::fixed(res->sigma_deg, 2).c_str(),
+                        rf::fixed(res->rms_deg, 2).c_str());
+            continue;
+        }
+        Alignment al = res->align;
+        al.t[1] -= base_y;
+        const Alignment ref = tau > 0.0 ? filt : written;
+        bool jump = false;
+        if (!al.close(ref, 0.25, 5.0)) {
+            if (!(pending && al.close(*pending, 0.05, 1.0))) {
+                pending = al;
+                std::printf("follow: a jump from the offset in use (%s): waiting for the next fix to agree\n",
+                            fmt_align(al).c_str());
+                continue;
+            }
+            jump = true; // confirmed: the tracker jumped, the filter starts over from here
+        }
+        pending.reset();
+        const auto now = std::chrono::steady_clock::now();
+        const double dt = std::chrono::duration<double>(now - last_fix).count();
+        last_fix = now;
+        if (tau > 0.0) {
+            if (jump) {
+                filt = al;
+            } else {
+                const double k = 1.0 - std::exp(-dt / tau);
+                for (int i = 0; i < 3; i++) {
+                    filt.t[i] += k * (al.t[i] - filt.t[i]);
+                }
+                filt.yaw = align::wrap(filt.yaw + k * align::wrap(al.yaw - filt.yaw));
+            }
+            al = filt;
+        }
+        if (al.close(written, tau > 0.0 ? 0.001 : 0.003, tau > 0.0 ? 0.02 : 0.05)) {
+            continue; // no drift worth a write
+        }
+        if (auto l = take_lease(pid, anchor::Role::Auto); !l) {
+            std::printf("follow: stopped: %s\n", l.error().c_str());
+            return {};
+        }
+        auto p = store::write_offset_drift(al, pid);
+        if (!p) {
+            std::printf("follow: cannot write the offset: %s\n", p.error().text().c_str());
+            continue;
+        }
+        const double dm = g::norm(g::sub(al.t, written.t));
+        const double dd = rf::to_degrees(std::abs(align::wrap(al.yaw - written.yaw)));
+        applied++;
+        std::printf("follow: drift corrected by %s mm / %s deg (offset %s)\n", rf::fixed(dm * 1e3, 0).c_str(),
+                    rf::fixed(dd, 2).c_str(), fmt_align(al).c_str());
+        std::fflush(stdout);
+        written = al;
+    }
+}
+
 R<void> cmd_auto(Args v) {
     auto dir_r = map_dir(v);
     if (!dir_r) {
@@ -1210,6 +1336,10 @@ R<void> cmd_auto(Args v) {
         return std::unexpected(st_o.error());
     }
     const std::string status = st_o->value_or(status_path());
+    auto follow = num_f64(v, "--follow", 0.0);
+    if (!follow) {
+        return std::unexpected(follow.error());
+    }
     if (auto d = done(v); !d) {
         return d;
     }
@@ -1262,6 +1392,9 @@ R<void> cmd_auto(Args v) {
             }
             write_status(status, "ok", name, pid,
                          "Room \"" + name + "\" in place after " + rf::fixed(secs(t0), 0) + " s" + extra + ".");
+            if (*follow > 0.0) {
+                return follow_room(dir, name, pid, *follow, map_id);
+            }
             return {};
         }
         std::printf("try %d: %s\n", tries, r.error().c_str());

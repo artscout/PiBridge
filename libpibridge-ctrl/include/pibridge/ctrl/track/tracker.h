@@ -146,6 +146,8 @@ struct Fix {
     bool few = false;
     /// The pose to publish when it is not the optical fit itself (ImuTracker: the filter's pose after the update).
     std::optional<cam::geom::Pose> published;
+    /// PiBridge (ImuTracker): the filter's velocity at the frame, body frame (m/s), for the fuser's prediction.
+    std::optional<cam::geom::Vec3> velocity;
 };
 
 class Tracker {

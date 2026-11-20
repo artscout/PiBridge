@@ -31,6 +31,8 @@ inline constexpr char kEyeHeight[] = "room_eye_height_m";   // the measured eye 
 
 inline constexpr char kDefaultRoom[] = "home";
 inline constexpr int kRoomAutoWaitS = 120; // pibridge-roommap auto --wait (omarchyvr's default)
+/// Basalt: the room map recognised again this often (s) to correct its drift (pibridge-roommap auto --follow).
+inline constexpr int kRoomFollowS = 10;
 
 // The room's name from pibridge.conf (io_room); "home" when unset or not a plain folder name.
 QString roomName(const Conf& conf);

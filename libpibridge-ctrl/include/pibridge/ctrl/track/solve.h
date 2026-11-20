@@ -16,6 +16,7 @@
 
 #include <array>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <span>
 #include <utility>
@@ -38,6 +39,8 @@ struct CamObs {
     static CamObs make(const Cam& cam, std::vector<std::pair<double, double>> px);
 };
 
+class QuadIndex;
+
 struct Params {
     /// Angular inlier tolerance for hypothesis scoring (radians).
     double tol_rad = 3.0 / 230.0;
@@ -55,6 +58,9 @@ struct Params {
     std::size_t min_inliers = 5;
     /// Stop the brute-force search once a hypothesis matches this many LEDs.
     std::size_t good_enough = 9;
+    /// PiBridge: the LED quad index per model (quads.h). When set, acquisition looks blob quads up in it instead of
+    /// the brute-force triple search (PIBRIDGE_CTRL_ACQ=quads; Rig::try_load builds them).
+    std::array<std::shared_ptr<const QuadIndex>, 2> quads{};
 };
 
 /// (led index, blob index) pairs.
@@ -104,6 +110,39 @@ cam::geom::Mat3 quat_to_mat(const std::array<double, 4>& q);
 std::optional<CamSolve> polish(const cam::geom::Pose& pose, const LedModel& model, const Cam& cam,
                                std::size_t cam_idx, const CamObs& obs, const std::vector<bool>& used,
                                const Params& prm, const Matches& matches);
+
+/// Acquisition of one controller in one camera through its quad index (no prior): each blob with 3 of its `knn`
+/// nearest free blobs is looked up, every hit checked by P3P on three pairs and the fourth, then scored and polished
+/// like `acquire`.
+/// What the controller's IMU says about its orientation, for the acquisition to pick only hypotheses that agree
+/// (PiBridge; ImuTracker fills it per hand). Body = the head frame of the cameras' extrinsics.
+struct OrientPrior {
+    /// Gravity: the controller's up in its model frame (accelerometer) and the world's up in the body frame.
+    std::optional<std::pair<cam::geom::Vec3, cam::geom::Vec3>> up;
+    double tilt_deg = 20.0;
+    /// The gyro-carried orientation `body_from_model` (a controller tracked recently).
+    std::optional<cam::geom::Mat3> r;
+    /// The same turned into the LED ring's twin (r * twin^T): the gyro cannot tell the two apart, so either passes
+    /// (the accelerometer check of the tracker decides).
+    std::optional<cam::geom::Mat3> r_twin;
+    double rot_deg = 30.0;
+};
+
+/// The rig's cameras for scoring a single-camera hypothesis in all of them (`acquire_quads`), and the IMU priors per
+/// model.
+struct RigView {
+    std::span<const Cam> cams;
+    std::span<const CamObs> obs;
+    std::span<const std::vector<bool>> used;
+    const std::array<std::optional<OrientPrior>, 2>* orient = nullptr;
+};
+
+/// With `all`, every hypothesis is scored by its matches in all cameras (the camera's own first), so a pose that fits
+/// one camera at a wrong depth loses to the one the other cameras confirm.
+std::optional<CamSolve> acquire_quads(const LedModel& model, const QuadIndex& index, const Cam& cam,
+                                      std::size_t cam_idx, const CamObs& obs, const std::vector<bool>& used,
+                                      const Params& prm, const RigView* all = nullptr,
+                                      const OrientPrior* orient = nullptr);
 
 /// Brute-force acquisition of one controller in one camera (no prior). `used` marks blobs already claimed.
 std::optional<CamSolve> acquire(const LedModel& model, std::span<const std::array<std::size_t, 3>> triples,

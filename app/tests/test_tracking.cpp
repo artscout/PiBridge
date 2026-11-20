@@ -924,9 +924,12 @@ TEST(room_map_auto_starts_with_a_saved_room_and_stops_by_pid) {
     CHECK(r.names().back() == QStringLiteral("roommap"));
     const RecProcSpec& m = r.procs->started.back();
     CHECK(m.program == QStringLiteral("/fake/bin/pibridge-roommap"));
-    CHECK((m.args == QStringList{QStringLiteral("auto"), QStringLiteral("--name"), QStringLiteral("home"),
-                                 QStringLiteral("--wait"), QStringLiteral("120"), QStringLiteral("--backend"),
-                                 vrBackendName(currentVrBackend())}));
+    QStringList want{QStringLiteral("auto"), QStringLiteral("--name"), QStringLiteral("home"), QStringLiteral("--wait"),
+                     QStringLiteral("120"), QStringLiteral("--backend"), vrBackendName(currentVrBackend())};
+    if (r.setup.io.slam && r.setup.io.slamEngine == SlamEngine::Basalt) {
+        want << QStringLiteral("--follow") << QStringLiteral("10"); // Basalt: the room map corrects its drift
+    }
+    CHECK(m.args == want);
     CHECK(m.logPath == r.c->session()->logDir() + QStringLiteral("/roommap.log"));
     // the monado env has the anchor hook
     CHECK(has(r.procs->started[2].env, "PIMAX_ANCHOR=1"));

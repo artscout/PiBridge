@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # pibridge-headtrack: the Crystal Super's / Dream Air's inside-out head tracking without Monado.
 
-add_library(pibridge_headtrack_core STATIC src/headtrack.cpp src/vit_host.cpp src/world.cpp)
+add_library(pibridge_headtrack_core STATIC src/headtrack.cpp src/sysmon.cpp src/vit_host.cpp src/world.cpp)
 target_include_directories(pibridge_headtrack_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
                                                    PRIVATE ${PROJECT_SOURCE_DIR}/winbridge)
 target_link_libraries(pibridge_headtrack_core PUBLIC pibridge_hmd pibridge_cam pibridge_ctrl pibridge_ctrltrack pibridge_common ${CMAKE_DL_LIBS})

@@ -5,6 +5,7 @@
 #include "pibridge_test.h"
 
 #include <cmath>
+#include <cstdio>
 
 using namespace pibridge::ctrl::fuse;
 
@@ -96,12 +97,66 @@ TEST(gravity_check_drops_a_tilted_fix) {
 }
 
 TEST(inertial_jump_gate) {
-    // a fix 10 cm off the inertial prediction (the other hand) one frame after the last good one is dropped
+    // a fix 10 cm off the inertial prediction (the other hand) one frame after the last good one is dropped (with the
+    // fuser's own gates: trust_tracker off)
+    Fuser* f = nullptr;
+    Config c = with_ins();
+    c.trust_tracker = false;
+    run(c, 0.0, 3'000'000'000, 2'000'000'000, &f);
+    const char* v =
+        f->optical_with(1'985'000'000, P{{0, 0, 0, 1}, {0.2, -0.3, -0.35}}, P::id(), 0.8f, 12, std::nullopt);
+    CHECK(std::string_view(v) == "jump");
+}
+
+TEST(tracker_fix_trusted) {
+    // the IMU-led tracker gated the fix already: the fuser takes it (a fast swing, not a jump)
     Fuser* f = nullptr;
     run(with_ins(), 0.0, 3'000'000'000, 2'000'000'000, &f);
     const char* v =
         f->optical_with(1'985'000'000, P{{0, 0, 0, 1}, {0.2, -0.3, -0.35}}, P::id(), 0.8f, 12, std::nullopt);
-    CHECK(std::string_view(v) == "jump");
+    CHECK(std::string_view(v) == "ok");
+}
+
+namespace {
+/// The largest step between shown poses 2 ms apart, a hand moving at 1 m/s with fixes 5 mm off alternately (25 Hz),
+/// while it is within reach (past ~0.8 m the body model holds it back).
+double max_step(double smooth_s) {
+    Config cfg = Config::pibridge();
+    cfg.online_fit = false;
+    cfg.use_imu = true;
+    cfg.smooth_s = smooth_s;
+    Fuser f(1, cfg, calib());
+    const P head = P::id();
+    std::uint32_t dev = 0;
+    std::uint64_t next_fix = 100'000'000;
+    int k = 0;
+    double worst = 0.0;
+    std::optional<V3> last;
+    for (std::uint64_t t = 100'000'000; t <= 700'000'000; t += 2'000'000) {
+        dev += 2000;
+        f.sample_acc(t, dev, {0, 0, 0}, std::array<std::int16_t, 3>{0, 1024, 0});
+        if (t >= next_fix + 20'000'000) {
+            const double x = 0.1 + 1.0 * static_cast<double>(next_fix) * 1e-9 + (k++ % 2 == 0 ? 0.005 : -0.005);
+            f.optical_velocity(next_fix, {1.0, 0.0, 0.0});
+            f.optical(next_fix, P{{0, 0, 0, 1}, {x, -0.3, -0.35}}, head, 0.8f, 12);
+            next_fix += 40'000'000;
+        }
+        const auto [s, p] = f.get(t, head);
+        if (t > 400'000'000 && s == State::Optical && last) {
+            worst = std::max(worst, std::fabs(p.p[0] - (*last)[0]) - 0.002); // less the 2 mm the hand moves
+        }
+        last = p.p;
+    }
+    return worst;
+}
+} // namespace
+
+TEST(smoothing_spreads_the_fix_steps) {
+    // without smoothing each fix's 10 mm correction shows at once; spread over 30 ms the steps are much smaller
+    const double raw = max_step(0.0);
+    const double smooth = max_step(0.03);
+    CHECK(raw > 0.007);
+    CHECK(smooth < 0.5 * raw);
 }
 
 PIBRIDGE_TEST_MAIN()

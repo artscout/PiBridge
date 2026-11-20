@@ -6,9 +6,12 @@
 
 #include "pibridge/cam/rustfmt.h"
 #include "pibridge/ctrl/track/p3p.h"
+#include "pibridge/ctrl/track/quads.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 namespace pibridge::ctrl::track {
@@ -418,6 +421,203 @@ std::optional<CamSolve> acquire(const LedModel& model, std::span<const std::arra
         if (stop) {
             break;
         }
+    }
+    if (!best || best->n < prm.min_inliers) {
+        return std::nullopt;
+    }
+    auto s = polish(best->pose, model, cam, cam_idx, obs, used, prm, best->m);
+    if (!s || !(s->matches.size() >= prm.min_inliers && s->rms_px <= prm.tol_px)) {
+        return std::nullopt;
+    }
+    return s;
+}
+
+std::optional<CamSolve> acquire_quads(const LedModel& model, const QuadIndex& index, const Cam& cam,
+                                      std::size_t cam_idx, const CamObs& obs, const std::vector<bool>& used,
+                                      const Params& prm, const RigView* all, const OrientPrior* orient) {
+    const std::size_t n = obs.px.size();
+    std::vector<std::size_t> free;
+    for (std::size_t i = 0; i < n; i++) {
+        if (!used[i] && obs.bearing[i]) {
+            free.push_back(i);
+        }
+    }
+    if (free.size() < std::max<std::size_t>(prm.min_inliers, 4)) {
+        return std::nullopt;
+    }
+    const double cos_face = std::cos(rf::to_radians(prm.facing_deg));
+    const double cos_tol = std::cos(prm.tol_rad);
+    const double cos_fourth = std::cos(3.0 * prm.tol_rad);
+    // blob quads: anchor + 3 of its k nearest free neighbours, each once
+    std::vector<std::array<std::size_t, 4>> quads;
+    for (const std::size_t a : free) {
+        std::vector<std::pair<double, std::size_t>> nb;
+        for (const std::size_t b : free) {
+            if (b == a) {
+                continue;
+            }
+            const double dx = obs.px[a].first - obs.px[b].first;
+            const double dy = obs.px[a].second - obs.px[b].second;
+            nb.emplace_back(dx * dx + dy * dy, b);
+        }
+        std::sort(nb.begin(), nb.end());
+        static const std::size_t knn_q = [] {
+            const char* e = std::getenv("CT_QUAD_KNN");
+            return e != nullptr ? static_cast<std::size_t>(std::atoi(e)) : std::size_t{5};
+        }();
+        if (nb.size() > knn_q) {
+            nb.resize(knn_q);
+        }
+        for (std::size_t i = 0; i < nb.size(); i++) {
+            for (std::size_t j = i + 1; j < nb.size(); j++) {
+                for (std::size_t k = j + 1; k < nb.size(); k++) {
+                    std::array<std::size_t, 4> q{a, nb[i].second, nb[j].second, nb[k].second};
+                    std::sort(q.begin(), q.end());
+                    quads.push_back(q);
+                }
+            }
+        }
+    }
+    std::sort(quads.begin(), quads.end());
+    quads.erase(std::unique(quads.begin(), quads.end()), quads.end());
+    struct Best {
+        std::size_t n;
+        std::size_t total;
+        double err;
+        g::Pose pose;
+        Matches m;
+    };
+    std::optional<Best> best;
+    // the IMU's orientation in this camera: up vectors and the rotation to compare a hypothesis with
+    std::optional<std::pair<g::Vec3, g::Vec3>> up_cam;
+    std::optional<g::Mat3> r_cam, r_cam_twin;
+    double cos_tilt = -1.0;
+    if (orient != nullptr) {
+        if (orient->up) {
+            up_cam = std::pair{orient->up->first, g::mat_vec(cam.cam_from_body.r, orient->up->second)};
+            cos_tilt = std::cos(rf::to_radians(orient->tilt_deg));
+        }
+        if (orient->r) {
+            r_cam = g::mat_mul(cam.cam_from_body.r, *orient->r);
+        }
+        if (orient->r_twin) {
+            r_cam_twin = g::mat_mul(cam.cam_from_body.r, *orient->r_twin);
+        }
+    }
+    std::vector<QuadIndex::Hit> hits;
+    std::size_t dbg_q = 0, dbg_hits = 0, dbg_poses = 0, dbg_scored = 0, dbg_dist = 0, dbg_fourth = 0, dbg_tilt = 0, dbg_rot = 0, dbg_face = 0, dbg_few = 0;
+    for (const auto& q : quads) {
+        dbg_q++;
+        const std::array<g::Vec3, 4> d{*obs.bearing[q[0]], *obs.bearing[q[1]], *obs.bearing[q[2]], *obs.bearing[q[3]]};
+        // shape tolerance: the angular noise over the base length (the longest pair), at least one cell
+        double base = 0;
+        for (std::size_t s = 0; s < 4; s++) {
+            for (std::size_t t = s + 1; t < 4; t++) {
+                base = std::max(base, std::acos(std::clamp(g::dot(d[s], d[t]), -1.0, 1.0)));
+            }
+        }
+        // (tol_rad is ~3 px: 1.5 px of noise on each end of the base moves a shape coordinate by ~tol_rad / base)
+        static const double tol_k = [] {
+            const char* e = std::getenv("CT_QUAD_TOL");
+            return e != nullptr ? std::atof(e) : 1.25;
+        }();
+        static const double tol_min = [] {
+            const char* e = std::getenv("CT_QUAD_TOL_MIN");
+            return e != nullptr ? std::atof(e) : 0.03;
+        }();
+        static const double tol_max = [] {
+            const char* e = std::getenv("CT_QUAD_TOL_MAX");
+            return e != nullptr ? std::atof(e) : 0.15;
+        }();
+        const double tol = std::clamp(tol_k * prm.tol_rad / std::max(base, 1e-6), tol_min, tol_max);
+        hits.clear();
+        index.lookup(d, tol, hits);
+        dbg_hits += hits.size();
+        bool stop = false;
+        for (const auto& h : hits) {
+            const std::array<g::Vec3, 3> y{d[h.slot[0]], d[h.slot[1]], d[h.slot[2]]};
+            const std::array<g::Vec3, 3> x{model.leds[h.led[0]].p, model.leds[h.led[1]].p, model.leds[h.led[2]].p};
+            for (const g::Pose& pose : p3p(y, x)) {
+                dbg_poses++;
+                const double dist = g::norm(pose.t);
+                if (dist < prm.min_dist || dist > prm.max_dist) {
+                    dbg_dist++;
+                    continue;
+                }
+                // the fourth pair must agree, and all four LEDs face the camera
+                const g::Vec3 p4 = g::normalize(pose.apply(model.leds[h.led[3]].p));
+                if (g::dot(p4, d[h.slot[3]]) < cos_fourth) {
+                    dbg_fourth++;
+                    continue;
+                }
+                if (up_cam && g::dot(g::mat_vec(pose.r, up_cam->first), up_cam->second) < cos_tilt) {
+                    dbg_tilt++;
+                    continue; // tilted against the accelerometer
+                }
+                const auto off_deg = [&](const g::Mat3& rc) {
+                    return rf::to_degrees(g::norm(rotvec(g::mat_mul(pose.r, g::transpose(rc)))));
+                };
+                if (r_cam && off_deg(*r_cam) > orient->rot_deg && !(r_cam_twin && off_deg(*r_cam_twin) <= orient->rot_deg)) {
+                    dbg_rot++;
+                    continue; // turned against the gyro
+                }
+                bool hidden = false;
+                for (const std::uint8_t l : h.led) {
+                    if (!facing(pose, model.leds[l], cos_face)) {
+                        hidden = true;
+                        break;
+                    }
+                }
+                if (hidden) {
+                    dbg_face++;
+                    continue;
+                }
+                dbg_scored++;
+                auto [m, err] = match_angular(pose, model, obs, used, cos_face, cos_tol);
+                if (m.size() < 4) {
+                    dbg_few++;
+                    continue;
+                }
+                std::size_t total = m.size();
+                if (all != nullptr) {
+                    const g::Pose body_from_model = cam.cam_from_body.inverse().compose(pose);
+                    for (std::size_t cj = 0; cj < all->cams.size(); cj++) {
+                        if (cj != cam_idx) {
+                            total += match_angular(all->cams[cj].cam_from_body.compose(body_from_model), model,
+                                                   all->obs[cj], all->used[cj], cos_face, cos_tol)
+                                         .first.size();
+                        }
+                    }
+                }
+                const bool better = !best || total > best->total || (total == best->total && err < best->err);
+                if (better) {
+                    const std::size_t cnt = total;
+                    best = Best{m.size(), total, err, pose, std::move(m)};
+                    static const std::size_t enough = [] {
+                        const char* e = std::getenv("CT_QUAD_ENOUGH");
+                        return e != nullptr ? static_cast<std::size_t>(std::atoi(e)) : std::size_t{12};
+                    }();
+                    if (cnt >= enough) {
+                        stop = true;
+                        break;
+                    }
+                }
+            }
+            if (stop) {
+                break;
+            }
+        }
+        if (stop) {
+            break;
+        }
+    }
+    if (std::getenv("CT_QUAD_DEBUG") != nullptr) {
+        std::fprintf(stderr,
+                     "quads %s cam %zu: blobs %zu quads %zu hits %zu poses %zu | dist %zu fourth %zu tilt %zu rot %zu "
+                     "face %zu few %zu scored %zu | prior up %d r %d | best %zu total %zu\n",
+                     model.hand.c_str(), cam_idx, free.size(), quads.size(), dbg_hits, dbg_poses, dbg_dist, dbg_fourth,
+                     dbg_tilt, dbg_rot, dbg_face, dbg_few, dbg_scored, up_cam ? 1 : 0, r_cam ? 1 : 0, best ? best->n : 0,
+                     best ? best->total : 0);
     }
     if (!best || best->n < prm.min_inliers) {
         return std::nullopt;
