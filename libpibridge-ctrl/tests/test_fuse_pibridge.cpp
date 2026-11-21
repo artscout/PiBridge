@@ -151,6 +151,43 @@ double max_step(double smooth_s) {
 }
 } // namespace
 
+namespace {
+/// The shown pose's spread (max - min of x) of a hand held still with fixes 3 mm off alternately.
+double still_spread(double still_s) {
+    Config cfg = Config::pibridge();
+    cfg.online_fit = false;
+    cfg.use_imu = true;
+    cfg.smooth_still_s = still_s;
+    Fuser f(1, cfg, calib());
+    const P head = P::id();
+    std::uint32_t dev = 0;
+    std::uint64_t next_fix = 100'000'000;
+    int k = 0;
+    double lo = 1e9, hi = -1e9;
+    for (std::uint64_t t = 100'000'000; t <= 1'500'000'000; t += 2'000'000) {
+        dev += 2000;
+        f.sample_acc(t, dev, {0, 0, 0}, std::array<std::int16_t, 3>{0, 1024, 0});
+        if (t >= next_fix + 20'000'000) {
+            f.optical_velocity(next_fix, {0.0, 0.0, 0.0});
+            f.optical(next_fix, P{{0, 0, 0, 1}, {0.1 + (k++ % 2 == 0 ? 0.003 : -0.003), -0.3, -0.35}}, head, 0.8f, 12);
+            next_fix += 40'000'000;
+        }
+        const auto [s, p] = f.get(t, head);
+        if (t > 800'000'000 && s == State::Optical) {
+            lo = std::min(lo, p.p[0]);
+            hi = std::max(hi, p.p[0]);
+        }
+    }
+    return hi - lo;
+}
+} // namespace
+
+TEST(a_still_hand_is_smoothed_more) {
+    const double base = still_spread(0.03);
+    const double still = still_spread(0.15);
+    CHECK(still < 0.6 * base);
+}
+
 TEST(smoothing_spreads_the_fix_steps) {
     // without smoothing each fix's 10 mm correction shows at once; spread over 30 ms the steps are much smaller
     const double raw = max_step(0.0);

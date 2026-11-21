@@ -236,6 +236,10 @@ struct Config {
     /// constant (s) instead of being shown at once (a 25 Hz jitter, seen doubled at 90 Hz); steps over 10 cm / 15 deg
     /// are shown at once. 0 = off. PIBRIDGE_CTRL_SMOOTH_MS.
     double smooth_s = 0.0;
+    /// ... and this time constant while the controller is nearly still (its gyro under 0.3 rad/s, the tracker's speed
+    /// under 0.12 m/s): the fixes' noise no longer shakes a hand held still (Pimax holds the pose then). Back to
+    /// smooth_s as soon as it moves (0.5 rad/s or 0.2 m/s). PIBRIDGE_CTRL_SMOOTH_STILL_MS.
+    double smooth_still_s = 0.0;
     /// A few-LED fix whose orientation turned against the gyro is dropped (Rust: its position is kept, "pos-only").
     bool turn_drop = false;
     /// Keep the hand-identity state of imu_state() up to date also without a hint file (the offline bench).
@@ -397,6 +401,7 @@ private:
         P p;
     };
     std::optional<Shown> shown_;
+    bool still_smooth_ = false;
     /// The accelerometer's displacement from `from` to `to` (world, gravity removed), starting at rest.
     std::optional<V3> acc_disp(std::uint64_t from, std::uint64_t to);
     std::deque<std::pair<std::uint64_t, V3>> acc_;
@@ -465,6 +470,10 @@ private:
     /// Accelerometer sum since the last hint entry (aim frame, m/s^2), and the count.
     V3 hint_acc_{0.0, 0.0, 0.0};
     std::uint32_t hint_acc_n_ = 0;
+    /// The last accelerometer mean written: held for a hint entry whose IMU reports carried no accelerometer sample
+    /// (live 1-2.5 % of entries; a zero there read as free fall in the trackers' IMU integration, 2026-11-20).
+    V3 hint_acc_last_{0.0, 0.0, 0.0};
+    bool hint_acc_have_ = false;
     double w_lp_ = 1.0;
     std::uint64_t still_since_ = 0;
     bool still_now_ = false;

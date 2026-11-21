@@ -987,6 +987,12 @@ void IoSessionControl::startRoom() {
         // Basalt keeps no map of its own: the room map recognised every 10 s corrects its drift (auto --follow)
         spec.args << QStringLiteral("--follow") << QString::number(kRoomFollowS);
     }
+    // the room tool's own switches from the extra environment (PIBRIDGE_ROOM_FOLLOW, PIBRIDGE_ROOM_FOLLOW_TAU, ...)
+    for (const QString& w : setup_.extraEnv) {
+        if (w.startsWith(QStringLiteral("PIBRIDGE_ROOM_"))) {
+            spec.env << w;
+        }
+    }
     spec.logPath = session_->logDir() + QStringLiteral("/roommap.log");
     QString err;
     const auto alive = alive_;

@@ -32,6 +32,12 @@ Kb4 Kb4::with_extra_radial() const {
     return m;
 }
 
+Kb4 Kb4::with_tangential() const {
+    Kb4 m = *this;
+    m.use_tangential = extra.size() >= 2;
+    return m;
+}
+
 std::size_t Kb4::n_coeffs() const {
     // k.iter().chain(extra.iter().take(n_extra))
     return 4 + (use_extra ? std::min<std::size_t>(2, extra.size()) : 0);
@@ -84,12 +90,49 @@ std::optional<std::pair<double, double>> Kb4::project(const geom::Vec3& p) const
         return std::nullopt;
     }
     const double td = theta_d(theta);
-    return std::pair{fx * td * p[0] / r + cx, fy * td * p[1] / r + cy};
+    double xd = td * p[0] / r;
+    double yd = td * p[1] / r;
+    if (use_tangential) {
+        const double pa = extra[0], pb = extra[1], rd2 = td * td;
+        const double xt = xd + pa * (rd2 + 2.0 * xd * xd) + 2.0 * pb * xd * yd;
+        const double yt = yd + pb * (rd2 + 2.0 * yd * yd) + 2.0 * pa * xd * yd;
+        xd = xt;
+        yd = yt;
+    }
+    return std::pair{fx * xd + cx, fy * yd + cy};
 }
 
 std::optional<geom::Vec3> Kb4::unproject(double u, double v) const {
-    const double mx = (u - cx) / fx;
-    const double my = (v - cy) / fy;
+    double mx = (u - cx) / fx;
+    double my = (v - cy) / fy;
+    if (use_tangential) {
+        // invert the tangential step: (xd, yd) such that T(xd, yd) = (mx, my); Gauss-Newton from the measured point
+        const double pa = extra[0], pb = extra[1];
+        double xd = mx, yd = my;
+        for (int i = 0; i < 10; i++) {
+            const double rd2 = xd * xd + yd * yd;
+            const double fx_ = xd + pa * (rd2 + 2.0 * xd * xd) + 2.0 * pb * xd * yd - mx;
+            const double fy_ = yd + pb * (rd2 + 2.0 * yd * yd) + 2.0 * pa * xd * yd - my;
+            // Jacobian of T
+            const double j00 = 1.0 + 6.0 * pa * xd + 2.0 * pb * yd;
+            const double j01 = 2.0 * pa * yd + 2.0 * pb * xd;
+            const double j10 = 2.0 * pb * xd + 2.0 * pa * yd;
+            const double j11 = 1.0 + 6.0 * pb * yd + 2.0 * pa * xd;
+            const double det = j00 * j11 - j01 * j10;
+            if (std::fabs(det) < 1e-12) {
+                break;
+            }
+            const double dx = (j11 * fx_ - j01 * fy_) / det;
+            const double dy = (-j10 * fx_ + j00 * fy_) / det;
+            xd -= dx;
+            yd -= dy;
+            if (std::fabs(dx) + std::fabs(dy) < 1e-12) {
+                break;
+            }
+        }
+        mx = xd;
+        my = yd;
+    }
     const double td = std::sqrt(mx * mx + my * my);
     if (td < 1e-12) {
         return geom::Vec3{0.0, 0.0, 1.0};

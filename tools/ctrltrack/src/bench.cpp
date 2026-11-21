@@ -25,6 +25,7 @@
 #include "pibridge/ctrl/parity.h"
 #include "pibridge/ctrl/track/blob.h"
 #include "pibridge/ctrl/track/imutrack.h"
+#include "pibridge/ctrl/track/wintrack.h"
 #include "pibridge/ctrl/track/rig.h"
 #include "pibridge/ctrl/track/tracker.h"
 
@@ -36,6 +37,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <format>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <optional>
@@ -154,6 +156,10 @@ std::vector<FrameOut> run(const tr::Rig& rig, const std::vector<Frame>& frames, 
     }
     tr::ImuTracker itk(icfg, cfg);
     itk.device_from_aim = g::rot_x(-52.0);
+    // --tracker win: the Pimax-scheme tracker (wintrack.h) in place of the IMU-led EKF tracker
+    static const bool wintrack = std::getenv("BENCH_WIN") != nullptr;
+    tr::WinTracker wtk(tr::WinTrackCfg{}, cfg);
+    wtk.device_from_aim = g::rot_x(-52.0);
     std::vector<FrameOut> out(frames.size());
     const double cos_face = std::cos(cam::rfmt::to_radians(rig.prm.facing_deg));
     for (std::size_t i = 0; i < frames.size(); i++) {
@@ -229,6 +235,9 @@ std::vector<FrameOut> run(const tr::Rig& rig, const std::vector<Frame>& frames, 
                     ii.still_s = x.still_s;
                     ii.world_from_head = g::Pose{rwh, x.head_p};
                     itk.imu_push(s, ii);
+                    if (wintrack) {
+                        wtk.imu_push(s, ii);
+                    }
                 }
             }
         }
@@ -242,7 +251,7 @@ std::vector<FrameOut> run(const tr::Rig& rig, const std::vector<Frame>& frames, 
             }
         }
         const auto t0 = Clock::now();
-        auto fixes = imutrack ? itk.step(rig, lf, f.ns) : tk.step(rig, lf, f.ns);
+        auto fixes = imutrack ? (wintrack ? wtk.step(rig, lf, f.ns) : itk.step(rig, lf, f.ns)) : tk.step(rig, lf, f.ns);
         out[i].ms = ms_since(t0);
         for (auto& fx : fixes) {
             if (hs != nullptr) {
@@ -259,7 +268,30 @@ std::vector<FrameOut> run(const tr::Rig& rig, const std::vector<Frame>& frames, 
             out[i].fix[fx.slot] = std::move(fx);
         }
     }
-    if (std::getenv("BENCH_STATS") != nullptr && imutrack) {
+    if (std::getenv("BENCH_STATS") != nullptr && imutrack && wintrack) {
+        const auto& c = wtk.counts;
+        std::fprintf(stderr, "wintrack: updates %llu misses %llu lost frames %llu initing %llu acquisitions %llu relocks %llu "
+                             "far resets %llu budget resets %llu | hypotheses %llu (p3p %llu p2p %llu p1p %llu) picked pred %llu "
+                             "p3p %llu p2p %llu p1p %llu alt %llu | contested %llu | still strict %llu loose %llu fast-stop %llu | "
+                             "imu gaps %llu | iters %.2f rms %.2f px inliers %.1f | acq hyp %llu drops %llu acc %llu fail %llu other %llu | reverted %llu relock short %llu | misses: no pairs %llu one %llu | ms: match %.2f push %.2f search %.2f per update\n",
+                     (unsigned long long)c.updates, (unsigned long long)c.misses, (unsigned long long)c.lost_frames,
+                     (unsigned long long)c.initing_frames, (unsigned long long)c.acquisitions, (unsigned long long)c.relocks,
+                     (unsigned long long)c.far_resets, (unsigned long long)c.budget_resets, (unsigned long long)c.hyp_total,
+                     (unsigned long long)c.hyp_p3p, (unsigned long long)c.hyp_p2p, (unsigned long long)c.hyp_p1p,
+                     (unsigned long long)c.pick_pred, (unsigned long long)c.pick_p3p, (unsigned long long)c.pick_p2p,
+                     (unsigned long long)c.pick_p1p, (unsigned long long)c.pick_alt, (unsigned long long)c.contested,
+                     (unsigned long long)c.still_strict, (unsigned long long)c.still_loose, (unsigned long long)c.fast_stop_frames,
+                     (unsigned long long)c.imu_gaps, c.updates ? c.iter_sum / (double)c.updates : 0.0,
+                     c.vis_rms_n ? c.vis_rms_sum / (double)c.vis_rms_n : 0.0,
+                     c.updates ? (double)c.inliers_sum / (double)c.updates : 0.0, (unsigned long long)c.hyp_started,
+                     (unsigned long long)c.hyp_gyro_drops, (unsigned long long)c.hyp_accepted,
+                     (unsigned long long)c.hyp_motion_fail, (unsigned long long)c.hyp_other_hand,
+                     (unsigned long long)c.reverted, (unsigned long long)c.relock_short,
+                     (unsigned long long)c.miss_no_pairs, (unsigned long long)c.miss_one,
+                     c.updates ? c.match_ms / (double)c.updates : 0.0, c.updates ? c.push_ms / (double)c.updates : 0.0,
+                     c.updates ? c.search_ms / (double)c.updates : 0.0);
+    }
+    if (std::getenv("BENCH_STATS") != nullptr && imutrack && !wintrack) {
         const auto& c = itk.counts;
         std::fprintf(stderr, "imutrack: updates %llu misses %llu gate rejects %llu acquisitions %llu refused %llu "
                              "tentative dropped %llu fallback frames %llu searches %llu | misses: window %llu refined %llu rms %llu\n",
@@ -575,6 +607,149 @@ void eval_imu(const std::vector<Frame>& frames, const std::vector<FrameOut>& out
 
 } // namespace
 
+/// Replays a live dump (PIBRIDGE_CTRL_DUMP): the IMU samples and LED frames in the order the live tracker saw them.
+int run_dump(const std::string& path, const tr::Rig& rig, const tr::TrackCfg& cfg, bool imutrack) {
+    std::ifstream in(path);
+    if (!in) {
+        std::fprintf(stderr, "cannot read %s\n", path.c_str());
+        return 2;
+    }
+    const bool wintrack = std::getenv("BENCH_WIN") != nullptr;
+    tr::Tracker tk(cfg);
+    tk.device_from_aim = g::rot_x(-52.0);
+    tr::ImuTracker itk(tr::ImuTrackCfg{}, cfg);
+    itk.device_from_aim = g::rot_x(-52.0);
+    tr::WinTracker wtk(tr::WinTrackCfg{}, cfg);
+    wtk.device_from_aim = g::rot_x(-52.0);
+    std::vector<Frame> frames;
+    std::vector<FrameOut> out;
+    std::string line;
+    std::size_t imu_n = 0, truncated = 0;
+    // BENCH_IMU_SHIFT_MS: the controller IMU's timestamps moved by this (a time-base test; the frames stay)
+    const double imu_shift_ms = std::getenv("BENCH_IMU_SHIFT_MS") != nullptr ? std::atof(std::getenv("BENCH_IMU_SHIFT_MS")) : 0.0;
+    while (std::getline(in, line)) {
+        if (line.rfind("I,", 0) == 0) {
+            std::size_t slot = 0;
+            unsigned long long t = 0;
+            double qg[4], f[3], up[3], still = 0, hp[3], hq[4];
+            unsigned up_ok = 0;
+            if (std::sscanf(line.c_str(), "I,%zu,%llu,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%u,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf",
+                            &slot, &t, &qg[0], &qg[1], &qg[2], &qg[3], &f[0], &f[1], &f[2], &up[0], &up[1], &up[2], &up_ok,
+                            &still, &hp[0], &hp[1], &hp[2], &hq[0], &hq[1], &hq[2], &hq[3]) != 21 || slot > 1) {
+                continue;
+            }
+            t = static_cast<unsigned long long>(static_cast<double>(t) + imu_shift_ms * 1e6);
+            tr::ImuSample is;
+            is.t = t;
+            is.qg = tr::quat_to_mat({qg[0], qg[1], qg[2], qg[3]});
+            is.up_aim = {up[0], up[1], up[2]};
+            is.up_ok = up_ok != 0;
+            const g::Mat3 rwh = tr::quat_to_mat({hq[0], hq[1], hq[2], hq[3]});
+            is.up_body = g::mat_vec(g::transpose(rwh), {0.0, 1.0, 0.0});
+            is.still_s = still;
+            tk.imu_push(slot, is);
+            tr::ImuIn ii;
+            ii.t = t;
+            ii.qg = is.qg;
+            ii.f_aim = {f[0], f[1], f[2]};
+            ii.up_aim = is.up_aim;
+            ii.up_ok = is.up_ok;
+            ii.still_s = still;
+            ii.world_from_head = g::Pose{rwh, {hp[0], hp[1], hp[2]}};
+            itk.imu_push(slot, ii);
+            wtk.imu_push(slot, ii);
+            imu_n++;
+        } else if (line.rfind("F,", 0) == 0) {
+            // F,frame_ns,ncam,(n,u,v,...)*
+            std::vector<double> v;
+            std::size_t pos = 2;
+            while (pos < line.size()) {
+                std::size_t next = line.find(',', pos);
+                if (next == std::string::npos) {
+                    next = line.size();
+                }
+                v.push_back(std::atof(line.substr(pos, next - pos).c_str()));
+                pos = next + 1;
+            }
+            if (v.size() < 2) {
+                continue;
+            }
+            Frame fr;
+            fr.ns = static_cast<std::uint64_t>(v[0]);
+            const std::size_t ncam = static_cast<std::size_t>(v[1]);
+            tr::LedFrame lf{frames.size(), 0, {}};
+            std::size_t k = 2;
+            for (std::size_t c = 0; c < ncam && k < v.size(); c++) {
+                const std::size_t n = static_cast<std::size_t>(v[k++]);
+                std::vector<std::pair<double, double>> px;
+                for (std::size_t i = 0; i < n && k + 1 < v.size(); i++, k += 2) {
+                    px.emplace_back(v[k], v[k + 1]);
+                    if (c < fr.blobs.size()) {
+                        tr::Blob b;
+                        b.x = v[k];
+                        b.y = v[k + 1];
+                        fr.blobs[c].push_back(b);
+                    }
+                }
+                lf.px.push_back(std::move(px));
+            }
+            if (lf.px.size() < ncam) {
+                // a truncated line (the session ended mid-write): a frame short of cameras corrupted the trackers'
+                // per-camera vectors (the bad_alloc in solve_frame)
+                truncated++;
+                continue;
+            }
+            FrameOut fo;
+            const auto t0 = Clock::now();
+            auto fixes = imutrack ? (wintrack ? wtk.step(rig, lf, fr.ns) : itk.step(rig, lf, fr.ns)) : tk.step(rig, lf, fr.ns);
+            fo.ms = ms_since(t0);
+            for (auto& fx : fixes) {
+                if (imutrack && fx.published) {
+                    fx.found.joint.body_from_model = *fx.published;
+                }
+                fo.fix[fx.slot] = std::move(fx);
+            }
+            frames.push_back(std::move(fr));
+            out.push_back(std::move(fo));
+        }
+    }
+    std::fprintf(stderr, "dump: %zu LED frames, %zu IMU samples%s\n", frames.size(), imu_n,
+                 truncated > 0 ? std::format(", {} truncated frame line(s) skipped", truncated).c_str() : "");
+    const Metrics m = metrics(frames, out);
+    print_metrics(wintrack ? "wintrack (dump)" : imutrack ? "imutrack (dump)" : "frame tracker (dump)", m, 0.0);
+    if (std::getenv("BENCH_STATS") != nullptr && wintrack) {
+        const auto& c = wtk.counts;
+        std::fprintf(stderr, "wintrack: updates %llu misses %llu lost %llu initing %llu acquisitions %llu relocks %llu far %llu budget %llu | reverted %llu relock short %llu | no pairs %llu one %llu | fallback %llu | imu no acc %llu | ms match %.2f push %.2f search %.2f\n",
+                     (unsigned long long)c.updates, (unsigned long long)c.misses, (unsigned long long)c.lost_frames,
+                     (unsigned long long)c.initing_frames, (unsigned long long)c.acquisitions, (unsigned long long)c.relocks,
+                     (unsigned long long)c.far_resets, (unsigned long long)c.budget_resets, (unsigned long long)c.reverted,
+                     (unsigned long long)c.relock_short, (unsigned long long)c.miss_no_pairs, (unsigned long long)c.miss_one,
+                     (unsigned long long)c.fallback_frames, (unsigned long long)c.imu_no_acc, c.updates ? c.match_ms / (double)c.updates : 0.0,
+                     c.updates ? c.push_ms / (double)c.updates : 0.0, c.updates ? c.search_ms / (double)c.updates : 0.0);
+    }
+    if (const auto p = std::getenv("BENCH_DUMP_FIXES")) {
+        std::FILE* f = std::fopen(p, "w");
+        if (f != nullptr) {
+            std::fprintf(f, "frame,ns,slot,x,y,z,qx,qy,qz,qw,leds,cams,rms,few,model\n");
+            for (std::size_t i = 0; i < out.size(); i++) {
+                for (const auto& fx : out[i].fix) {
+                    if (!fx) {
+                        continue;
+                    }
+                    const auto& j = fx->found.joint;
+                    const auto q = g::quat_from_mat(j.body_from_model.r);
+                    std::fprintf(f, "%zu,%llu,%zu,%.5f,%.5f,%.5f,%.6f,%.6f,%.6f,%.6f,%zu,%zu,%.3f,%d,%zu\n", i,
+                                 (unsigned long long)frames[i].ns, fx->slot, j.body_from_model.t[0], j.body_from_model.t[1],
+                                 j.body_from_model.t[2], q[0], q[1], q[2], q[3], j.total(), j.cams(), j.rms_px, fx->few ? 1 : 0,
+                                 fx->found.model);
+                }
+            }
+            std::fclose(f);
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char** argv) {
     std::vector<std::string> a(argv + 1, argv + argc);
     if (!a.empty() && a[0] == "--imu-log") {
@@ -587,6 +762,20 @@ int main(int argc, char** argv) {
     }
     if (!a.empty() && a[0] == "--selftest-imu-log") {
         return pibridge::ctrlbench::imu_log_selftest(a.size() > 1 ? a[1] : std::string("/tmp"));
+    }
+    if (!a.empty() && a[0] == "--dump") {
+        // pibridge-ctrlbench --dump FILE [rig args] [--imutrack]: replay a live session's inputs (PIBRIDGE_CTRL_DUMP)
+        if (a.size() < 2) {
+            std::fprintf(stderr, "usage: pibridge-ctrlbench --dump FILE [--calib XML] [--factory] [--imutrack]\n");
+            return 2;
+        }
+        std::vector<std::string> rig_args(a.begin() + 2, a.end());
+        auto loaded_rig = tr::Rig::try_load(rig_args);
+        if (!loaded_rig) {
+            std::fprintf(stderr, "rig: %s\n", loaded_rig.error().c_str());
+            return 2;
+        }
+        return run_dump(a[1], *loaded_rig, tr::TrackCfg::improved(), has(a, "--imutrack"));
     }
     if (a.empty() || a[0].starts_with("-")) {
         std::fprintf(stderr, "usage: pibridge-ctrlbench FILE.pxcam [--calib XML] [--factory] [--parity] [--blob parity|core] "

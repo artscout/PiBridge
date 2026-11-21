@@ -642,6 +642,7 @@ Config Config::pibridge() {
     c.track_acc = true;
     c.trust_tracker = true;
     c.smooth_s = 0.03;
+    c.smooth_still_s = 0.15;
     return c;
 }
 
@@ -729,6 +730,9 @@ Config Config::from_env() {
     }
     if (const auto v = num("PIBRIDGE_CTRL_SMOOTH_MS"); v && *v >= 0.0) {
         c.smooth_s = *v * 1e-3;
+    }
+    if (const auto v = num("PIBRIDGE_CTRL_SMOOTH_STILL_MS"); v && *v >= 0.0) {
+        c.smooth_still_s = *v * 1e-3;
     }
     if (const char* e = std::getenv("PIBRIDGE_CTRL_FUSE_GATE")) {
         c.trust_tracker = std::string_view(e) != "1";
@@ -1612,7 +1616,21 @@ std::pair<State, P> Fuser::predict(std::uint64_t t, const P& head) {
                 }
             }
             const double since = static_cast<double>(rs::sat_sub(t, sm.t)) * 1e-9;
-            const double k = std::exp(-since / cfg.smooth_s);
+            // still: the gyro's rate (now) and the tracker's speed (this fix), with hysteresis
+            if (cfg.smooth_still_s > cfg.smooth_s) {
+                const double speed = norm(ext_vel_->second);
+                double rate = 1e9;
+                if (const auto c = active_calib(); c && !raw_.empty()) {
+                    rate = norm(c->omega(raw_.back().second));
+                }
+                if (still_smooth_ && (rate > 0.5 || speed > 0.2)) {
+                    still_smooth_ = false;
+                } else if (!still_smooth_ && rate < 0.3 && speed < 0.12) {
+                    still_smooth_ = true;
+                }
+            }
+            const double tau = still_smooth_ && cfg.smooth_still_s > cfg.smooth_s ? cfg.smooth_still_s : cfg.smooth_s;
+            const double k = std::exp(-since / tau);
             p = add(p, scale(sm.dp, k));
             q = qnorm(qmul(qexp(scale(sm.dq, k)), q));
         }
@@ -1813,12 +1831,17 @@ void Fuser::write_hint(std::uint64_t t, const P& head, State s, const P& /*shown
         e.flags = 0;
     }
     if (hint_acc_n_ > 0) {
-        const V3 fa = scale(hint_acc_, 1.0 / static_cast<double>(hint_acc_n_));
-        for (std::size_t i = 0; i < 3; i++) {
-            e.f_aim[i] = static_cast<float>(fa[i]);
-        }
+        hint_acc_last_ = scale(hint_acc_, 1.0 / static_cast<double>(hint_acc_n_));
+        hint_acc_have_ = true;
         hint_acc_ = {0.0, 0.0, 0.0};
         hint_acc_n_ = 0;
+    }
+    if (hint_acc_have_) {
+        // PiBridge (2026-11-20): an entry whose reports carried no accelerometer sample keeps the last mean instead of
+        // a zero, which the trackers' IMU integration took as free fall (live 1-2.5 % of entries)
+        for (std::size_t i = 0; i < 3; i++) {
+            e.f_aim[i] = static_cast<float>(hint_acc_last_[i]);
+        }
     }
     for (std::size_t i = 0; i < 3; i++) {
         e.head_pos[i] = static_cast<float>(head.p[i]);

@@ -526,6 +526,10 @@ HeadParams HeadParams::from_env() {
         }
     }
     // PiBridge additions: on by default, off in parity mode; the switch wins either way.
+    // (predict_accel is a measured gain over the Rust layer: display-time rotation error on turns 0.83 -> 0.48 deg
+    // p95. Pimax's own engine extrapolates nothing; a live report of the picture over-turning with Basalt (2026-11-20)
+    // is unmeasured so far: compare the OUTPUT against Pimax's head in a head-shadow run before changing it.
+    // PIMAX_SLAM_PREDICT_ACCEL=0 for an A/B.)
     if (!parity) {
         p.predict_accel = 0.75;
     }

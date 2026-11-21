@@ -240,8 +240,8 @@ std::vector<Fix> Tracker::step(const Rig& rig, const LedFrame& lf, std::uint64_t
         }
     }
     std::vector<CamObs> obs;
-    for (std::size_t ci = 0; ci < rig.cams.size() && ci < lf.px.size(); ci++) {
-        obs.push_back(CamObs::make(rig.cams[ci], lf.px[ci]));
+    for (std::size_t ci = 0; ci < rig.cams.size(); ci++) { // one per rig camera (empty when the frame has fewer)
+        obs.push_back(CamObs::make(rig.cams[ci], ci < lf.px.size() ? lf.px[ci] : std::vector<std::pair<double, double>>{}));
     }
     std::vector<std::vector<bool>> used;
     for (const CamObs& o : obs) {

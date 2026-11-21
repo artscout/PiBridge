@@ -8,6 +8,13 @@
 // z forward). The factory XML says FISHEYE_4_PARAMETERS but lists 6 numbers; Kb4::k are the first four. The last
 // two are kept in Kb4::extra and can be evaluated as k5, k6 with Kb4::with_extra_radial (used only to test that
 // hypothesis against real images).
+//
+// PiBridge (2026-11-20, RE of Pimax's engines): Pimax reads the 6 numbers as KB8: 4 radial terms, then two
+// TANGENTIAL terms applied after the fisheye step (pa = d4, pb = d5):
+//   u = fx (xd + pa (rd^2 + 2 xd^2) + 2 pb xd yd) + cx,  v = fy (yd + pb (rd^2 + 2 yd^2) + 2 pa xd yd) + cy,
+// with xd = theta_d x / r, yd = theta_d y / r, rd^2 = theta_d^2. Kb4::with_tangential() evaluates them so; the
+// unprojection then inverts the tangential step by Gauss-Newton (Pimax: 10 iterations). The controller tracker uses
+// this variant (its model is Pimax's; up to ~0.7 px at the image edge).
 #pragma once
 
 #include "pibridge/cam/geom.h"
@@ -42,6 +49,9 @@ struct Kb4 {
                     std::array<double, 4> k, std::vector<double> extra);
     /// Copy that also applies the two extra coefficients as radial terms.
     Kb4 with_extra_radial() const;
+    /// extra[0..1] as Pimax's tangential terms (see the header comment); no-op when extra has fewer than 2 numbers.
+    Kb4 with_tangential() const;
+    bool use_tangential = false;
     /// Distorted angle for an incidence angle theta (radians).
     double theta_d(double theta) const;
     /// d theta_d / d theta.

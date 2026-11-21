@@ -57,6 +57,28 @@ recording every time the dashboard opens. The page is one big button: bar button
   clicks until the real state follows (or 8 s for a room setup, 10 s for a recording: the app refused it — its window
   says why). The app's Room page also refuses a second start on its own.
 
+## Frame watch (the session's frame-drop witness)
+
+While SteamVR runs, the overlay also acts as a witness for lost or faded frames, since it is the one PiBridge process
+that is a SteamVR client the whole session. Once a second it writes a line to stderr (the app's journal, `journalctl -t
+pibridge | grep "ft "`):
+
+```
+ft 23:41:07.512: frames 90 presents 90 mis 0 dropped 0 | hmd invalid 0 not-ok 0 | comp cpu 0.3 gpu 0.5, total gpu 4.1, client interval 11.2 ms (max)
+```
+
+The numbers are the compositor's own record (`IVRCompositor::GetFrameTimings`) of the scene application's frames in that
+second: how many frames, how many times they were presented, mis-presented (on a later vsync than predicted) or the
+previous frame was scanned out again (dropped), and the head pose the frames were rendered with (`invalid` = SteamVR had no
+valid pose, `not-ok` = rotation-only or out of range; either makes SteamVR fade the view). Any frame with a bad head pose or
+a dropped frame also gets its own line at once (`ft HH:MM:SS.mmm: frame N: ...`). SteamVR's system events arrive as
+`ft HH:MM:SS.mmm: event NAME (device D, age A s)`: standby, user interaction (the proximity sensor), scene application and
+input focus changes, dashboard, chaperone universe changes, display disconnects, application not responding.
+
+Read it together with the driver's head feed line in `vrserver.txt` (`hmd: 500 upd/s | stale 0 untracked 0 rot-only 0 |
+maxAge 2.1 ms`, and `hmd: tracking A -> B` on every change) to tell a compositor drop, a bad head pose and an event apart.
+`PIBRIDGE_OVERLAY_FT=0` turns the watch off.
+
 ## Crash-free rules (a leaf)
 
 - **Never `VR_ShutdownInternal`.** That is the crash class the room tool hit. VR is initialised at most once per

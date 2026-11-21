@@ -40,6 +40,7 @@ std::string_view extrinsics::reference_json() { return std::string_view(k_ext, @
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${pibridge_ctrl_ref_files})
 
 find_package(Threads REQUIRED)
+find_package(Eigen3 3.3 REQUIRED NO_MODULE) # the sliding-window estimator (window.cpp)
 add_library(pibridge_ctrltrack_obj OBJECT
     src/track/blob.cpp
     src/track/assign.cpp
@@ -52,21 +53,25 @@ add_library(pibridge_ctrltrack_obj OBJECT
     src/track/rig.cpp
     src/track/tracker.cpp
     src/track/imutrack.cpp
+    src/track/trackutil.cpp
+    src/track/window.cpp
+    src/track/wintrack.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/track_reference.cpp
 )
 target_include_directories(pibridge_ctrltrack_obj PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_include_directories(pibridge_ctrltrack_obj PUBLIC $<TARGET_PROPERTY:pibridge_cam_obj,INTERFACE_INCLUDE_DIRECTORIES>)
 target_compile_features(pibridge_ctrltrack_obj PUBLIC cxx_std_23)
+target_link_libraries(pibridge_ctrltrack_obj PUBLIC Eigen3::Eigen)
 target_compile_options(pibridge_ctrltrack_obj PRIVATE ${PIBRIDGE_CAM_PARITY_FLAGS})
 
 add_library(pibridge_ctrltrack STATIC $<TARGET_OBJECTS:pibridge_ctrltrack_obj>)
 target_include_directories(pibridge_ctrltrack PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(pibridge_ctrltrack PUBLIC cxx_std_23)
-target_link_libraries(pibridge_ctrltrack PUBLIC pibridge_cam Threads::Threads)
+target_link_libraries(pibridge_ctrltrack PUBLIC pibridge_cam Threads::Threads Eigen3::Eigen)
 
 if(PIBRIDGE_BUILD_TESTS)
     # Twins of the Rust #[test]s of pimax-ctrltrack's library modules and the binary's tracker.rs.
-    foreach(t blob assign p3p model extrinsics solve shm tracker improved quads)
+    foreach(t blob assign p3p model extrinsics solve shm tracker improved quads window)
         add_executable(pibridge_ctrltrack_test_${t} tests/track/test_${t}.cpp)
         target_link_libraries(pibridge_ctrltrack_test_${t} PRIVATE pibridge_ctrltrack pibridge_common)
         target_compile_options(pibridge_ctrltrack_test_${t} PRIVATE -ffp-contract=off)

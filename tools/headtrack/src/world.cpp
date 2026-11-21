@@ -285,7 +285,8 @@ void World::step(std::int64_t now_ns, double head_dps) {
     // 0.01 deg/s per deg/s of head turn (60 deg/s: 4 cm/s, 0.65 deg/s). PIBRIDGE_DRIFT_GLIDE=old: the slew above.
     static const bool old_glide = [] {
         const char* e = std::getenv("PIBRIDGE_DRIFT_GLIDE");
-        return e != nullptr && std::string_view(e) == "old";
+        // default old (2026-11-20 live: with the frequent follow it moved the world while the head moved)
+        return !(e != nullptr && std::string_view(e) == "hidden");
     }();
     const bool hidden = drift_ && !old_glide;
     const double slew_m = hidden ? 0.003 + 0.0006 * head_dps : SLEW_M_S * boost;

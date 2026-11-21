@@ -203,7 +203,8 @@ RecProcSpec ctrltrackSpec(const RecSetup& s, const QString& logDir) {
 
 bool ctrlShadowWanted(const RecSetup& s) {
     return pimaxCtrlEngine(s) && headtrackWanted(s) && !s.ctrl.path.isEmpty() &&
-           s.extraEnv.contains(QStringLiteral("PIBRIDGE_CTRL_SHADOW=1"));
+           (s.extraEnv.contains(QStringLiteral("PIBRIDGE_CTRL_SHADOW=1")) ||
+            s.extraEnv.contains(QStringLiteral("PIBRIDGE_CTRL_OURS=1"))); // ours shown, Pimax's head
 }
 
 RecProcSpec ctrltrackShadowSpec(const RecSetup& s, const QString& logDir) {

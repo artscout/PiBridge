@@ -4,13 +4,41 @@
 #include "pibridge/cam/rustfmt.h"
 #include "pibridge_test.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 using namespace pibridge::cam;
 
 static Kb4 cam0() {
     return Kb4::make(640, 480, 234.7133343909, 234.7063990438, 325.3779138659, 248.2829309197,
                      {0.0589502951, -0.0603263194, 0.0320281449, -0.0082048556}, {0.0011599741, -0.0001122173});
+}
+
+TEST(tangential_roundtrip_and_magnitude) {
+    // Pimax's tangential terms: the projection inverts (unproject(project(p)) = p) and moves edge pixels by well under
+    // a pixel for the headset's coefficients (pa ~ -1e-3, pb ~ 3e-3)
+    const Kb4 c = Kb4::make(640, 480, 233.89, 233.71, 325.64, 248.44, {0.0637485513, -0.0627909865, 0.0305357890, -0.0075011088},
+                            {-0.0000410994, 0.0030828898});
+    const Kb4 ct = c.with_tangential();
+    CHECK(ct.use_tangential);
+    double worst = 0.0, maxshift = 0.0;
+    for (double ang = 5.0; ang <= 80.0; ang += 15.0) {
+        for (double az = 0.0; az < 360.0; az += 45.0) {
+            const double a = ang * M_PI / 180.0, b = az * M_PI / 180.0;
+            const geom::Vec3 p{std::sin(a) * std::cos(b), std::sin(a) * std::sin(b), std::cos(a)};
+            const auto uv = ct.project(p);
+            const auto uv0 = c.project(p);
+            CHECK(uv && uv0);
+            maxshift = std::max(maxshift, std::hypot(uv->first - uv0->first, uv->second - uv0->second));
+            const auto back = ct.unproject(uv->first, uv->second);
+            CHECK(back);
+            worst = std::max(worst, geom::norm(geom::sub(*back, p)));
+        }
+    }
+    CHECK(worst < 1e-9);
+    std::fprintf(stderr, "tangential: largest shift %.2f px up to 80 deg off axis\n", maxshift);
+    CHECK(maxshift > 0.05 && maxshift < 8.0);
 }
 
 TEST(roundtrip) {

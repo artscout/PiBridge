@@ -986,7 +986,12 @@ std::array<std::vector<ImuFeed::Sample>, 2> ImuFeed::advance(std::uint64_t t) {
             }
             const std::uint64_t lt = L[i].t;
             i++;
-            if (lt >= d_->pushed[s] + 10'000'000) {
+            // the hint's write rate: live every 4 ms (BENCH_IMU_MS to vary; it was 10 before 2026-11-20)
+            static const std::uint64_t every_ns = [] {
+                const char* e = std::getenv("BENCH_IMU_MS");
+                return static_cast<std::uint64_t>((e != nullptr ? std::atof(e) : 4.0) * 1e6);
+            }();
+            if (lt >= d_->pushed[s] + every_ns) {
                 d_->pushed[s] = lt;
                 if (const auto st = d_->f[s]->imu_state(lt)) {
                     const double n = std::max(1.0, static_cast<double>(d_->accn[s]));

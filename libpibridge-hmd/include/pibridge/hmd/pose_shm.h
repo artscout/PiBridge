@@ -29,9 +29,10 @@
 //          +88 u64       sample number
 //   320  u64         seq_end
 //
-// Consistency without locks, as the gaze file (pibridge/eye/shm.h): the writer stores an odd seq_begin, the body, the
-// new even value in seq_end, then in seq_begin, each with its own pwrite; a reader loads seq_end, the body, then
-// seq_begin, and keeps the body only when both are equal and even.
+// Consistency without locks, as the gaze file (pibridge/eye/shm.h): the writer stores the whole file in one pwrite with
+// seq_begin = seq_end = the next even number (since 2026-11-21; before, four pwrites with an odd seq_begin in between,
+// torn for readers whenever the writer was preempted between them); a reader loads seq_end, the body, then seq_begin,
+// and keeps the body only when both are equal and even.
 #pragma once
 
 #include "pibridge/hmd/p3b.h"

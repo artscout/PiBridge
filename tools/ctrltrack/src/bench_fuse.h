@@ -65,7 +65,7 @@ public:
         std::array<double, 4> head_q;
         std::array<double, 3> head_p;
     };
-    /// IMU of both hands up to t; the samples every 10 ms since the last call.
+    /// IMU of both hands up to t; the samples every 4 ms (the hint's live rate; BENCH_IMU_MS) since the last call.
     std::array<std::vector<Sample>, 2> advance(std::uint64_t t);
 
 private:

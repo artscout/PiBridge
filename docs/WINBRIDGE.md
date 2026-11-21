@@ -112,8 +112,52 @@ pibridge-ctrltrack is not started. Everything below is from the Frida traces of 
     - `loc`: kLabLoc on a pinned copy, `<serial>platMap_*` copied to `LabplatMap_*` when the copy is missing or older;
       the map stops growing and no save runs during play;
     - `fresh`: kLabMap.
+  - **What Pimax Play does (its Windows log `ground_truth_6DOF.txt`, 2026-10-19):** the same kNormal mode, the same
+    3-map file ("re-localization, map size 3"), 2087 keyframes / 65 MB against our 3145 / 166 MB; it also loads
+    `pimax_prior_position.txt` (ours is empty: "Failed to read prior position from file!"). No single-map trick.
+  - **Memory (allocwatch, live 2026-11-20 01:48):** what grows during a session is the SLAM's own session map
+    (pimax_slam.pi.dll + OpenCV: 640x480 images per keyframe, ~32 B IMU nodes per sample between keyframes), ~4-19 MB
+    per minute of head motion, nothing while the headset is still, bounded by the 1500-keyframe cap; the LED engine's
+    own allocations stay under 100 KB. So there is no leak in the heap sense.
+  - **CPU (sysmon, per thread):** the SLAM thread costs 50 ms/s while lost-and-waiting, 130-200 ms/s tracking, 400
+    ms/s while relocalizing after a reset (the headset put down: 16:07-16:12 and 16:16-end on 2026-11-20). The LED
+    engine's thread grows from ~180 to ~550 ms/s over 15 min of continuous controller tracking (two sessions) with no
+    memory growth, and stays flat when the controllers are mostly lost. **Found live on 2026-11-20 19:54 with
+    `PIBRIDGE_WB_PROFILE=1`:** the growth is in Wine's heap, not in the engine. The share of the LED thread's samples
+    inside ntdll's `heap_allocate_block` (the first-fit walk over the standard heap's free lists; resolved from Wine
+    10.0's ntdll export table and disassembly) rose from 1.8 % to 37 % over 15 minutes, every minute higher, while
+    every function of the engine, Ceres and OpenCV kept its share. Wine's heap moves a size bin to its Low
+    Fragmentation Heap only after the bin's live count passes 4 MB / size (blocks of 1 KB and more; `bin_try_enable`
+    in dlls/ntdll/heap.c), which an allocate-then-free-per-frame pattern never reaches, and never for blocks over 32
+    KB: those are the engines' per-frame temporaries, and with the SLAM map's long-lived keyframes interleaved the free
+    lists fragment and every malloc walks a longer chain. Windows' LFH takes those sizes, so Pimax Play does not see
+    it. Fix: **heapfix** (below).
+  - **Headset off / on:** when the head engine loses features it keeps the last position (3DoF), resets after ~5 min
+    ("Reset b_m_lost_r ... low_q_num 11", "resetReLocalize") and re-initializes only once the gravity estimate is
+    good again (the headset moved: "imu initial gravity estimator is good"); the world origin then jumps and the user
+    recentres. Seen on 2026-11-20 16:02-16:12 (headset on the table; LED dots only in camera 2).
   - **Pose time.** `PIBRIDGE_WB_CTRL_POSE_TS=1` stamps the pose with the engine's pose time instead of the IMU sample's
     (not yet A/B'd live).
+- **heapfix (heapfix.h), default on:** the kit's `malloc` / `calloc` / `realloc` / `free` / `_aligned_*` imports
+  (every loaded module except winbridge and the system's, as allocwatch hooks them) are pointed at a size-class
+  caching allocator in front of Wine's heap: a request is rounded up to a class (16-byte steps to 1 KB, then 8 classes
+  per power of two, at most 12.5 % slack) and freed blocks of each class wait on their own stack for the next request
+  of that class, so the steady per-frame traffic never touches Wine's free lists. The cache is capped
+  (`PIBRIDGE_WB_HEAP_CACHE_MB`, 512): beyond it a freed block goes back to Wine. Blocks taken before the hooks went
+  in carry no header of ours and go to the real free / realloc. A line `heapfix: N allocations, X% from the cache;
+  cached ...` every `PIBRIDGE_WB_HEAP_REPORT_MS` (60000; 0 = none). `PIBRIDGE_WB_HEAP=0` keeps Wine's heap (A/B).
+  Checked: `heapfix_test.cpp` (6 threads, random sizes 0-2 MB, realloc, aligned 32 / 4096, pre-hook blocks freed
+  through the hooks; 5 M operations, no errors under Wine 10.0) and a `vit-replay --ctrl beat1.crep` run: 115 M
+  allocations in 3.5 min (550 k/s!), 99.9 % from the cache, 18 MB cached, the poses as before. Not yet seen in a long
+  live session: the LED thread's `heap_allocate_block` share must now stay flat.
+- **Profiling the engines' threads:** `PIBRIDGE_WB_PROFILE=1` (profwatch.h) samples the instruction pointer of the
+  threads named in `PIBRIDGE_WB_PROFILE_THREADS` (default `LEDObject,SLAMManager`, `*` = all named) every
+  `PIBRIDGE_WB_PROFILE_MS` (5) ms and prints, every `PIBRIDGE_WB_PROFILE_REPORT_MS` (60000) ms, each thread's top
+  functions as module+offset with their share of the samples and the functions whose share grew since the previous
+  report (lines `profwatch <thread>: ...` and `profwatch <thread> grew: ...` in winbridge.log). Checked standalone and
+  on a `vit-replay --ctrl` run (LED thread 10 % busy, top `opencv_core453.dll+0x726d0`,
+  `LedObjectPoseEstimator.dll+0x1020f0`, `+0xfb5b0`). ~1 % overhead on the sampled threads. Like `PIBRIDGE_WB_ALLOC=1`
+  (allocwatch.h: live heap bytes per call site, once a minute).
 - IMU time: `ts` is the report's device timestamp (`ts_us`, le32 at byte 8), as Pimax Play passes it: in pass 5 the
   head IMU, the controller IMU and the camera frames are on one clock (the headset's, us resolution, the same drift
   against QPC; controller steps are multiples of the ~1978 us sample period). pibridge-headtrack puts `ts_us` through

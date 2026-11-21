@@ -83,6 +83,11 @@ struct ImuTrackCfg {
     /// Integrate the accelerometer into the position. Needs the head pose (a level, inertial world): without it (the
     /// head frame as the world) the position runs on constant velocity and the gyro carries only the orientation.
     bool use_accel = true;
+    /// PiBridge (Pimax's engine, RE 2026-11-20): the controller IMU's sample time is taken this much earlier than its
+    /// device timestamp says, against the LED frames' camera timestamps on the same headset clock. Pimax's engine
+    /// uses -5.4 ms on its raw timeline; on ours (both mapped to the host by their lower envelopes) 0 measured best
+    /// (beat1: -5.4 ms tracked the left hand 97.8 % instead of 99.2 %). CT_IMU_SHIFT_MS overrides.
+    double imu_shift_s = 0.0;
 };
 
 class ImuTracker {
@@ -136,6 +141,8 @@ public:
         std::uint64_t reanchors = 0;
         /// Fixes not published for lying over 1.2 m from the head (the controller lost instead).
         std::uint64_t far_drops = 0;
+        /// Fixes weighed as a still controller's (Pimax's fast-stop).
+        std::uint64_t quiet_updates = 0;
         double accel_err_sum = 0;
         std::uint64_t accel_err_n = 0;
         /// Search candidates per hand (ImuTracker::step 2), and lost controllers not searched for being parked.
@@ -178,6 +185,12 @@ private:
         std::uint32_t streak = 0;
         /// Frames in a row kept only by few-LED updates (Pimax: 15 such frames at most before the controller is lost).
         std::uint32_t led_run = 0;
+        /// Where the last update put it (world): the 1 m rule of known() (the state's own position drifts once lost).
+        cam::geom::Vec3 p_fixed{0.0, 0.0, 0.0};
+        /// Pimax's fast-stop: the controller nearly still (gyro and the filter's speed low for 3 frames): the fixes
+        /// are weighed less, the pose held.
+        bool quiet = false;
+        std::uint32_t quiet_run = 0;
         /// Gravity up in the tracking world as this controller's accelerometer sees it (learned from its fixes: absorbs
         /// a head frame that is not level when there is no head pose, and the accelerometer's axis error).
         cam::geom::Vec3 up_w{0.0, 1.0, 0.0};

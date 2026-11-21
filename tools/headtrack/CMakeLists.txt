@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # pibridge-headtrack: the Crystal Super's / Dream Air's inside-out head tracking without Monado.
 
-add_library(pibridge_headtrack_core STATIC src/headtrack.cpp src/sysmon.cpp src/vit_host.cpp src/world.cpp)
+add_library(pibridge_headtrack_core STATIC src/headtrack.cpp src/shadow_take.cpp src/sysmon.cpp src/vit_host.cpp src/world.cpp)
 target_include_directories(pibridge_headtrack_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
                                                    PRIVATE ${PROJECT_SOURCE_DIR}/winbridge)
 target_link_libraries(pibridge_headtrack_core PUBLIC pibridge_hmd pibridge_cam pibridge_ctrl pibridge_ctrltrack pibridge_common ${CMAKE_DL_LIBS})
@@ -9,7 +9,11 @@ target_link_libraries(pibridge_headtrack_core PUBLIC pibridge_hmd pibridge_cam p
 add_executable(pibridge-headtrack src/main.cpp)
 target_link_libraries(pibridge-headtrack PRIVATE pibridge_headtrack_core)
 
-install(TARGETS pibridge-headtrack RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+# a head shadow take (PIBRIDGE_HEAD_SHADOW_TAKE=1) through Basalt again, offline (docs/pibridge-headtrack.md)
+add_executable(pibridge-headtrack-replay src/replay_main.cpp)
+target_link_libraries(pibridge-headtrack-replay PRIVATE pibridge_headtrack_core)
+
+install(TARGETS pibridge-headtrack pibridge-headtrack-replay RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 if(PIBRIDGE_BUILD_TESTS)
     add_executable(pibridge_headtrack_test tests/test_headtrack.cpp)

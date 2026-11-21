@@ -6,11 +6,14 @@
 #include "pibridge/cam/frame.h"
 #include "pibridge/cam/io.h"
 #include "pibridge/cam/rustfmt.h"
+#include "pibridge/ctrl/parity.h"
 #include "pibridge/ctrl/track/extrinsics.h"
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <format>
+#include <string_view>
 #include <thread>
 
 namespace pibridge::ctrl::track {
@@ -55,7 +58,32 @@ std::expected<Rig, std::string> Rig::try_load(std::span<const std::string> a) {
             return std::unexpected(
                 std::format("headset calibration {}: no camera/IMU extrinsic (ombc/tbc)", cpath));
         }
-        rig.cams.push_back(Cam{rig.calib.cameras[i].intr, body_from_cam->inverse()});
+        // Pimax's camera model reads the XML's 5th and 6th numbers as tangential terms (kb4.h). Off: with them the
+        // fits got worse on our recordings (beat1 rms 1.44 -> 1.58 px, take2 1.79 -> 1.93; swapped or negated no
+        // better), and the per-LED residuals fit different coefficients than the XML's. CT_TANGENTIAL=1 to try.
+        static const bool tangential = [] {
+            const char* e = std::getenv("CT_TANGENTIAL");
+            return e != nullptr && std::string_view(e) == "1" && !pibridge::ctrl::parity_mode();
+        }();
+        cam::Kb4 intr = rig.calib.cameras[i].intr;
+        if (tangential) {
+            // CT_TANG_MODE (offline check of the coefficient reading): 1 swap pa/pb, 2 negate both, 3 swap and negate
+            static const int tmode = [] {
+                const char* e = std::getenv("CT_TANG_MODE");
+                return e != nullptr ? std::atoi(e) : 0;
+            }();
+            if (intr.extra.size() >= 2) {
+                if (tmode & 1) {
+                    std::swap(intr.extra[0], intr.extra[1]);
+                }
+                if (tmode & 2) {
+                    intr.extra[0] = -intr.extra[0];
+                    intr.extra[1] = -intr.extra[1];
+                }
+            }
+            intr = intr.with_tangential();
+        }
+        rig.cams.push_back(Cam{intr, body_from_cam->inverse()});
     }
     std::string ext_note = "factory extrinsics";
     if (std::find(a.begin(), a.end(), "--factory") == a.end()) {
@@ -133,8 +161,10 @@ std::vector<Found> solve_frame(const LedFrame& f, std::span<const Cam> cams, con
                                const std::array<bool, 2>* search) {
     std::vector<CamObs> obs;
     obs.reserve(cams.size());
-    for (std::size_t ci = 0; ci < cams.size() && ci < f.px.size(); ci++) {
-        obs.push_back(CamObs::make(cams[ci], f.px[ci]));
+    // one entry per rig camera: a frame short of cameras (a truncated dump line) gets empty ones, since the
+    // matchers index obs / used by the rig's camera
+    for (std::size_t ci = 0; ci < cams.size(); ci++) {
+        obs.push_back(CamObs::make(cams[ci], ci < f.px.size() ? f.px[ci] : std::vector<std::pair<double, double>>{}));
     }
     std::vector<std::vector<bool>> used;
     for (const CamObs& o : obs) {

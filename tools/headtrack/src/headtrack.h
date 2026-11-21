@@ -15,12 +15,14 @@
 // (CustomHeadsetOpenVR's poseTimeOffset), as driver_monado's poses were predicted by SteamVR too.
 #pragma once
 
+#include "shadow_take.h"
 #include "sysmon.h"
 #include "vit_host.h"
 #include "world.h"
 
 #include "pibridge/cam/clock.h"
 #include "pibridge/cam/headpose.h"
+#include "pibridge/cam/imulog.h"
 #include "pibridge/ctrl/fuse.h"
 #include "pibridge/ctrl/track/shm.h"
 #include "pibridge/cam/slam.h"
@@ -157,6 +159,8 @@ private:
     class Hid;
     void on_imu(const hmd::ImuSample& s);
     void start_fuser_logs();
+    /// PIBRIDGE_CTRL_OURS=1 with Pimax's engine: our controllers (the shadow fusers) are shown instead of its LED engine's.
+    bool ours_ctrl_ = false;
     void on_controller(const hmd::ControllerReport& r);
     hmd::pose_shm::Device controller(int side, std::int64_t now_ns);
     /// The controller angle (PIMAX_CTRL_ANGLE, live file) on an aim pose (output thread).
@@ -235,6 +239,20 @@ private:
     bool hshadow_have_prev_ = false;
     std::uint64_t hshadow_rows_ = 0, hshadow_resets_ = 0;
     std::atomic<std::int64_t> hshadow_frame_ns_{0};
+    // PiBridge (2026-11-20): our output layer run on the shadow engine's poses and the IMU, logged as src 2 (what the
+    // apps would get with Basalt: y up, the layer's prediction and corrections) beside the driving engine's raw pose
+    std::unique_ptr<cam::headpose::HeadTracker> hshadow_ht_;
+    std::mutex hshadow_ht_mu_;
+    std::int64_t hshadow_out_ns_ = 0;
+    // PIBRIDGE_HEAD_SHADOW_TAKE=1: what the shadow engine was fed, for pibridge-headtrack-replay (shadow_take.h): the
+    // frame sets (head-shadow-*-take.bin, camera thread) and the IMU samples (head-shadow-*-imu.csv, IMU thread).
+    std::unique_ptr<ShadowTakeWriter> hshadow_take_;
+    std::unique_ptr<cam::imulog::HeadImuLog> hshadow_imu_;
+    // PIBRIDGE_HEAD_SHADOW_TAKE_SEC=N: the take stops N s after its first frame set (the session goes on; the files are
+    // closed at shutdown as usual). The flag gates both writers; the times belong to the camera thread.
+    std::atomic<bool> hshadow_take_on_{false};
+    double hshadow_take_sec_ = 0.0;
+    std::int64_t hshadow_take_t0_ns_ = 0;
     /// One engine pose to the head shadow log (src 0 the driving engine, 1 the shadow), at most every 5 ms per source.
     void hshadow_log(int src, const EnginePose& e);
     SysMon sysmon_;

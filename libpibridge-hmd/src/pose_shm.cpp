@@ -266,17 +266,19 @@ void Publisher::gone(std::int64_t now_ns) {
 
 void Publisher::write(std::int64_t now_ns) {
     state_.written_ns = now_ns != 0 ? now_ns : monotonic_ns();
-    const auto b = body(state_);
-    std::uint64_t w = seq_ + 1;
-    if (!write_all_at(fd_, reinterpret_cast<const std::uint8_t*>(&w), 8, 0) ||
-        !write_all_at(fd_, b.data(), b.size(), 8)) {
-        return;
-    }
+    // The whole file in one pwrite, seq_begin = seq_end = the next even number. Four pwrites (odd seq_begin, body,
+    // seq_end, seq_begin) left the file torn for a reader whenever this thread was preempted at a syscall return
+    // between them, which under full CPU load happened hundreds of times a session (2026-11-21: CHOVR saw 250 torn
+    // reads in 7 minutes, each one an untracked head pose for a tick, a visible blink). A reader still loads seq_end,
+    // the body, then seq_begin and keeps the copy only when both are equal and even; a partial copy of one write shows
+    // as unequal ends (the kernel copies forward) and is retried.
     seq_ += 2;
-    w = seq_;
-    if (write_all_at(fd_, reinterpret_cast<const std::uint8_t*>(&w), 8, 320)) {
-        write_all_at(fd_, reinterpret_cast<const std::uint8_t*>(&w), 8, 0);
-    }
+    std::array<std::uint8_t, SIZE> f{};
+    const auto b = body(state_);
+    std::copy(b.begin(), b.end(), f.begin() + 8);
+    std::memcpy(f.data(), &seq_, 8);
+    std::memcpy(f.data() + 320, &seq_, 8);
+    write_all_at(fd_, f.data(), f.size(), 0);
 }
 
 } // namespace pibridge::hmd::pose_shm

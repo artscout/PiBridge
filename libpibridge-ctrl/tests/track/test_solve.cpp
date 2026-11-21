@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Twins of the tests in omarchyvr pimax-ctrltrack/src/solve.rs (MIT OR Apache-2.0).
 #include "pibridge/cam/rustfmt.h"
+#include "pibridge/ctrl/track/rig.h"
 #include "pibridge/ctrl/track/solve.h"
 #include "pibridge_test.h"
 
@@ -93,6 +94,37 @@ TEST(quat_roundtrip) {
             CHECK(std::fabs(r[i][j] - r2[i][j]) < 1e-12);
         }
     }
+}
+
+TEST(frame_short_of_cameras_is_safe) {
+    // a frame with fewer camera entries than the rig has (a truncated dump line) must not index past the per-camera
+    // vectors (it corrupted `used` and crashed solve_frame / the trackers): the missing cameras count as empty, and a
+    // controller in the camera that is present is still found
+    const LedModel model = ring_model();
+    const std::array<LedModel, 2> models{model, model};
+    std::vector<Cam> cams{test_cam(), test_cam(), test_cam(), test_cam()};
+    const g::Pose truth{g::rodrigues({0.4, 0.3, -0.2}), {0.06, 0.05, 0.40}};
+    LedFrame f;
+    f.px.emplace_back();
+    const double cos_face = std::cos(to_radians(80.0));
+    for (const Led& led : model.leds) {
+        if (facing(truth, led, cos_face)) {
+            const auto uv = cams[0].intr.project(truth.apply(led.p));
+            f.px[0].emplace_back(uv->first, uv->second);
+        }
+    }
+    std::vector<std::vector<std::array<std::size_t, 3>>> triples{model.neighbour_triples(0.05, 100.0),
+                                                                 model.neighbour_triples(0.05, 100.0)};
+    const Params prm;
+    const std::vector<Found> got = solve_frame(f, cams, models, triples, prm, nullptr, {}, false);
+    CHECK(!got.empty());
+    if (!got.empty()) {
+        CHECK(got[0].joint.matches.size() == cams.size());
+        CHECK(g::norm(g::sub(got[0].joint.body_from_model.t, truth.t)) < 0.01);
+    }
+    // and a frame with no cameras at all
+    const LedFrame empty;
+    CHECK(solve_frame(empty, cams, models, triples, prm, nullptr, {}, false).empty());
 }
 
 PIBRIDGE_TEST_MAIN()

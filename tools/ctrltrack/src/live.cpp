@@ -17,6 +17,7 @@
 #include "pibridge/ctrl/parity.h"
 #include "pibridge/ctrl/track/blob.h"
 #include "pibridge/ctrl/track/imutrack.h"
+#include "pibridge/ctrl/track/wintrack.h"
 #include "pibridge/ctrl/track/rig.h"
 #include "pibridge/ctrl/track/shm.h"
 #include "pibridge/ctrl/track/tracker.h"
@@ -122,9 +123,15 @@ int cmd_live(std::span<const std::string> a) {
     // the IMU-led tracker (imutrack.h): the default unless PIBRIDGE_CTRL_TRACKER=frame (or parity, or --baseline). It
     // runs the per-frame tracker itself while there is no IMU (hint file) or no head pose.
     std::unique_ptr<tr::ImuTracker> itk;
+    // PIBRIDGE_CTRL_TRACKER=win: the Pimax-scheme sliding-window tracker (wintrack.h)
+    std::unique_ptr<tr::WinTracker> wtk;
     if (!parity && !has(a, "--baseline")) {
         const auto e = cam::env_utf8("PIBRIDGE_CTRL_TRACKER");
-        if (!(e && rf::trim(*e) == "frame")) {
+        if (e && rf::trim(*e) == "win") {
+            wtk = std::make_unique<tr::WinTracker>(tr::WinTrackCfg{}, cfg);
+            wtk->device_from_aim = device_from_aim.r;
+            eprintln("tracker: Pimax-scheme sliding window (wintrack)");
+        } else if (!(e && rf::trim(*e) == "frame")) {
             itk = std::make_unique<tr::ImuTracker>(tr::ImuTrackCfg{}, cfg);
             itk->device_from_aim = device_from_aim.r;
         }
@@ -151,6 +158,14 @@ int cmd_live(std::span<const std::string> a) {
     }();
     double frame_lag_sum = 0.0;
     std::uint64_t frame_lag_n = 0;
+    // PIBRIDGE_CTRL_DUMP=FILE: everything the trackers see, in the order they see it (the hint's IMU samples as they
+    // arrive, each LED frame's blobs right before its step): pibridge-ctrlbench --dump FILE replays a live session
+    // exactly (a recording cannot: the IMU's arrival timing is lost in it)
+    std::FILE* dump = nullptr;
+    if (const char* dp = std::getenv("PIBRIDGE_CTRL_DUMP"); dp != nullptr && *dp != 0) {
+        dump = std::fopen(dp, "w");
+        eprintln(dump != nullptr ? std::format("dump: inputs to {}", dp) : std::format("dump: cannot write {}", dp));
+    }
     for (;;) {
         if (secs_since(t_start) > secs) {
             break;
@@ -231,6 +246,13 @@ int cmd_live(std::span<const std::string> a) {
                         is.up_body = {x.up_head[0], x.up_head[1], x.up_head[2]};
                         is.still_s = x.still_s;
                         tracker.imu_push(s, is);
+                        if (dump != nullptr) {
+                            std::fprintf(dump, "I,%zu,%llu,%.9g,%.9g,%.9g,%.9g,%.7g,%.7g,%.7g,%.7g,%.7g,%.7g,%u,%.4g,%.7g,%.7g,%.7g,%.9g,%.9g,%.9g,%.9g\n",
+                                         s, static_cast<unsigned long long>(x.t_ns), x.qg[0], x.qg[1], x.qg[2], x.qg[3],
+                                         x.f_aim[0], x.f_aim[1], x.f_aim[2], x.up_aim[0], x.up_aim[1], x.up_aim[2],
+                                         (x.flags & 2u) != 0 ? 1u : 0u, x.still_s, x.head_pos[0], x.head_pos[1], x.head_pos[2],
+                                         x.head_quat[0], x.head_quat[1], x.head_quat[2], x.head_quat[3]);
+                        }
                         if (itk) {
                             tr::ImuIn ii;
                             ii.t = x.t_ns;
@@ -243,6 +265,19 @@ int cmd_live(std::span<const std::string> a) {
                                 tr::quat_to_mat({x.head_quat[0], x.head_quat[1], x.head_quat[2], x.head_quat[3]}),
                                 {x.head_pos[0], x.head_pos[1], x.head_pos[2]}};
                             itk->imu_push(s, ii);
+                        }
+                        if (wtk) {
+                            tr::ImuIn ii;
+                            ii.t = x.t_ns;
+                            ii.qg = is.qg;
+                            ii.f_aim = {x.f_aim[0], x.f_aim[1], x.f_aim[2]};
+                            ii.up_aim = is.up_aim;
+                            ii.up_ok = is.up_ok;
+                            ii.still_s = x.still_s;
+                            ii.world_from_head = g::Pose{
+                                tr::quat_to_mat({x.head_quat[0], x.head_quat[1], x.head_quat[2], x.head_quat[3]}),
+                                {x.head_pos[0], x.head_pos[1], x.head_pos[2]}};
+                            wtk->imu_push(s, ii);
                         }
                     }
                 }
@@ -278,7 +313,22 @@ int cmd_live(std::span<const std::string> a) {
         if (itk) {
             itk->wanted = tracker.wanted;
         }
-        for (const tr::Fix& fx : itk ? itk->step(rig, lf, frame_ns) : tracker.step(rig, lf, frame_ns)) {
+        if (wtk) {
+            wtk->wanted = tracker.wanted;
+        }
+        if (dump != nullptr) {
+            std::fprintf(dump, "F,%llu,%zu", static_cast<unsigned long long>(frame_ns), lf.px.size());
+            for (const auto& cam : lf.px) {
+                std::fprintf(dump, ",%zu", cam.size());
+                for (const auto& [u, v] : cam) {
+                    std::fprintf(dump, ",%.3f,%.3f", u, v);
+                }
+            }
+            std::fputs("\n", dump);
+        }
+        for (const tr::Fix& fx : wtk   ? wtk->step(rig, lf, frame_ns)
+                                 : itk ? itk->step(rig, lf, frame_ns)
+                                       : tracker.step(rig, lf, frame_ns)) {
             const std::size_t slot = fx.slot;
             const tr::Found& f = fx.found;
             if (trace != nullptr) {
@@ -312,7 +362,7 @@ int cmd_live(std::span<const std::string> a) {
         }
         solve_ms += secs_since(t0) * 1e3;
         if (secs_since(t_stats) >= stats_every) {
-            const tr::Stats s = itk ? itk->stats() : tracker.stats;
+            const tr::Stats s = wtk ? wtk->stats() : itk ? itk->stats() : tracker.stats;
             const double n = static_cast<double>(std::max<std::uint64_t>(s.led_frames, 1));
             eprintln(std::format(
                 "live: {} LED frames, left {} %, right {} %, prior tracks {}/{}, few-LED {}/{}, searches {}, "
@@ -327,6 +377,25 @@ int cmd_live(std::span<const std::string> a) {
                                          rf::fixed(ba.t[0], 3, true), rf::fixed(ba.t[1], 3, true),
                                          rf::fixed(ba.t[2], 3, true)));
                 }
+            }
+            if (wtk) {
+                const auto& c = wtk->counts;
+                eprintln(std::format(
+                    "   wintrack: updates {}, misses {}, lost frames {}, initing {}, acquisitions {}, relocks {}, resets far {} "
+                    "budget {} | picked pred {} p3p {} p2p {} p1p {} alt {} | contested {} | fast-stop {} (strict {} loose {}) | "
+                    "imu gaps {} no acc {} | iters {} rms {} px inliers {} | fallback frames {} | ms total {} (max {}): match {} push {} "
+                    "search {} hyp {} | {}",
+                    c.updates, c.misses, c.lost_frames, c.initing_frames, c.acquisitions, c.relocks, c.far_resets,
+                    c.budget_resets, c.pick_pred, c.pick_p3p, c.pick_p2p, c.pick_p1p, c.pick_alt, c.contested,
+                    c.fast_stop_frames, c.still_strict, c.still_loose, c.imu_gaps, c.imu_no_acc,
+                    rf::fixed(c.updates ? c.iter_sum / static_cast<double>(c.updates) : 0.0, 2),
+                    rf::fixed(c.vis_rms_n ? c.vis_rms_sum / static_cast<double>(c.vis_rms_n) : 0.0, 2),
+                    rf::fixed(c.updates ? static_cast<double>(c.inliers_sum) / static_cast<double>(c.updates) : 0.0, 1),
+                    c.fallback_frames, rf::fixed(c.step_ms, 0), rf::fixed(c.step_max_ms, 0), rf::fixed(c.match_ms, 0),
+                    rf::fixed(c.push_ms, 0), rf::fixed(c.search_ms, 0), rf::fixed(c.hyp_ms, 0), wtk->describe_slots()));
+                const std::uint64_t keep_fallback = c.fallback_frames;
+                wtk->counts = tr::WinTracker::Counts{};
+                wtk->counts.fallback_frames = keep_fallback;
             }
             if (itk) {
                 // the IMU-led tracker's own counts in this interval: why predicted controllers were missed and why

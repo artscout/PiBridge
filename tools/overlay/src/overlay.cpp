@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -429,6 +430,145 @@ private:
     bool shown_ = false;
 };
 
+// Frame-timing and event witness (docs/OVERLAY.md "Frame watch"): one line per second with the compositor's own record of
+// the scene application's frames (presents, mis-presents, dropped frames) and the head pose it rendered them with (invalid
+// or not Running_OK = SteamVR fades the view), plus SteamVR's system events as they arrive (standby, user interaction,
+// scene application change, dashboard, chaperone, display disconnect, application not responding). Off with
+// PIBRIDGE_OVERLAY_FT=0. The lines go to stderr (the app's journal) so a session can be read back after the fact.
+class FrameWatch {
+public:
+    FrameWatch(vr::IVRSystem* sys, vr::IVRCompositor* comp) : sys_(sys), comp_(comp) {
+        const char* e = std::getenv("PIBRIDGE_OVERLAY_FT");
+        on_ = !(e != nullptr && e[0] == '0') && comp_ != nullptr;
+        if (on_) {
+            std::fprintf(stderr, "pibridge-overlay: frame watch on (compositor frame timing and SteamVR events, one line a second)\n");
+        }
+    }
+
+    void update() {
+        if (!on_) {
+            return;
+        }
+        events();
+        frames();
+        const double now = seconds();
+        if (now - lastLine_ >= 1.0) {
+            if (lastLine_ > 0) {
+                std::fprintf(stderr, "ft %s: frames %u presents %u mis %u dropped %u | hmd invalid %u not-ok %u | comp cpu %.1f gpu %.1f, "
+                                     "total gpu %.1f, client interval %.1f ms (max)\n",
+                             stamp().c_str(), frames_, presents_, mis_, dropped_, invalid_, notOk_, compCpu_, compGpu_, totalGpu_, interval_);
+            }
+            lastLine_ = now;
+            frames_ = presents_ = mis_ = dropped_ = invalid_ = notOk_ = 0;
+            compCpu_ = compGpu_ = totalGpu_ = interval_ = 0;
+        }
+    }
+
+private:
+    static double seconds() {
+        timespec ts{};
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) * 1e-9;
+    }
+    static std::string stamp() {
+        timespec ts{};
+        clock_gettime(CLOCK_REALTIME, &ts);
+        tm t{};
+        localtime_r(&ts.tv_sec, &t);
+        char b[32];
+        std::snprintf(b, sizeof b, "%02d:%02d:%02d.%03ld", t.tm_hour, t.tm_min, t.tm_sec, ts.tv_nsec / 1'000'000L);
+        return b;
+    }
+    static const char* eventName(std::uint32_t t) {
+        switch (t) {
+        case vr::VREvent_TrackedDeviceActivated: return "TrackedDeviceActivated";
+        case vr::VREvent_TrackedDeviceDeactivated: return "TrackedDeviceDeactivated";
+        case vr::VREvent_TrackedDeviceUserInteractionStarted: return "UserInteractionStarted";
+        case vr::VREvent_TrackedDeviceUserInteractionEnded: return "UserInteractionEnded";
+        case vr::VREvent_EnterStandbyMode: return "EnterStandbyMode";
+        case vr::VREvent_LeaveStandbyMode: return "LeaveStandbyMode";
+        case vr::VREvent_SceneApplicationChanged: return "SceneApplicationChanged";
+        case vr::VREvent_InputFocusChanged: return "InputFocusChanged";
+        case vr::VREvent_SceneApplicationStateChanged: return "SceneApplicationStateChanged";
+        case vr::VREvent_HideRenderModels: return "HideRenderModels";
+        case vr::VREvent_ShowRenderModels: return "ShowRenderModels";
+        case vr::VREvent_DashboardActivated: return "DashboardActivated";
+        case vr::VREvent_DashboardDeactivated: return "DashboardDeactivated";
+        case vr::VREvent_RoomViewShown: return "RoomViewShown";
+        case vr::VREvent_RoomViewHidden: return "RoomViewHidden";
+        case vr::VREvent_ChaperoneUniverseHasChanged: return "ChaperoneUniverseHasChanged";
+        case vr::VREvent_StandingZeroPoseReset: return "StandingZeroPoseReset";
+        case vr::VREvent_Compositor_DisplayDisconnected: return "Compositor_DisplayDisconnected";
+        case vr::VREvent_Compositor_DisplayReconnected: return "Compositor_DisplayReconnected";
+        case vr::VREvent_Compositor_HDCPError: return "Compositor_HDCPError";
+        case vr::VREvent_Compositor_ApplicationNotResponding: return "Compositor_ApplicationNotResponding";
+        case vr::VREvent_Compositor_ApplicationResumed: return "Compositor_ApplicationResumed";
+        case vr::VREvent_Compositor_OutOfVideoMemory: return "Compositor_OutOfVideoMemory";
+        case vr::VREvent_Compositor_DisplayModeNotSupported: return "Compositor_DisplayModeNotSupported";
+        case vr::VREvent_Compositor_RequestDisconnectReconnect: return "Compositor_RequestDisconnectReconnect";
+        case vr::VREvent_ProcessQuit: return "ProcessQuit";
+        default: return nullptr;
+        }
+    }
+    void events() {
+        if (sys_ == nullptr) {
+            return;
+        }
+        vr::VREvent_t e{};
+        while (sys_->PollNextEvent(&e, sizeof(e))) {
+            if (const char* n = eventName(e.eventType)) {
+                std::fprintf(stderr, "ft %s: event %s (device %u, age %.3f s)\n", stamp().c_str(), n, e.trackedDeviceIndex, e.eventAgeSeconds);
+            }
+        }
+    }
+    void frames() {
+        std::array<vr::Compositor_FrameTiming, 128> ft{};
+        for (auto& f : ft) {
+            f.m_nSize = sizeof(vr::Compositor_FrameTiming);
+        }
+        const std::uint32_t n = comp_->GetFrameTimings(ft.data(), static_cast<std::uint32_t>(ft.size()));
+        std::uint32_t newest = lastIndex_;
+        for (std::uint32_t i = 0; i < n; i++) {
+            const auto& f = ft[i];
+            if (lastIndex_ != 0 && f.m_nFrameIndex <= lastIndex_) {
+                continue; // seen
+            }
+            newest = std::max(newest, f.m_nFrameIndex);
+            if (lastIndex_ == 0) {
+                continue; // the first call: just learn where the compositor is
+            }
+            frames_++;
+            presents_ += f.m_nNumFramePresents;
+            mis_ += f.m_nNumMisPresented;
+            dropped_ += f.m_nNumDroppedFrames;
+            const bool bad = !f.m_HmdPose.bPoseIsValid || f.m_HmdPose.eTrackingResult != vr::TrackingResult_Running_OK;
+            if (!f.m_HmdPose.bPoseIsValid) {
+                invalid_++;
+            } else if (f.m_HmdPose.eTrackingResult != vr::TrackingResult_Running_OK) {
+                notOk_++;
+            }
+            if (bad || f.m_nNumDroppedFrames > 0) {
+                std::fprintf(stderr, "ft %s: frame %u: hmd valid %d result %d, presents %u mis %u dropped %u, comp cpu %.1f gpu %.1f ms\n",
+                             stamp().c_str(), f.m_nFrameIndex, f.m_HmdPose.bPoseIsValid ? 1 : 0, static_cast<int>(f.m_HmdPose.eTrackingResult),
+                             f.m_nNumFramePresents, f.m_nNumMisPresented, f.m_nNumDroppedFrames, f.m_flCompositorRenderCpuMs, f.m_flCompositorRenderGpuMs);
+            }
+            compCpu_ = std::max(compCpu_, f.m_flCompositorRenderCpuMs);
+            compGpu_ = std::max(compGpu_, f.m_flCompositorRenderGpuMs);
+            totalGpu_ = std::max(totalGpu_, f.m_flTotalRenderGpuMs);
+            interval_ = std::max(interval_, f.m_flClientFrameIntervalMs);
+        }
+        lastIndex_ = newest;
+    }
+
+    vr::IVRSystem* sys_;
+    vr::IVRCompositor* comp_;
+    bool on_ = false;
+    double lastLine_ = 0;
+    std::uint32_t lastIndex_ = 0;
+    std::uint32_t frames_ = 0, presents_ = 0, mis_ = 0, dropped_ = 0, invalid_ = 0, notOk_ = 0;
+    float compCpu_ = 0, compGpu_ = 0, totalGpu_ = 0, interval_ = 0;
+};
+
 } // namespace
 
 int run(const Options& o, std::atomic<bool>& stop) {
@@ -458,6 +598,7 @@ int run(const Options& o, std::atomic<bool>& stop) {
         if (!ring.create()) {
             std::fprintf(stderr, "pibridge-overlay: recenter ring overlay not created (non-fatal)\n");
         }
+        FrameWatch watch(c.iface<vr::IVRSystem>(vr::IVRSystem_Version), c.iface<vr::IVRCompositor>(vr::IVRCompositor_Version));
 #ifdef PIBRIDGE_OVERLAY_DESK
         // the desktop tab (docs/desktop.md): its Vulkan texture needs the system (the GPU SteamVR uses) and, when SteamVR
         // gives it to a background app, the compositor (the Vulkan extensions it wants)
@@ -474,6 +615,7 @@ int run(const Options& o, std::atomic<bool>& stop) {
                 return 0;
             }
             ring.update(); // the in-game recenter ring (shown only while the recenter button is held)
+            watch.update(); // frame timing + SteamVR events, a line a second (PIBRIDGE_OVERLAY_FT=0 turns it off)
             int waitMs = 50;
 #ifdef PIBRIDGE_OVERLAY_DESK
             if (deskUp) {

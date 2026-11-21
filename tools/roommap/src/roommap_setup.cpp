@@ -1201,6 +1201,10 @@ R<void> cmd_setup(Args v) {
 // sure (sigma <= 1 cm / 0.5 deg, rms <= 1.5 deg); a jump (> 25 cm or 5 deg from the offset in use) only when the next
 // fix agrees with it.
 R<void> follow_room(const std::string& dir, const std::string& name, std::uint32_t pid, double every_s, const MapId& map_id) {
+    if (const char* e = std::getenv("PIBRIDGE_ROOM_FOLLOW"); e != nullptr && std::string_view(e) == "0") {
+        std::printf("follow: off (PIBRIDGE_ROOM_FOLLOW=0)\n");
+        return {};
+    }
     if (pibridge::anchor::backend_from_env() != pibridge::anchor::Backend::SteamVr) {
         std::printf("follow: only with SteamVR (Monado's offset carries the whole room setup): off\n");
         return {};
@@ -1224,7 +1228,9 @@ R<void> follow_room(const std::string& dir, const std::string& name, std::uint32
         const char* e = std::getenv(n);
         return e != nullptr && *e != 0 ? std::atof(e) : d;
     };
-    const double tau = env_num("PIBRIDGE_ROOM_FOLLOW_TAU", 20.0);
+    // default 0 (2026-11-20 live: one fix moves with where the head stands by centimetres; following them every few
+    // seconds dragged the world after the user's lean with a delay)
+    const double tau = env_num("PIBRIDGE_ROOM_FOLLOW_TAU", 0.0);
     const double win_s = env_num("PIBRIDGE_ROOM_FOLLOW_WIN", tau > 0.0 ? 3.0 : 6.0);
     const double gap_s = tau > 0.0 ? env_num("PIBRIDGE_ROOM_FOLLOW_GAP", 1.0) : every_s;
     const std::string win_arg = rf::fixed(win_s, 1);

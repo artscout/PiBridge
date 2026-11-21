@@ -22,6 +22,8 @@
 #include <cstdint>
 #include <cstdio>
 #include "allocwatch.h"
+#include "heapfix.h"
+#include "profwatch.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -587,6 +589,18 @@ int main(int argc, char** argv) {
     if (const char* a = getenv("PIBRIDGE_WB_CTRL_THREAD")) g_ctrlThread = (atoi(a) != 0);
     if (!find_kit() || !init_slam()) return 1;
     init_ctrl();
+    // heapfix (heapfix.h): the kit's malloc / free served by a size-class cache in front of Wine's heap, whose free-list
+    // walk made the engines slower by the minute. Default on; PIBRIDGE_WB_HEAP=0 keeps Wine's heap (A/B).
+    if (const char* hf = getenv("PIBRIDGE_WB_HEAP"); !(hf && strcmp(hf, "0") == 0)) {
+        DWORD rep = 60000;
+        if (const char* e = getenv("PIBRIDGE_WB_HEAP_REPORT_MS")) rep = static_cast<DWORD>(atoi(e));
+        const int n = heapfix::install();
+        printf("heapfix: %d heap imports of the kit's modules hooked, cache cap %lld MB%s\n", n,
+               static_cast<long long>(heapfix::cache_cap >> 20), rep ? "" : ", no reports");
+        if (n > 0) heapfix::start_reporter(rep);
+    } else {
+        printf("heapfix: off (PIBRIDGE_WB_HEAP=0): Wine's heap serves the kit\n");
+    }
     // PIBRIDGE_WB_ALLOC=1: which code in the Pimax DLLs keeps heap memory, once a minute (allocwatch.h)
     if (const char* aw = getenv("PIBRIDGE_WB_ALLOC"); aw && strcmp(aw, "1") == 0) {
         if (const char* ev = getenv("PIBRIDGE_WB_ALLOC_EVERY"); ev && atoi(ev) > 0) {
@@ -595,6 +609,10 @@ int main(int argc, char** argv) {
         const int n = allocwatch::install();
         printf("allocwatch: %d heap imports hooked in all, a report every 60 s\n", n);
         allocwatch::start_reporter(60000);
+    }
+    // PIBRIDGE_WB_PROFILE=1: where the engines' threads spend their time, once a minute (profwatch.h)
+    if (const char* pw = getenv("PIBRIDGE_WB_PROFILE"); pw && strcmp(pw, "1") == 0) {
+        profwatch::start();
     }
     if (g_ctrlOn && g_ctrlThread) {
         HANDLE th = CreateThread(nullptr, 0, ctrl_worker, nullptr, 0, nullptr);

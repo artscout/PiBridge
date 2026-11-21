@@ -1,5 +1,5 @@
 diff --git a/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp b/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp
-index 13df3a0..3eb0135 100644
+index 13df3a0..a7c118d 100644
 --- a/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp
 +++ b/CustomHeadsetOpenVR/src/Headsets/PimaxSlam.cpp
 @@ -1,3 +1,9 @@
@@ -22,7 +22,7 @@ index 13df3a0..3eb0135 100644
  #include <memory>
  #include "nlohmann/json.hpp"
  #include <PVR_Math.h>
-@@ -683,9 +691,14 @@ void PimaxSlamDriver::PvrTrackingThread() {
+@@ -683,15 +691,22 @@ void PimaxSlamDriver::PvrTrackingThread() {
  #include "../Helpers/SharedMemoryPoseSource.h"
  #include "../Helpers/MiscHelper.h"
  
@@ -37,7 +37,15 @@ index 13df3a0..3eb0135 100644
  #include <time.h>
  
  // Matches the Windows driver (driver_aapvr).
-@@ -811,6 +824,68 @@ public:
+ static constexpr uint64_t k_UniverseId = 30;
+ // The file is older than this: the headset or its writer is gone.
+ static constexpr int64_t k_StaleNs = 500000000;
++// A torn or failed read of the file: the last consistent copy stands in for this long (the writer runs at ~500 Hz).
++static constexpr int64_t k_HoldNs = 100000000;
+ 
+ static vr::DriverPose_t PoseFromDevice(const SharedMemoryPose::Device& d, int64_t nowNs, bool tracked, bool positionTracked) {
+ 	vr::DriverPose_t pose = {};
+@@ -811,6 +826,68 @@ public:
  		pose.vecDriverFromHeadTranslation[0] = 0;
  		pose.vecDriverFromHeadTranslation[1] = 0.023599;
  		pose.vecDriverFromHeadTranslation[2] = -0.000302;
@@ -106,7 +114,7 @@ index 13df3a0..3eb0135 100644
  		vr::VRServerDriverHost()->TrackedDevicePoseUpdated(deviceIndex, pose, sizeof(pose));
  	}
  
-@@ -843,6 +918,66 @@ public:
+@@ -843,6 +920,66 @@ public:
  		in.UpdateBooleanComponent(components[ComponentMenu], (pressed & (0x40 | 0x04)) != 0, t);
  	}
  
@@ -173,7 +181,7 @@ index 13df3a0..3eb0135 100644
  	// From RunFrame.
  	void UpdateBattery(int battery) {
  		if (deviceIndex == vr::k_unTrackedDeviceIndexInvalid || battery < 0 || battery == lastBattery) {
-@@ -877,6 +1012,12 @@ private:
+@@ -877,6 +1014,12 @@ private:
  	int lastBattery = -1;
  	uint32_t lastButtons = 0xffffffff; // the first report is always sent
  	float lastAxes[4] = {};
@@ -186,7 +194,7 @@ index 13df3a0..3eb0135 100644
  };
  
  static std::unique_ptr<PimaxCrystalControllerDriver> s_controllerDriver[2];
-@@ -906,11 +1047,14 @@ void PimaxSlamDriver::PosTrackedDeviceActivate(uint32_t& unObjectId, vr::EVRInit
+@@ -906,11 +1049,14 @@ void PimaxSlamDriver::PosTrackedDeviceActivate(uint32_t& unObjectId, vr::EVRInit
  
  	vr::VRProperties()->SetStringProperty(container, vr::Prop_TrackingSystemName_String, "aapvr");
  	vr::VRProperties()->SetStringProperty(container, vr::Prop_ManufacturerName_String, "Pimax");
@@ -204,7 +212,7 @@ index 13df3a0..3eb0135 100644
  	vr::VRProperties()->SetFloatProperty(container, vr::Prop_DisplayFrequency_Float, 90.0f);
  	vr::VRProperties()->SetBoolProperty(container, vr::Prop_DeviceProvidesBatteryStatus_Bool, true);
  
-@@ -991,6 +1135,18 @@ void PimaxSlamDriver::RunPvrBackground() {
+@@ -991,6 +1137,18 @@ void PimaxSlamDriver::RunPvrBackground() {
  }
  
  void PimaxSlamDriver::HandleEvent(const vr::VREvent_t& event) {
@@ -223,6 +231,71 @@ index 13df3a0..3eb0135 100644
  }
  
  void PimaxSlamDriver::StartPvrTracking() {
+@@ -1009,6 +1167,12 @@ void PimaxSlamDriver::StopPvrTracking() {
+ }
+ 
+ void PimaxSlamDriver::PvrTrackingThread() {
++	// head pose feed diagnostics (see below)
++	uint32_t hmdDiagUpdates = 0, hmdDiagStale = 0, hmdDiagUntracked = 0, hmdDiagRotOnly = 0, hmdDiagTorn = 0;
++	std::optional<SharedMemoryPose::Snapshot> lastSnapshot;
++	double hmdDiagMaxAgeMs = 0;
++	int hmdDiagState = -1;
++	int64_t hmdDiagSinceNs = 0;
+ 	// 500 Hz, as the Windows driver; the headset reports its pose about 667 times a second
+ 	timespec next{};
+ 	clock_gettime(CLOCK_MONOTONIC, &next);
+@@ -1023,7 +1187,16 @@ void PimaxSlamDriver::PvrTrackingThread() {
+ 			continue;
+ 		}
+ 		const int64_t now = SharedMemoryPose::NowNs();
+-		const auto snapshot = SharedMemoryPose::Read();
++		auto snapshot = SharedMemoryPose::Read();
++		// A torn read (the writer preempted between its seq_begin and seq_end under CPU load; 250 times in 7 minutes on
++		// 2026-11-21) used to hand SteamVR one untracked head pose: the view jumped for a frame (the "slow blink", the
++		// floor dropping for a moment). The last consistent copy stands in for up to k_HoldNs instead.
++		if (!snapshot && lastSnapshot && now - lastSnapshot->writtenNs < k_HoldNs) {
++			snapshot = lastSnapshot;
++			hmdDiagTorn++;
++		} else if (snapshot) {
++			lastSnapshot = snapshot;
++		}
+ 		const bool fresh = snapshot && now - snapshot->writtenNs < k_StaleNs;
+ 		SharedMemoryPose::Device head;
+ 		if (snapshot) {
+@@ -1032,8 +1205,32 @@ void PimaxSlamDriver::PvrTrackingThread() {
+ 		// flags of its inside-out: 1 orientation, 2 position (orientation only: just started, or it cannot see the room)
+ 		const uint32_t flags = snapshot ? snapshot->tracking : 0;
+ 		const bool headTracked = fresh && head.state == 1 && (flags & 1) != 0;
+-		vr::DriverPose_t pose = PoseFromDevice(head, now, headTracked, headTracked && (flags & 2) != 0);
++		const bool headPosition = headTracked && (flags & 2) != 0;
++		vr::DriverPose_t pose = PoseFromDevice(head, now, headTracked, headPosition);
+ 		vr::VRServerDriverHost()->TrackedDevicePoseUpdated(deviceIndex, pose, sizeof(pose));
++		// Head pose feed diagnostics: a line a second (rate, how often the file was stale or the head untracked or
++		// orientation-only, the oldest sample handed over) and every change of the tracking state at once. SteamVR fades
++		// the view when the head pose is invalid, rotation-only or far in the past, so this is where such a fade shows.
++		{
++			hmdDiagUpdates++;
++			if (!fresh) hmdDiagStale++;
++			if (!headTracked) hmdDiagUntracked++;
++			else if (!headPosition) hmdDiagRotOnly++;
++			const double ageMs = headTracked ? double(now - head.timeNs) / 1e6 : 0.0;
++			if (ageMs > hmdDiagMaxAgeMs) hmdDiagMaxAgeMs = ageMs;
++			const int state = !headTracked ? 0 : headPosition ? 2 : 1;
++			if (state != hmdDiagState) {
++				DriverLog("hmd: tracking %d -> %d (fresh %d, state %d, flags %u, age %.1f ms)", hmdDiagState, state, fresh ? 1 : 0, (int)head.state, flags, ageMs);
++				hmdDiagState = state;
++			}
++			if (hmdDiagSinceNs == 0) hmdDiagSinceNs = now;
++			if (now - hmdDiagSinceNs >= 1000000000) {
++				DriverLog("hmd: %u upd/s | stale %u untracked %u rot-only %u torn %u | maxAge %.1f ms", hmdDiagUpdates, hmdDiagStale, hmdDiagUntracked, hmdDiagRotOnly, hmdDiagTorn, hmdDiagMaxAgeMs);
++				hmdDiagUpdates = hmdDiagStale = hmdDiagUntracked = hmdDiagRotOnly = hmdDiagTorn = 0;
++				hmdDiagMaxAgeMs = 0;
++				hmdDiagSinceNs = now;
++			}
++		}
+ 
+ 		std::shared_lock lock(s_controllerDriverMutex);
+ 		for (int side = 0; side < 2; side++) {
 diff --git a/CustomHeadsetOpenVR/src/Helpers/PimaxCommon.cpp b/CustomHeadsetOpenVR/src/Helpers/PimaxCommon.cpp
 index 71fa27d..818be4b 100644
 --- a/CustomHeadsetOpenVR/src/Helpers/PimaxCommon.cpp

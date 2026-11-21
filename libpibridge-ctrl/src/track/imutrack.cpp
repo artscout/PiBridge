@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The IMU-led controller tracker (imutrack.h).
 #include "pibridge/ctrl/track/imutrack.h"
+#include "pibridge/ctrl/track/trackutil.h"
 
 #include "pibridge/cam/rustfmt.h"
 
@@ -111,31 +112,6 @@ bool invert(std::array<double, M * M>& a) {
     return true;
 }
 
-std::vector<Obs> obs_list(const Rig& rig, const LedModel& model, const std::vector<CamObs>& obs,
-                          const std::vector<Matches>& per_cam) {
-    std::vector<Obs> o;
-    for (std::size_t ci = 0; ci < per_cam.size(); ci++) {
-        for (const auto& [l, b] : per_cam[ci]) {
-            o.push_back(Obs{&rig.cams[ci], model.leds[l].p, obs[ci].px[b]});
-        }
-    }
-    return o;
-}
-
-std::size_t count(const std::vector<Matches>& m) {
-    std::size_t t = 0;
-    for (const auto& x : m) {
-        t += x.size();
-    }
-    return t;
-}
-
-std::uint64_t sat_sub(std::uint64_t a, std::uint64_t b) { return a > b ? a - b : 0; }
-
-double angle_deg(const g::Mat3& a, const g::Mat3& b) {
-    return rf::to_degrees(g::norm(rotvec(g::mat_mul(a, g::transpose(b)))));
-}
-
 } // namespace
 
 ImuTracker::ImuTracker(ImuTrackCfg c, TrackCfg fallback) : cfg(c), fallback_(fallback) {}
@@ -152,7 +128,16 @@ std::uint64_t known_ns() {
 }
 } // namespace
 
-void ImuTracker::imu_push(std::size_t slot, const ImuIn& s) {
+void ImuTracker::imu_push(std::size_t slot, const ImuIn& s_in) {
+    static const double shift_s = [this] {
+        const char* e = std::getenv("CT_IMU_SHIFT_MS");
+        return e != nullptr ? std::atof(e) * 1e-3 : cfg.imu_shift_s;
+    }();
+    ImuIn s = s_in;
+    if (shift_s != 0.0) {
+        const std::int64_t sh = static_cast<std::int64_t>(shift_s * 1e9);
+        s.t = static_cast<std::uint64_t>(std::max<std::int64_t>(0, static_cast<std::int64_t>(s.t) + sh));
+    }
     for (const auto& row : s.qg) {
         for (const double x : row) {
             if (!std::isfinite(x)) {
@@ -373,170 +358,6 @@ bool ImuTracker::update(Ctl& c, const g::Pose& m, double sig_p, double sig_r, bo
 }
 
 namespace {
-
-/// The rigid map taking a onto b (least squares): the rotation by the polar decomposition (Newton iterations).
-std::optional<g::Pose> rigid_fit(const std::vector<g::Vec3>& a, const std::vector<g::Vec3>& b) {
-    const std::size_t n = a.size();
-    if (n < 3 || b.size() != n) {
-        return std::nullopt;
-    }
-    g::Vec3 ma{0, 0, 0}, mb{0, 0, 0};
-    for (std::size_t q = 0; q < n; q++) {
-        ma = g::add(ma, g::scale(a[q], 1.0 / static_cast<double>(n)));
-        mb = g::add(mb, g::scale(b[q], 1.0 / static_cast<double>(n)));
-    }
-    g::Mat3 r{};
-    for (std::size_t q = 0; q < n; q++) {
-        const g::Vec3 da = g::sub(a[q], ma), db = g::sub(b[q], mb);
-        for (int x = 0; x < 3; x++) {
-            for (int y = 0; y < 3; y++) {
-                r[x][y] += db[x] * da[y];
-            }
-        }
-    }
-    for (int it = 0; it < 40; it++) {
-        const double d = g::det(r);
-        if (std::abs(d) < 1e-18) {
-            return std::nullopt;
-        }
-        g::Mat3 inv{};
-        inv[0] = g::scale(g::cross(r[1], r[2]), 1.0 / d);
-        inv[1] = g::scale(g::cross(r[2], r[0]), 1.0 / d);
-        inv[2] = g::scale(g::cross(r[0], r[1]), 1.0 / d);
-        for (int x = 0; x < 3; x++) {
-            for (int y = 0; y < 3; y++) {
-                r[x][y] = 0.5 * (r[x][y] + inv[x][y]);
-            }
-        }
-    }
-    if (g::det(r) < 0.5) {
-        return std::nullopt;
-    }
-    return g::Pose{r, g::sub(mb, g::mat_vec(r, ma))};
-}
-
-/// The LED model's near-symmetry: a rigid map, turned at least 120 deg, that takes the LEDs onto LEDs (and the normals
-/// onto normals) within 10 mm rms; nullopt without one. Three LEDs onto any three at the same distances (Kabsch).
-std::optional<std::pair<g::Pose, double>> model_twin(const LedModel& m) {
-    const std::size_t n = m.leds.size();
-    if (n < 6) {
-        return std::nullopt;
-    }
-    std::optional<std::pair<g::Pose, double>> best;
-    const auto dist = [&](std::size_t a, std::size_t b) { return g::norm(g::sub(m.leds[a].p, m.leds[b].p)); };
-    for (std::size_t a0 = 0; a0 < n / 3; a0++) {
-    const std::size_t b0 = a0 + n / 3, c0 = a0 + 2 * n / 3;
-    for (std::size_t i = 0; i < n; i++) {
-        for (std::size_t j = 0; j < n; j++) {
-            for (std::size_t k = 0; k < n; k++) {
-                if (i == j || j == k || i == k || std::abs(dist(i, j) - dist(a0, b0)) > 0.006 ||
-                    std::abs(dist(j, k) - dist(b0, c0)) > 0.006 || std::abs(dist(i, k) - dist(a0, c0)) > 0.006) {
-                    continue;
-                }
-                const std::array<g::Vec3, 3> A{m.leds[a0].p, m.leds[b0].p, m.leds[c0].p};
-                const std::array<g::Vec3, 3> B{m.leds[i].p, m.leds[j].p, m.leds[k].p};
-                g::Vec3 ma{0, 0, 0}, mb{0, 0, 0};
-                for (int q = 0; q < 3; q++) {
-                    ma = g::add(ma, g::scale(A[q], 1.0 / 3.0));
-                    mb = g::add(mb, g::scale(B[q], 1.0 / 3.0));
-                }
-                // Kabsch through the polar decomposition of H = sum (b - mb)(a - ma)^T, by Newton iterations
-                g::Mat3 h{};
-                for (int q = 0; q < 3; q++) {
-                    const g::Vec3 da = g::sub(A[q], ma), db = g::sub(B[q], mb);
-                    for (int r = 0; r < 3; r++) {
-                        for (int cc = 0; cc < 3; cc++) {
-                            h[r][cc] += db[r] * da[cc];
-                        }
-                    }
-                }
-                // three points only fix the rotation through their plane: add the cross product (the normal) pair
-                const g::Vec3 na = g::cross(g::sub(A[1], A[0]), g::sub(A[2], A[0]));
-                const g::Vec3 nb = g::cross(g::sub(B[1], B[0]), g::sub(B[2], B[0]));
-                for (int r = 0; r < 3; r++) {
-                    for (int cc = 0; cc < 3; cc++) {
-                        h[r][cc] += nb[r] * na[cc];
-                    }
-                }
-                g::Mat3 r = h;
-                for (int it = 0; it < 30; it++) {
-                    const double d = g::det(r);
-                    if (std::abs(d) < 1e-15) {
-                        break;
-                    }
-                    // r <- (r + r^-T) / 2; the rows of r^-T are the cross products of r's rows over det
-                    g::Mat3 inv{};
-                    inv[0] = g::scale(g::cross(r[1], r[2]), 1.0 / d);
-                    inv[1] = g::scale(g::cross(r[2], r[0]), 1.0 / d);
-                    inv[2] = g::scale(g::cross(r[0], r[1]), 1.0 / d);
-                    for (int x = 0; x < 3; x++) {
-                        for (int y = 0; y < 3; y++) {
-                            r[x][y] = 0.5 * (r[x][y] + inv[x][y]);
-                        }
-                    }
-                }
-                if (g::det(r) < 0.5) {
-                    continue;
-                }
-                const double turn = rf::to_degrees(std::acos(std::clamp((r[0][0] + r[1][1] + r[2][2] - 1.0) / 2.0, -1.0, 1.0)));
-                if (turn < 120.0) {
-                    continue;
-                }
-                g::Pose t{r, g::sub(mb, g::mat_vec(r, ma))};
-                // refine on all LEDs: nearest LED as the partner, the rigid fit again (a few rounds)
-                for (int round = 0; round < 4; round++) {
-                    std::vector<g::Vec3> pa, pb;
-                    for (std::size_t q = 0; q < n; q++) {
-                        const g::Vec3 y = t.apply(m.leds[q].p);
-                        std::size_t qi = 0;
-                        double dmin = 1e9;
-                        for (std::size_t w = 0; w < n; w++) {
-                            const double dd = g::norm(g::sub(y, m.leds[w].p));
-                            if (dd < dmin) {
-                                dmin = dd;
-                                qi = w;
-                            }
-                        }
-                        pa.push_back(m.leds[q].p);
-                        pb.push_back(m.leds[qi].p);
-                    }
-                    if (const auto f = rigid_fit(pa, pb)) {
-                        t = *f;
-                    }
-                }
-                r = t.r;
-                const double turn2 =
-                    rf::to_degrees(std::acos(std::clamp((r[0][0] + r[1][1] + r[2][2] - 1.0) / 2.0, -1.0, 1.0)));
-                double sum = 0;
-                std::size_t agree = 0;
-                for (std::size_t q = 0; q < n; q++) {
-                    const g::Vec3 y = t.apply(m.leds[q].p);
-                    double dmin = 1e9;
-                    std::size_t qi = 0;
-                    for (std::size_t w = 0; w < n; w++) {
-                        const double dd = g::norm(g::sub(y, m.leds[w].p));
-                        if (dd < dmin) {
-                            dmin = dd;
-                            qi = w;
-                        }
-                    }
-                    sum += dmin * dmin;
-                    agree += g::dot(g::mat_vec(r, m.leds[q].n), m.leds[qi].n) > 0.5 ? 1 : 0;
-                }
-                const double rms = std::sqrt(sum / static_cast<double>(n));
-                if (std::getenv("CT_TWIN_DEBUG") != nullptr) {
-                    std::fprintf(stderr, "twin cand %zu %zu %zu: turn %.0f rms %.1f mm agree %zu det %.3f\n", i, j, k, turn2,
-                                 rms * 1000.0, agree, g::det(r));
-                }
-                if (agree * 5 >= n * 4 && rms < 0.010 && turn2 >= 120.0 && (!best || rms < best->second)) {
-                    best = std::pair{t, rms};
-                }
-            }
-        }
-    }
-    }
-    return best;
-}
 
 /// A velocity at t from the optical positions within +-80 ms (least squares line); nullopt with fewer than 3.
 std::optional<g::Vec3> velocity_at(const std::deque<std::pair<std::uint64_t, g::Vec3>>& o, std::uint64_t t) {
@@ -1012,6 +833,7 @@ bool ImuTracker::led_updates(const Rig& rig, const LedModel& model, const std::v
     counts.led_updates += 1;
     counts.led_points += used_n;
     c.last_update = frame_ns;
+                        c.p_fixed = c.p;
     c.misses = 0;
     // the filter's pose as a few-LED fix (the fuser keeps showing the hand instead of holding it)
     const g::Pose body{g::mat_mul(hw.r, c.r), hw.apply(c.p)};
@@ -1126,8 +948,10 @@ bool ImuTracker::known(std::size_t s, std::uint64_t t) const {
         return !(e != nullptr && std::string_view(e) == "0");
     }();
     const ImuIn* im = imu_at(s, t);
+    // from where the last update put it (the lost state's position is IMU-only and runs off within half a second on a
+    // swing: live, a crossing then cost a cold search of several seconds)
     return !far_rule || c.status == Status::Tracking || im == nullptr ||
-           g::norm(g::sub(c.p, im->world_from_head.t)) <= 1.0;
+           g::norm(g::sub(c.p_fixed, im->world_from_head.t)) <= 1.0;
 }
 
 std::vector<Fix> ImuTracker::step(const Rig& rig, const LedFrame& lf, std::uint64_t frame_ns) {
@@ -1170,8 +994,8 @@ std::vector<Fix> ImuTracker::step(const Rig& rig, const LedFrame& lf, std::uint6
         propagate(s, frame_ns);
     }
     std::vector<CamObs> obs;
-    for (std::size_t ci = 0; ci < rig.cams.size() && ci < lf.px.size(); ci++) {
-        obs.push_back(CamObs::make(rig.cams[ci], lf.px[ci]));
+    for (std::size_t ci = 0; ci < rig.cams.size(); ci++) { // one per rig camera (empty when the frame has fewer)
+        obs.push_back(CamObs::make(rig.cams[ci], ci < lf.px.size() ? lf.px[ci] : std::vector<std::pair<double, double>>{}));
     }
     std::vector<std::vector<bool>> used;
     for (const CamObs& o : obs) {
@@ -1325,7 +1149,16 @@ std::vector<Fix> ImuTracker::step(const Rig& rig, const LedFrame& lf, std::uint6
             // ctrl-imu-take2: 1 px per m/s -38 % misses with no more jumps; 2 doubles the jumps
             return e != nullptr ? std::atof(e) : 1.0;
         }();
-        const double tol_fit = rig.prm.tol_px + rms_speed * g::norm(c.v);
+        // PiBridge (Pimax's gate by distance: 5 px to 0.4 m, 3 px to 0.7 m, 1.5 px beyond): a controller near the
+        // cameras turns the model's mm errors into more pixels; live, held still at ~0.3 m its 18-LED fits failed the
+        // fixed 2.5 px and few-LED updates let it wander by centimetres. CT_NEAR_TOL=0: the fixed tolerance.
+        static const bool near_tol = [] {
+            const char* e = std::getenv("CT_NEAR_TOL");
+            return !(e != nullptr && std::string_view(e) == "0");
+        }();
+        const double dist = g::norm(pred.t);
+        const double near_k = near_tol ? (dist < 0.25 ? 2.4 : dist < 0.4 ? 1.6 : dist < 0.55 ? 1.2 : 1.0) : 1.0;
+        const double tol_fit = rig.prm.tol_px * near_k + rms_speed * g::norm(c.v);
         // Pimax's tracking hypotheses (P1P): the gyro's rotation is right on a fast swing, the position is not. Each
         // near (LED, blob) pair moves the predicted position so that LED lands on that blob (the nearest point of its
         // ray, at most 5 cm); the hypothesis matching the most LEDs in a tight window replaces the prediction.
@@ -1377,8 +1210,46 @@ std::vector<Fix> ImuTracker::step(const Rig& rig, const LedFrame& lf, std::uint6
                 }
                 if (rms <= (n2 == 3 ? 1.2 : tol_fit)) {
                     const g::Pose meas{g::mat_mul(wh.r, p2.r), wh.apply(p2.t)};
-                    const double sigp = n2 >= 8 ? cfg.sigma_p[0] : n2 >= 5 ? cfg.sigma_p[1] : cfg.sigma_p[2];
-                    const double sigr = rf::to_radians(n2 >= 8 ? 2.5 : 5.0);
+                    // Pimax's fast-stop: enters after 3 frames with the gyro under 0.3 rad/s (over 0.1 s) and the
+                    // speed under 0.12 m/s, leaves over 0.5 rad/s or 0.18 m/s; while still, the fixes count CT_QUIET
+                    // (3) times less, so their noise does not shake a hand held still (Pimax: keep-static and
+                    // zero-velocity factors). Off by default (CT_QUIET=3 to try): on still1 the left hand's tracking
+                    // fell 75 -> 61 % (the stiffer filter lags the start of a motion); the fuser smooths a still hand
+                    // instead (Config::smooth_still_s)
+                    static const double quiet_k = [] {
+                        const char* e = std::getenv("CT_QUIET");
+                        return e != nullptr ? std::atof(e) : 1.0;
+                    }();
+                    {
+                        double rate = 1e9;
+                        if (const ImuIn* a = imu_at(s, frame_ns > 100'000'000 ? frame_ns - 100'000'000 : 0);
+                            a != nullptr) {
+                            if (const ImuIn* b = imu_at(s, frame_ns); b != nullptr && b->t > a->t) {
+                                rate = g::norm(rotvec(g::mat_mul(g::transpose(a->qg), b->qg))) /
+                                       (static_cast<double>(b->t - a->t) * 1e-9);
+                            }
+                        }
+                        const double speed = g::norm(c.v);
+                        if (rate < 0.3 && speed < 0.12) {
+                            c.quiet_run += 1;
+                        } else {
+                            c.quiet_run = 0;
+                        }
+                        if (c.quiet && (rate > 0.5 || speed > 0.18)) {
+                            c.quiet = false;
+                        } else if (!c.quiet && c.quiet_run >= 3) {
+                            c.quiet = true;
+                        }
+                    }
+                    const double qk = c.quiet && quiet_k > 1.0 ? quiet_k : 1.0;
+                    counts.quiet_updates += qk > 1.0 ? 1 : 0;
+                    const double sigp = qk * (n2 >= 8 ? cfg.sigma_p[0] : n2 >= 5 ? cfg.sigma_p[1] : cfg.sigma_p[2]);
+                    // CT_SIGR_SCALE: the optical orientation's weight against the gyro (sigma x scale)
+                    static const double sigr_scale = [] {
+                        const char* e = std::getenv("CT_SIGR_SCALE");
+                        return e != nullptr ? std::atof(e) : 1.0;
+                    }();
+                    const double sigr = rf::to_radians(n2 >= 8 ? 2.5 : 5.0) * sigr_scale * qk;
                     bool upd = update(c, meas, sigp, sigr, free_rot);
                     // a strong fit the filter's gate refuses (a fast swing the IMU prediction missed): Pimax has no
                     // gate after the solve, it trusts the optics. The position and velocity start over from it. Off unless
@@ -1412,6 +1283,7 @@ std::vector<Fix> ImuTracker::step(const Rig& rig, const LedFrame& lf, std::uint6
                         }
                         counts.updates += 1;
                         c.last_update = frame_ns;
+                        c.p_fixed = c.p;
                         c.misses = 0;
                         c.streak += 1;
                         opt_[s].emplace_back(frame_ns, meas.t);
@@ -1766,6 +1638,7 @@ std::vector<Fix> ImuTracker::step(const Rig& rig, const LedFrame& lf, std::uint6
                     opt_[s].emplace_back(frame_ns, meas.t);
                     twin_check(s, frame_ns);
                     c.last_update = frame_ns;
+                        c.p_fixed = c.p;
                     c.misses = 0;
                     c.streak += 1;
                     publish(s, c, Found{s, j, std::nullopt, 0.0, 0}, false);
@@ -1803,6 +1676,7 @@ std::vector<Fix> ImuTracker::step(const Rig& rig, const LedFrame& lf, std::uint6
             }
             c.t = frame_ns;
             c.last_update = frame_ns;
+                        c.p_fixed = c.p;
             c.misses = 0;
             c.streak = 1;
             c.status = known_orient || hyp_v[s] ? Status::Tracking : Status::Tentative;

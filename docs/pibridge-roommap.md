@@ -35,16 +35,13 @@ deg); a jump (> 25 cm or 5 deg from the offset in use) only when the next fix ag
 offset carries the whole room setup). It ends with the session or when another writer takes the lease (a room setup). The offset goes through the
 writer lease (`docs/libpibridge-anchor.md`); the tracker glides to every change after the session's first.
 
-**Filtered follow (2026-11-20).** One fix is good to about +-2 cm, while Basalt drifts about 0.5 mm/s.
-- The follow therefore recognises the room every ~4 s: 1 s pause, 3 s of frames (`PIBRIDGE_ROOM_FOLLOW_GAP`,
-  `PIBRIDGE_ROOM_FOLLOW_WIN`).
-- Each sure fix moves a filtered offset by 1 - exp(-dt / 20 s) of its difference (`PIBRIDGE_ROOM_FOLLOW_TAU`, s).
-- The filtered offset is written once it changed by 1 mm or 0.02 deg.
-- A confirmed jump restarts the filter from the fix.
-- `PIBRIDGE_ROOM_FOLLOW_TAU=0` gives back the earlier behaviour: every fix written as it is, `--follow` seconds apart.
-- pibridge-headtrack glides a drift correction mostly while the head turns. The rate is 3 mm/s and 0.05 deg/s when
-  still, plus 0.6 mm/s and 0.01 deg/s per deg/s of head turn. `PIBRIDGE_DRIFT_GLIDE=old` gives back the plain slew
-  (5 cm/s, 2 deg/s).
+**Filtered follow (2026-11-20, off by default).**
+- `PIBRIDGE_ROOM_FOLLOW_TAU=20` turns it on: a room fix every ~4 s (1 s pause, 3 s of frames:
+  `PIBRIDGE_ROOM_FOLLOW_GAP`, `PIBRIDGE_ROOM_FOLLOW_WIN`), filtered with this time constant, written in 1 mm steps.
+- `PIBRIDGE_DRIFT_GLIDE=hidden` makes pibridge-headtrack glide a drift correction mostly while the head turns.
+- It is off because live, a single fix moved by centimetres with where the head stood. Following such fixes every few
+  seconds dragged the world after the user's lean, with a delay.
+- `PIBRIDGE_ROOM_FOLLOW=0` turns the follow off altogether.
 
 Not ported / different:
 - PiBridge changes (2026-10-19): under SteamVR (the session pid is pibridge-headtrack, or a vrserver with Monado's

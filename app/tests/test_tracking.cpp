@@ -952,6 +952,20 @@ TEST(room_map_auto_starts_with_a_saved_room_and_stops_by_pid) {
     CHECK(r.c->roomPid() == 0);
 }
 
+TEST(room_map_gets_its_switches_from_the_extra_environment) {
+    LiveRig r(true, true);
+    r.setup.roomSaved = true;
+    r.setup.extraEnv = {QStringLiteral("PIBRIDGE_ROOM_FOLLOW=0"), QStringLiteral("PIBRIDGE_CTRL_ACQ=quads")};
+    r.c->refresh();
+    CHECK(r.c->start());
+    r.at(600);
+    r.at(600 + kIoSettleMs);
+    CHECK(r.names().back() == QStringLiteral("roommap"));
+    const RecProcSpec& m = r.procs->started.back();
+    CHECK(m.env.contains(QStringLiteral("PIBRIDGE_ROOM_FOLLOW=0")));
+    CHECK(!m.env.contains(QStringLiteral("PIBRIDGE_CTRL_ACQ=quads")));
+}
+
 TEST(room_map_auto_runs_once_and_not_without_a_room) {
     {
         LiveRig r(true, true);
