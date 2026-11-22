@@ -291,7 +291,8 @@ knob are in [TRACKING.md](TRACKING.md) (also the **How tracking works** link).
   USB). The mode is `crystal_tracking`, for `keep` the one keepalived reads from it. When the headset's mode
   (keepalived's `crystal_lighthouse`) differs from the running session's, the Dashboard stops the session and starts
   it again once it can (`followCrystalMode`, a minute at most). STOP VR also switches it off.
-- Cards: **Tracking mode**, **Tracking engine: head and controllers**, **Cameras**, **Controllers**, **Advanced** (extra environment
+- Cards: **Tracking mode**, **Head tracking** (the engine: Pimax / Basalt), **Cameras**, **Controllers** (optical tracking, the
+  controller engine Pimax LED engine / PiBridge), **Advanced** (extra environment
   `rec_env`, the programs and files, what a start sets, **Reset to recommended**). START VR / STOP VR are on the
   Dashboard.
 - One environment builder (`buildIoEnv`; `buildMonadoLighthouseEnv` for Monado + Lighthouse); PiBridge's own Basalt

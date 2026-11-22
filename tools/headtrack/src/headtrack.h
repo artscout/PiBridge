@@ -250,6 +250,8 @@ private:
     std::unique_ptr<cam::imulog::HeadImuLog> hshadow_imu_;
     // PIBRIDGE_HEAD_SHADOW_TAKE_SEC=N: the take stops N s after its first frame set (the session goes on; the files are
     // closed at shutdown as usual). The flag gates both writers; the times belong to the camera thread.
+    /// Pimax's engine tracks the controllers (its LED models loaded) and PIBRIDGE_CTRL_ENGINE is not 0.
+    bool engine_ctrl() const;
     std::atomic<bool> hshadow_take_on_{false};
     double hshadow_take_sec_ = 0.0;
     std::int64_t hshadow_take_t0_ns_ = 0;

@@ -187,7 +187,7 @@ IoSettings ioSettings(const Conf& c) {
     s.apps = word(c, iokey::kApps) == QLatin1String("monado") ? IoApps::Monado : IoApps::SteamVr;
     s.homeScene = flag(iokey::kHome, true);
     s.slam = flag(iokey::kSlam, true);
-    s.slamEngine = word(c, iokey::kSlamEngine) == QLatin1String("basalt") ? SlamEngine::Basalt : SlamEngine::Pimax;
+    s.slamEngine = word(c, iokey::kSlamEngine) == QLatin1String("pimax") ? SlamEngine::Pimax : SlamEngine::Basalt;
     s.headtrack = flag(iokey::kHeadtrack, true);
     const int g = intOr(c, iokey::kGrid, 30, 10, 100);
     s.grid = g <= 35 ? 30 : (g <= 45 ? 40 : 50);
@@ -210,6 +210,7 @@ IoSettings ioSettings(const Conf& c) {
     s.camAeNewLaw = word(c, iokey::kCamAeLaw) != QLatin1String("old");
     s.camFps = intOr(c, iokey::kCamFps, 60, 50, 60) >= 55 ? 60 : 50;
     s.ctrlTrack = flag(iokey::kCtrlTrack, true);
+    s.ctrlEngine = word(c, iokey::kCtrlEngine) == QLatin1String("pimax") ? CtrlEngine::Pimax : CtrlEngine::Ours;
     s.ctrlAngle = intOr(c, iokey::kCtrlAngle, 52, kCtrlAngleMin, kCtrlAngleMax);
     s.ctrlLostS = intOr(c, iokey::kCtrlLost, 4, kCtrlLostMin, kCtrlLostMax);
     s.ctrlSteady = flag(iokey::kCtrlSteady, true);
@@ -243,6 +244,7 @@ std::vector<std::pair<std::string, std::string>> ioConfLines(const IoSettings& s
     l.emplace_back(iokey::kCamAeLaw, s.camAeNewLaw ? "new" : "old");
     l.emplace_back(iokey::kCamFps, std::to_string(s.camFps));
     l.emplace_back(iokey::kCtrlTrack, onOff(s.ctrlTrack));
+    l.emplace_back(iokey::kCtrlEngine, s.ctrlEngine == CtrlEngine::Ours ? "ours" : "pimax");
     l.emplace_back(iokey::kCtrlAngle, std::to_string(s.ctrlAngle));
     l.emplace_back(iokey::kCtrlLost, std::to_string(s.ctrlLostS));
     l.emplace_back(iokey::kCtrlSteady, onOff(s.ctrlSteady));
@@ -284,7 +286,12 @@ bool pimaxSlamReady(const RecSetup& s, QString* why) {
 
 bool pimaxCtrlEngine(const RecSetup& s) {
     return s.io.ctrlTrack && s.io.slam && s.io.slamEngine == SlamEngine::Pimax && pimaxSlamReady(s) &&
-           s.winCtrlModels;
+           s.winCtrlModels && s.io.ctrlEngine == CtrlEngine::Pimax;
+}
+
+bool oursWithPimaxHead(const RecSetup& s) {
+    return s.io.ctrlTrack && s.io.slam && s.io.slamEngine == SlamEngine::Pimax && pimaxSlamReady(s) &&
+           s.winCtrlModels && s.io.ctrlEngine == CtrlEngine::Ours;
 }
 
 IoSessionEnv buildIoEnv(const IoSettings& io, const RecSetup& s, int refreshHz, const QString& slamConfig,

@@ -277,7 +277,7 @@ bool Daemon::start() {
         return false;
     }
     say_("SLAM engine " + o_.vit_library + ", " + std::to_string(o_.cams.size()) + " cameras" +
-         (vit_->has_controllers() ? ", controllers by Pimax's LED engine" : ", no controller tracking"));
+         (engine_ctrl() ? ", controllers by Pimax's LED engine" : ", no controller tracking"));
     if (!o_.shadow_vit.empty()) {
         for (const std::uint32_t c : o_.shadow_cams) {
             const auto it = std::find(o_.cams.begin(), o_.cams.end(), c);
@@ -378,7 +378,7 @@ bool Daemon::start() {
     const char* ours_env = std::getenv("PIBRIDGE_CTRL_OURS");
     ours_ctrl_ = ours_env != nullptr && std::string_view(ours_env) == "1";
     if (const char* sh = std::getenv("PIBRIDGE_CTRL_SHADOW");
-        !ht_ && vit_->has_controllers() && ((sh != nullptr && std::string_view(sh) == "1") || ours_ctrl_)) {
+        !ht_ && engine_ctrl() && ((sh != nullptr && std::string_view(sh) == "1") || ours_ctrl_)) {
         ctrl_pose_path_ = shadow_pose_path();
         for (std::size_t h = 0; h < 2; h++) {
             shadow_[h] = std::make_unique<ctrl::fuse::Fuser>(h, fuse_config(),
@@ -439,6 +439,17 @@ bool Daemon::start() {
     output_ = std::thread([this] { output_loop(); });
     serials_ = std::thread([this] { serials_loop(); });
     return true;
+}
+
+bool Daemon::engine_ctrl() const {
+    // PIBRIDGE_CTRL_ENGINE=0 (the app: io_ctrl_engine=ours with Pimax's head): Pimax's LED engine is left alone (the app
+    // also starts winbridge with PIBRIDGE_WB_CTRL=0) and the controllers come from pibridge-ctrltrack's pose file, as
+    // with Basalt
+    static const bool off = [] {
+        const char* e = std::getenv("PIBRIDGE_CTRL_ENGINE");
+        return e != nullptr && std::string_view(e) == "0";
+    }();
+    return vit_ && vit_->has_controllers() && !off;
 }
 
 void Daemon::stop() {
@@ -697,7 +708,7 @@ void Daemon::camera_loop() {
                 kLed = kTrk = kUnk = 0;
             }
         }
-        if (fi.kind == static_cast<std::uint32_t>(cam::FrameKind::Led) && vit_->has_controllers() &&
+        if (fi.kind == static_cast<std::uint32_t>(cam::FrameKind::Led) && engine_ctrl() &&
             (fi.flags & cam::FLAG_NO_DEV_TIME) == 0) {
             // all four tiles of the LED exposure to Pimax's LED engine, as Pimax Play hands them (40 us)
             const auto ref = time_.ref();
@@ -1187,6 +1198,18 @@ ps::Device Daemon::controller(int side, std::int64_t now_ns) {
                 put(d.position, imu_point(side, got.second.q, got.second.p));
                 put(d.orientation, got.second.q);
                 d.state = got.first == ctrl::fuse::State::Optical ? 7 : 5;
+                // PiBridge (2026-11-22): the linear velocity SteamVR predicts the position with to the display time, as
+                // for the head (it got none and poseTimeOffset 0 before: a frame of lag, which at swing reversals showed
+                // as the saber running on past the hand). While optical: the tracker's velocity carrying the fix; held:
+                // none (the position stands). NO angular velocity: the first live try (00:53) handed SteamVR the gyro's
+                // rate through the calibration, and the saber's blade flapped about the grip -- the rate's frame or
+                // scale does not match the orientation it would extrapolate (to be checked against the shadow logs);
+                // the orientation already carries the gyro to now, SteamVR holds it from there.
+                if (got.first == ctrl::fuse::State::Optical) {
+                    if (const auto v = our_fuser->shown_velocity(static_cast<std::uint64_t>(now_ns))) {
+                        put(d.linear_velocity, slam::qrot(raw_to_world_.q, *v));
+                    }
+                }
             }
             if (fstate != hd.logged_state) {
                 static const char* names[] = {"no pose (no optical fix)", "optical (pibridge-ctrltrack)",

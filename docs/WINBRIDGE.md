@@ -1,8 +1,10 @@
 # winbridge: Pimax's own head tracking engine under Wine
 
-`io_slam_engine=pimax` (Tracking page, **Tracking engine: Pimax**) makes `pibridge-headtrack`
-([pibridge-headtrack.md](pibridge-headtrack.md)) track the head with Pimax Play's own SLAM engine (`pimax_slam.pi.dll`)
-and the headset's factory calibration, instead of Basalt. The engine runs under Wine in its own process;
+**Optional since 2026-11-22**: PiBridge's own tracking (Basalt head, `pibridge-ctrltrack` controllers) is the default
+and needs nothing of this; winbridge is for those whom the built-in tracking does not satisfy, or for the comparison
+runs (head and controller shadow modes). `io_slam_engine=pimax` (Tracking page, **Head tracking engine: Pimax**) makes
+`pibridge-headtrack` ([pibridge-headtrack.md](pibridge-headtrack.md)) track the head with Pimax Play's own SLAM engine
+(`pimax_slam.pi.dll`) and the headset's factory calibration, instead of Basalt. The engine runs under Wine in its own process;
 pibridge-headtrack reaches it through a VIT library (`--engine pimax --vit libpibridge_vit_winbridge.so`), the same
 interface it loads Basalt through.
 
@@ -75,6 +77,9 @@ The reference is Pimax Play on Windows, so with this engine pibridge-headtrack d
 
 With the Pimax head engine and optical controller tracking on (`pimaxCtrlEngine`: also needs the controllers' LED
 models in the kit), the controllers come from Pimax's LED engine in the same winbridge, as in Pimax Play, and
+(2026-11-21) only while the Tracking page's controller engine is **Pimax LED engine** (`io_ctrl_engine=pimax`): with
+**PiBridge** the app starts winbridge with `PIBRIDGE_WB_CTRL=0` (the LED engine is not set up) and pibridge-headtrack with
+`PIBRIDGE_CTRL_ENGINE=0` (it reads pibridge-ctrltrack's poses as with Basalt), and
 pibridge-ctrltrack is not started. Everything below is from the Frida traces of Pimax Play's service (pass 1-3).
 
 - Init: `ControllerInitialImpl(calib, slamDir, pimax_database.bin, NULL, NULL)`, `ControllerSetDeviceEnable(1)`,

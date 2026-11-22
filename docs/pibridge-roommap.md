@@ -27,21 +27,25 @@ The flow the app needs: `build --source broker` (map the room), `relocalize --so
 `auto` (detached at the session start: wait for the head ring, take the writer lease, relocalise in 15 s windows up
 to `--wait`, apply floor + centre + forward, status file), `setup fast|full` and `apply`.
 
-`auto --follow S` (the app adds `--follow 10` with the Basalt engine, which keeps no map of its own): once the room is in
-place, it recognises the room again every S seconds and writes only the offset, marked as a drift correction (`drift 1`,
-`docs/libpibridge-anchor.md`). The tracker glides to it, keeps the user's recenter and applies its vertical; SteamVR's
-chaperone and the bounds stay as the start set them. A fix counts when it is sure (sigma <= 1 cm / 0.5 deg, rms <= 1.5
-deg); a jump (> 25 cm or 5 deg from the offset in use) only when the next fix agrees. SteamVR backend only (Monado's
-offset carries the whole room setup). It ends with the session or when another writer takes the lease (a room setup). The offset goes through the
-writer lease (`docs/libpibridge-anchor.md`); the tracker glides to every change after the session's first.
+`auto --confirm S` (the app adds `--confirm 12` with the Basalt engine, which keeps no map of its own; 2026-11-21): the
+start fix is taken within seconds of the engine's start, before Basalt has settled (live: the fix at 2.5 s stood
+15 cm / 4.3 deg from the one 16 s later), so S seconds after the room is in place it is recognised once more (6 s of
+frames) and, when the new fix differs by over 3 cm or 1 deg, the offset is rewritten as a drift correction (`drift 1`,
+`docs/libpibridge-anchor.md`: the tracker glides to it and keeps the user's recenter). A fix counts when it is sure
+(sigma <= 1 cm / 0.5 deg, rms <= 1.5 deg); a jump (> 25 cm or 5 deg) only when the next fix agrees; at most four
+recognitions, then the start fix stays. The tool is done after that: the room is not touched again in the session.
 
-**Filtered follow (2026-11-20, off by default).**
-- `PIBRIDGE_ROOM_FOLLOW_TAU=20` turns it on: a room fix every ~4 s (1 s pause, 3 s of frames:
+`auto --follow S` (retired as the app's default, 2026-11-21): the same recognition every S seconds for the whole
+session, writing every fix as a drift correction. Live it did harm: a fix scatters 1-3 cm / 0.3-1.1 deg with where
+the head stands, every one was applied (19 glides in a 4 min Beat Saber session, the offset's z spread over 10 cm),
+and the user saw the world slide by centimetres every 10-16 s; whether Basalt drifts enough over a long session to
+need any correction at all is not measured (the vertical "drift" seen in a 7 min session was posture). Still there
+for experiments (`PIBRIDGE_ROOM_FOLLOW=0` turns both off):
+- `PIBRIDGE_ROOM_FOLLOW_TAU=20` filters the follow: a room fix every ~4 s (1 s pause, 3 s of frames:
   `PIBRIDGE_ROOM_FOLLOW_GAP`, `PIBRIDGE_ROOM_FOLLOW_WIN`), filtered with this time constant, written in 1 mm steps.
 - `PIBRIDGE_DRIFT_GLIDE=hidden` makes pibridge-headtrack glide a drift correction mostly while the head turns.
-- It is off because live, a single fix moved by centimetres with where the head stood. Following such fixes every few
-  seconds dragged the world after the user's lean, with a delay.
-- `PIBRIDGE_ROOM_FOLLOW=0` turns the follow off altogether.
+- SteamVR backend only (Monado's offset carries the whole room setup). It ends with the session or when another writer
+  takes the lease (a room setup).
 
 Not ported / different:
 - PiBridge changes (2026-10-19): under SteamVR (the session pid is pibridge-headtrack, or a vrserver with Monado's

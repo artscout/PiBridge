@@ -627,6 +627,27 @@ void Config::set_legacy_window() {
     confirm_n = 1;
 }
 
+std::optional<V3> Fuser::shown_velocity(std::uint64_t t) const {
+    if (!cfg.track_vel || !last_ || !ext_vel_ || ext_vel_->first != last_->t) {
+        return std::nullopt;
+    }
+    if (static_cast<double>(rs::sat_sub(t, last_->t)) * 1e-9 > 0.1) {
+        return std::nullopt;
+    }
+    return ext_vel_->second;
+}
+
+std::optional<V3> Fuser::gyro_rate(std::uint64_t t) const {
+    if (raw_.empty() || rs::sat_sub(t, raw_.back().first) > 50'000'000u) {
+        return std::nullopt;
+    }
+    const auto c = active_calib();
+    if (!c) {
+        return std::nullopt;
+    }
+    return c->omega(raw_.back().second);
+}
+
 Config Config::pibridge() {
     Config c;
     // the inertial position (ins_s) was better on the synthetic IMU but worse on both real takes (overshoot after
@@ -641,7 +662,11 @@ Config Config::pibridge() {
     c.track_vel = true;
     c.track_acc = true;
     c.trust_tracker = true;
-    c.smooth_s = 0.03;
+    // 2026-11-22: 15 ms (was 30). 0 was tried against the lag at swing reversals (the shown pose trailed Pimax's by
+    // 3-5 cm and ran 1-5 cm past the hand); the lag was the delivery (no velocity to SteamVR), not this. With the
+    // linear velocity published, 30 and 15 both played right (sessions 01:05, 01:16: optical 93 %, low-speed jitter
+    // 1.7 mm either way); 15 keeps half the lag. PIBRIDGE_CTRL_SMOOTH_MS.
+    c.smooth_s = 0.015;
     c.smooth_still_s = 0.15;
     return c;
 }

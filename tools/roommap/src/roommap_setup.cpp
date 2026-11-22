@@ -46,7 +46,7 @@ const char* SETUP_HELP =
     "    and play area, forward by trigger or holding still; full = map walk (60 s), floor touch, traced boundary, forward.\n"
     "    Saves NAME/room-setup.toml and puts the room in place (needs Monado with 6DoF and the anchor hook).\n"
     "pibridge-roommap setup show [--name NAME]\n"
-    "pibridge-roommap auto [--name NAME] [--wait S] [--status FILE]\n"
+    "pibridge-roommap auto [--name NAME] [--wait S] [--status FILE] [--confirm S] [--follow S]\n"
     "    at a session start: wait for Monado's head ring, recognise the room (retries for --wait s, default 120),\n"
     "    apply floor + centre + forward; state in $XDG_RUNTIME_DIR/omarchyvr-room.status";
 
@@ -1200,9 +1200,18 @@ R<void> cmd_setup(Args v) {
 // and applies its vertical); SteamVR's chaperone and the bounds stay as the start set them. A fix is taken when it is
 // sure (sigma <= 1 cm / 0.5 deg, rms <= 1.5 deg); a jump (> 25 cm or 5 deg from the offset in use) only when the next
 // fix agrees with it.
-R<void> follow_room(const std::string& dir, const std::string& name, std::uint32_t pid, double every_s, const MapId& map_id) {
+//
+// auto --confirm S (PiBridge 2026-11-21, the app's default for Basalt in place of --follow): the same machinery once.
+// The start fix is taken within seconds of the engine's start, when Basalt has not settled (live 21:12: the fix at
+// 2.5 s stood 15 cm / 4.3 deg from the one 16 s later), so S seconds after the room is in place the room is recognised
+// once more and the offset rewritten (as a drift correction: glides, keeps the user's recenter) when it differs by
+// over 3 cm or 1 deg; then the tool is done. The periodic follow applied every fix's 1-3 cm / 0.3-1 deg scatter as a
+// correction (19 glides in a 4 min session), which is what the user saw as the world moving.
+R<void> follow_room(const std::string& dir, const std::string& name, std::uint32_t pid, double every_s, const MapId& map_id,
+                    bool once) {
+    const char* what = once ? "confirm" : "follow";
     if (const char* e = std::getenv("PIBRIDGE_ROOM_FOLLOW"); e != nullptr && std::string_view(e) == "0") {
-        std::printf("follow: off (PIBRIDGE_ROOM_FOLLOW=0)\n");
+        std::printf("%s: off (PIBRIDGE_ROOM_FOLLOW=0)\n", what);
         return {};
     }
     if (pibridge::anchor::backend_from_env() != pibridge::anchor::Backend::SteamVr) {
@@ -1236,12 +1245,23 @@ R<void> follow_room(const std::string& dir, const std::string& name, std::uint32
     const std::string win_arg = rf::fixed(win_s, 1);
     Alignment filt = written;
     auto last_fix = std::chrono::steady_clock::now();
-    std::printf("follow: recognising the room every %s s (%s s of frames) to correct the tracker's drift%s\n",
-                rf::fixed(gap_s + win_s, 0).c_str(), win_arg.c_str(),
-                tau > 0.0 ? (", filtered (tau " + rf::fixed(tau, 0) + " s)").c_str() : "");
+    if (once) {
+        std::printf("confirm: recognising the room once more %s s after the start fix (%s s of frames); the offset is "
+                    "rewritten when it differs by over 3 cm or 1 deg\n",
+                    rf::fixed(gap_s, 0).c_str(), win_arg.c_str());
+    } else {
+        std::printf("follow: recognising the room every %s s (%s s of frames) to correct the tracker's drift%s\n",
+                    rf::fixed(gap_s + win_s, 0).c_str(), win_arg.c_str(),
+                    tau > 0.0 ? (", filtered (tau " + rf::fixed(tau, 0) + " s)").c_str() : "");
+    }
     std::fflush(stdout);
-    std::size_t applied = 0, unsure = 0, missed = 0;
+    std::size_t applied = 0, unsure = 0, missed = 0, attempts = 0;
     for (;;) {
+        if (once && attempts >= 4) {
+            std::printf("confirm: no sure fix in %zu attempts: the start fix stays\n", attempts);
+            return {};
+        }
+        attempts++;
         for (double w = 0; w < gap_s; w += 1.0) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
             if (!alive(pid) || ring_owner() != pid) {
@@ -1283,7 +1303,7 @@ R<void> follow_room(const std::string& dir, const std::string& name, std::uint32
         if (!al.close(ref, 0.25, 5.0)) {
             if (!(pending && al.close(*pending, 0.05, 1.0))) {
                 pending = al;
-                std::printf("follow: a jump from the offset in use (%s): waiting for the next fix to agree\n",
+                std::printf("%s: a jump from the offset in use (%s): waiting for the next fix to agree\n", what,
                             fmt_align(al).c_str());
                 continue;
             }
@@ -1305,7 +1325,13 @@ R<void> follow_room(const std::string& dir, const std::string& name, std::uint32
             }
             al = filt;
         }
-        if (al.close(written, tau > 0.0 ? 0.001 : 0.003, tau > 0.0 ? 0.02 : 0.05)) {
+        if (once && al.close(written, 0.03, 1.0)) {
+            std::printf("confirm: the start fix holds (%s mm / %s deg off): done\n",
+                        rf::fixed(g::norm(g::sub(al.t, written.t)) * 1e3, 0).c_str(),
+                        rf::fixed(rf::to_degrees(std::abs(align::wrap(al.yaw - written.yaw))), 2).c_str());
+            return {};
+        }
+        if (!once && al.close(written, tau > 0.0 ? 0.001 : 0.003, tau > 0.0 ? 0.02 : 0.05)) {
             continue; // no drift worth a write
         }
         if (auto l = take_lease(pid, anchor::Role::Auto); !l) {
@@ -1320,10 +1346,13 @@ R<void> follow_room(const std::string& dir, const std::string& name, std::uint32
         const double dm = g::norm(g::sub(al.t, written.t));
         const double dd = rf::to_degrees(std::abs(align::wrap(al.yaw - written.yaw)));
         applied++;
-        std::printf("follow: drift corrected by %s mm / %s deg (offset %s)\n", rf::fixed(dm * 1e3, 0).c_str(),
-                    rf::fixed(dd, 2).c_str(), fmt_align(al).c_str());
+        std::printf("%s: %s by %s mm / %s deg (offset %s)\n", what, once ? "start fix corrected" : "drift corrected",
+                    rf::fixed(dm * 1e3, 0).c_str(), rf::fixed(dd, 2).c_str(), fmt_align(al).c_str());
         std::fflush(stdout);
         written = al;
+        if (once) {
+            return {};
+        }
     }
 }
 
@@ -1345,6 +1374,10 @@ R<void> cmd_auto(Args v) {
     auto follow = num_f64(v, "--follow", 0.0);
     if (!follow) {
         return std::unexpected(follow.error());
+    }
+    auto confirm = num_f64(v, "--confirm", 0.0);
+    if (!confirm) {
+        return std::unexpected(confirm.error());
     }
     if (auto d = done(v); !d) {
         return d;
@@ -1399,7 +1432,10 @@ R<void> cmd_auto(Args v) {
             write_status(status, "ok", name, pid,
                          "Room \"" + name + "\" in place after " + rf::fixed(secs(t0), 0) + " s" + extra + ".");
             if (*follow > 0.0) {
-                return follow_room(dir, name, pid, *follow, map_id);
+                return follow_room(dir, name, pid, *follow, map_id, false);
+            }
+            if (*confirm > 0.0) {
+                return follow_room(dir, name, pid, *confirm, map_id, true);
             }
             return {};
         }

@@ -531,11 +531,21 @@ the tested path. Choose **Inside-out** on the Dashboard (or the Tracking page) a
 Common to both engines: CustomHeadsetOpenVR with all five patches, including `chovr-linux-headtrack.patch` (section
 5.3); `pibridge-cam`, `pibridge-ctrltrack` and `pibridge-headtrack` (installed with the app, section 2); and the
 headset's factory **camera calibration**
-(`device_calibration_<serial>.xml`, copied below, or set as `rec_cam_calib`). Then pick one head-tracking engine on the
-Tracking page (**Tracking engine**):
+(`device_calibration_<serial>.xml`, copied below, or set as `rec_cam_calib`). The engines are chosen on the Tracking
+page, the head (**Head tracking engine**) and the controllers (**Controller tracking engine**) separately:
 
-**A) Pimax — the default, matches Pimax Play.** Pimax Play's own head-SLAM and controller-LED engine, run under Wine
-(`winbridge`; the full design and rationale are in [WINBRIDGE.md](WINBRIDGE.md)). One-time setup:
+**A) PiBridge's own tracking — the default (since 2026-11-22).** The open-source Basalt visual-inertial tracker on the
+two lower cameras plus the IMU, loaded by `pibridge-headtrack` directly as a VIT library with PiBridge's output layer;
+the controllers from `pibridge-ctrltrack` (the Pimax-scheme sliding-window tracker) fused with their IMU. Build
+`libbasalt.so` separately (the Basalt fork with the VIT interface, from the Monado project) and put it where the app
+finds it — `~/.local/lib/pibridge/`, `/usr/local/lib/`, `/usr/lib/`, or set `rec_basalt_lib`. PiBridge generates the
+base Basalt config from the headset calibration at start; the tunables (detection grid, camera count, accel/gyro bias,
+drift hold) are on the Tracking page, documented in [TRACKING.md](TRACKING.md). Nothing else to install: no Wine, no
+Pimax files.
+
+**B) Pimax Play's own engines — optional, if the built-in tracking does not satisfy you.** Pimax Play's head-SLAM and
+controller-LED engine, run under Wine (`winbridge`; the full design and rationale are in [WINBRIDGE.md](WINBRIDGE.md)).
+One-time setup:
 
 1. Install Wine and MinGW-w64 (section 1).
 2. Copy Pimax Play's files from a Windows PC into `~/.local/share/pibridge/windata/`: the `Program Files/Pimax/Runtime`
@@ -559,8 +569,9 @@ Tracking page (**Tracking engine**):
 
    The app finds the two files in `~/.local/share/pibridge/winbridge/`, in `<prefix>/lib/pibridge/winbridge/`, or in
    the source tree's `winbridge/`; `rec_winbridge=` and `rec_vit_winbridge=` in `pibridge.conf` name other paths.
-4. On the Tracking page choose **Tracking engine: Pimax**; it tells you in plain words what is still missing
-   (Wine, the kit, or the two files from step 3).
+4. On the Tracking page choose **Head tracking engine: Pimax** (and **Controller tracking engine: Pimax LED engine**,
+   or keep PiBridge's controllers with Pimax's head); it tells you in plain words what is still missing (Wine, the
+   kit, or the two files from step 3).
 5. **There is nothing to start by hand, and no service for it.** winbridge is not a daemon and pibridge-keepalived
    does not start it. The app runs it inside the tracking session: at every **START VR** it starts
    `wine winbridge.exe` once the camera broker is up, before `pibridge-headtrack` and SteamVR, and stops it with the
@@ -571,13 +582,6 @@ Tracking page (**Tracking engine**):
 6. After a **Pimax Play update** on Windows, copy the kit again (step 2). winbridge itself needs rebuilding only after
    a PiBridge update that changes it (run step 3 again).
 
-**B) Basalt — open source, the fallback.** The Basalt visual-inertial tracker on the two lower cameras plus the IMU,
-loaded by `pibridge-headtrack` directly as a VIT library; the controllers come from `pibridge-ctrltrack`. Build
-`libbasalt.so` separately (the Basalt fork with the VIT interface, from the Monado project) and put it where the app
-finds it — `~/.local/lib/pibridge/`, `/usr/local/lib/`,
-`/usr/lib/`, or set `rec_basalt_lib`. PiBridge generates the base Basalt config from the headset calibration at start;
-the tunables (detection grid, camera count, accel/gyro bias, drift hold) are on the Tracking page, documented in
-[TRACKING.md](TRACKING.md). Choose **Tracking engine: Basalt**.
 
 ## 7.2 The Monado backend (optional)
 

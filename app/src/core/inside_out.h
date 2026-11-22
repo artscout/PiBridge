@@ -49,7 +49,8 @@ inline constexpr char kCamAe[] = "io_cam_ae";             // on | dry | off     
 inline constexpr char kCamAeModel[] = "io_cam_ae_model";  // crystal-super | auto PIMAX_CAM_AE_MODEL
 inline constexpr char kCamAeLaw[] = "io_cam_ae_law";      // new | old            PIMAX_CAM_AE_LAW
 inline constexpr char kCamFps[] = "io_cam_fps";           // 50 | 60              camera capture fps (broker --fps); 60 = 30 Hz controller optics
-inline constexpr char kCtrlTrack[] = "io_ctrl_track";     // on | off             PIMAX_CTRL_TRACK + pimax-ctrltrack
+inline constexpr char kCtrlTrack[] = "io_ctrl_track";
+inline constexpr char kCtrlEngine[] = "io_ctrl_engine";   // pimax | ours        Pimax's LED engine (needs the Pimax head engine) | pibridge-ctrltrack     // on | off             PIMAX_CTRL_TRACK + pimax-ctrltrack
 inline constexpr char kCtrlAngle[] = "io_ctrl_angle";     // -20..70 (deg)        PIMAX_CTRL_ANGLE
 inline constexpr char kCtrlLost[] = "io_ctrl_lost_s";     // 1..10 (s)            PIMAX_CTRL_TRACK_LOST_S
 inline constexpr char kCtrlSteady[] = "io_ctrl_steady";   // on | off             PIMAX_CTRL_TRACK_HYST
@@ -66,6 +67,9 @@ enum class CamAe { On, Dry, Off };
 // (pimax_slam.pi.dll of Pimax Play, run under Wine by winbridge.exe; Monado reaches it through
 // libpibridge_vit_winbridge.so, docs/WINBRIDGE.md).
 enum class SlamEngine { Basalt, Pimax };
+// Who tracks the controllers: Pimax's LED engine (in the same winbridge as its head engine, so only with
+// SlamEngine::Pimax and the kit's LED models) or PiBridge's pibridge-ctrltrack (always with Basalt).
+enum class CtrlEngine { Pimax, Ours };
 
 inline constexpr int kCtrlAngleMin = -20; // pimax_ctrl.c: PIMAX_CTRL_ANGLE -20..+70, default +30
 inline constexpr int kCtrlAngleMax = 70;
@@ -77,7 +81,7 @@ struct IoSettings {
     IoApps apps = IoApps::SteamVr;
     bool homeScene = true; // pibridge-home in the headset while the session runs with apps through Monado directly
     bool slam = true;
-    SlamEngine slamEngine = SlamEngine::Pimax; // Pimax Play's engine; Basalt is the open-source fallback
+    SlamEngine slamEngine = SlamEngine::Basalt; // PiBridge's own tracking (2026-11-22); Pimax's engines under Wine optional
     int grid = 30;
     // Head tracking cameras: 2 = the lower tracking pair (0, 1), 4 = also the upper side pair (2, 3). 2 until a live
     // take 4 vs 2 decides (docs/ROADMAP.md 1b, docs/TRACKING.md).
@@ -96,6 +100,7 @@ struct IoSettings {
     bool camAeNewLaw = true;
     int camFps = 60; // io_cam_fps: 50 or 60 (broker --fps)
     bool ctrlTrack = true;
+    CtrlEngine ctrlEngine = CtrlEngine::Ours;      // pibridge-ctrltrack; Pimax's LED engine only with its head engine
     int ctrlAngle = 52; // the reader's default since 2.0.1 (the Pimax controllers' grip angle)
     int ctrlLostS = 4;
     bool ctrlSteady = true;
@@ -153,6 +158,10 @@ bool pimaxSlamReady(const RecSetup& s, QString* why = nullptr);
 // The controllers come from Pimax's LED engine in the same winbridge (optical controller tracking on, the Pimax
 // head engine running): PIMAX_CTRL_ENGINE=1 for the driver, and pimax-ctrltrack is not started.
 bool pimaxCtrlEngine(const RecSetup& s);
+// Pimax's head engine with its LED models, but the user chose PiBridge's controller tracking (io_ctrl_engine=ours):
+// winbridge leaves its LED engine off (PIBRIDGE_WB_CTRL=0), pibridge-headtrack reads pibridge-ctrltrack
+// (PIBRIDGE_CTRL_ENGINE=0), and pibridge-ctrltrack runs as with Basalt.
+bool oursWithPimaxHead(const RecSetup& s);
 // The text of the driver env file (KEY=VALUE lines, as crystal-6dof.sh writes ~/.config/omarchyvr/steamvr-driver.env).
 QString driverEnvFileText(const IoSessionEnv& e);
 

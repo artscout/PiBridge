@@ -35,7 +35,9 @@ session (START VR on the Dashboard; the settings are on the Tracking page, [TRAC
   `$XDG_RUNTIME_DIR/pibridge/recenter-request` is taken as a press (checked ~3 times a second).
 - **Haptics**: CustomHeadsetOpenVR writes `$XDG_RUNTIME_DIR/pimax-haptic-request` ("SLOT AMP MS"), headtrack sends it.
 - **Output**: `/dev/shm/pibridge-crystal-pose` (`libpibridge-hmd` `pose_shm.h`, source 2 = headtrack) every 1 ms with
-  the sample time and velocities; SteamVR predicts to the display time. The file is written in one `pwrite` (since
+  the sample time and velocities; SteamVR predicts to the display time. Our controllers too (2026-11-22): the
+  tracker's velocity and the gyro's rate while optical, none while held; the driver passes them with the sample's age
+  (it zeroed them from 2026-11-20 to 2026-11-22: a frame of lag, the saber running on at swing reversals). The file is written in one `pwrite` (since
   2026-11-21): the earlier four-step seqlock write left it torn for readers whenever headtrack's output thread was
   preempted between the steps, which under full CPU load (Beat Saber + shadow engines, load 8.5 on 8 cores) happened
   250 times in 7 minutes; CustomHeadsetOpenVR then sent SteamVR one untracked head pose for a 2 ms tick and the view
@@ -215,3 +217,39 @@ Not needed: neither headtrack nor the camera broker asks for it, and the picture
 
 `io_headtrack` (default on) is not in the UI; `off` selects the older session through Monado's SteamVR driver, whose
 code is still in the app but which PiBridge no longer builds, ships or supports.
+
+## Stillness check (2026-11-21)
+
+First evening with `--engine basalt` driving SteamVR (Beat Saber, 4 min): playable; the user saw the head "sway a
+little" in the SteamVR home and a slightly lagging recovery. The driver saw 0 untracked and 0 invalid head poses
+(46 torn reads, all held). What the logs can and cannot say:
+
+- A `PIBRIDGE_CTRL_DUMP` carries the head pose on every controller IMU row (`I,0,...` columns 16-22, ~220 Hz), so a
+  dump doubles as a head-output log. `ext/slamrec/tools/head_wobble_dump.py` looks at quiet 2 s windows (head turning
+  < 3-6 deg/s, moving < 5 cm/s): Basalt live, detrended position RMS 1.3/0.7/1.7 mm (x/y/z), orientation
+  0.05-0.08 deg; the Pimax engine's dump (win4) 0.5-1.7 mm and 0.15-0.3 deg in its few quiet windows. No extra wobble
+  of Basalt at 2 s scale, and no holds or steps while worn.
+- The head shadow CSVs (`head_wobble_shadow.py`, `head_wobble_shadow_rot.py`, src 0 vs src 2) put Basalt's output and
+  Pimax's raw pose side by side: orientation disagreement 0.02-0.03 deg RMS (nothing); position difference 0.7-1.4 mm
+  RMS in 2 s windows, residuals barely correlated (each engine's own mm noise, Pimax's is not smaller); in 6 s windows
+  Basalt's vertical wanders 2.4 mm RMS (p90 5 mm, ~0.3 Hz) against Pimax's 0.9 mm. That slow vertical breathing (and
+  the ~1 cm/min climb seen earlier) is the only measurable candidate for the "sway"; a 2-camera shadow, 4 windows.
+- Not in any log: the live session's headtrack stdout (3DoF episodes, corrections, re-snaps) and the output's age.
+  Next time: `pibridge-headtrack ... 2>&1 | tee /mnt/g/Devel/pibridge-rec/headtrack-HHMM.log`, and
+  `pibridge-posetap --raw --secs 90 > posetap-basalt.txt` while standing still in the SteamVR home, then the same
+  minute with `--engine pimax`: the two files compare the actual 1 kHz output (steps, ages) of both engines directly.
+- Recovery after a loss is slow by design (`headpose.h`): the re-acquired pose is blended in with tau 0.15 s
+  (0.4 s at rest, `PIMAX_SLAM_TAU_REST_MS`), never faster than 0.1 m/s + half the head speed (`v_min`, `k_v`),
+  rotation tau 0.1 s; re-snap restores the room when yaw agrees within 3 deg. Whether the lag seen was this slide or
+  Basalt's own re-initialisation needs the headtrack log.
+
+**Found the same evening (sessions 21:12 and 21:55):** the "position moves a few centimetres, several times" the user
+saw with Basalt live was the room map's `--follow` (every fix's 1-3 cm / 0.3-1.1 deg scatter applied as a drift
+correction every 10-16 s, 19 glides in 4 min); retired in favour of `auto --confirm 12` (`docs/pibridge-roommap.md`).
+A `PIBRIDGE_ROOM_FOLLOW=0` session of 7 min felt right to the user. Headset on the desk, cameras to the room (take
+`head-shadow-20261121-215517`): Pimax's engine stands to 0.2 mm / 0.001 deg/min over 6 min; raw Basalt runs away
+at ~3 mm/s in one direction and -6..-12 deg/min of yaw, so the shadow's still-hold reset it 30 times in 6 min and the
+held output's yaw drifted -25 deg (each re-zero carries the drifted yaw into the restarted tracker, which repeats its
+init transient). Replayed without resets: a 90 s transient after the put-down (15 cm, -8 deg), then +-3 cm; IMU noise
+models x10 do not change it. Next for the output layer: do not restart the tracker while still (hold the position
+only, or far less often), and hold yaw by the bias-corrected gyro while still rather than by the tracker.

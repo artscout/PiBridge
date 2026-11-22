@@ -66,7 +66,8 @@ private:
     QLabel* reasons_ = nullptr;
 
     pibridge::ui::Toggle* slam_ = nullptr;
-    pibridge::ui::Segmented* engine_ = nullptr; // io_slam_engine: Basalt | Pimax
+    pibridge::ui::Segmented* engine_ = nullptr; // io_slam_engine: Basalt | Pimax (the head)
+    pibridge::ui::Segmented* ctrlEngine_ = nullptr;  // io_ctrl_engine: Pimax's LED engine | PiBridge
     pibridge::ui::Segmented* grid_ = nullptr;
     pibridge::ui::Segmented* cams_ = nullptr;
     pibridge::ui::Segmented* accel_ = nullptr;

@@ -314,6 +314,12 @@ public:
     /// The gyro says the controller is not rotating.
     bool gyro_still(std::uint64_t t) const;
     static double gain(std::uint32_t leds, float rms_px, bool smooth);
+    /// PiBridge (2026-11-22; handed to SteamVR so it predicts the controller to the display time as it does the head):
+    /// the velocity the shown pose is carried with (the tracker's, world, m/s) while the last fix is fresh (age under
+    /// 0.1 s, track_vel), else nullopt; and the controller gyro's latest rate through the calibration (aim frame,
+    /// rad/s; nullopt without a sample in the last 50 ms).
+    std::optional<V3> shown_velocity(std::uint64_t t) const;
+    std::optional<V3> gyro_rate(std::uint64_t t) const;
     std::pair<State, P> get(std::uint64_t t, const P& head) { return get_with(t, head, std::nullopt); }
     std::pair<State, P> get_with(std::uint64_t t, const P& head, std::optional<V3> other);
     /// The optical tracker's velocity of the controller at frame time t (world, m/s): give it before optical(t, ...).

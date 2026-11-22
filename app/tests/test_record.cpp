@@ -731,8 +731,8 @@ TEST(command_lines_and_environment) {
 
 TEST(pimax_slam_engine_environment) {
     RecSetup s = fakeRecSetup(QStringLiteral("/r"));
-    s.io.slamEngine = SlamEngine::Basalt;
     s.io.slamEngine = SlamEngine::Pimax;
+    s.io.ctrlEngine = CtrlEngine::Pimax; // Pimax's LED engine too (ours is the default since 2026-11-22)
     s.io.slamCams = 2; // Basalt's camera setting does not matter for Pimax's engine
     CHECK(pimaxSlamReady(s) && winbridgeWanted(s));
     const IoSessionEnv e = buildIoEnv(s.io, s, 90, QStringLiteral("/r/pimax-basalt.toml"), QString());
@@ -792,11 +792,11 @@ TEST(pimax_slam_engine_environment) {
         CHECK(c.set(k, v));
     }
     CHECK(ioSettings(c).slamEngine == SlamEngine::Pimax);
-    CHECK(ioSettings(Conf(tmp.path() + QStringLiteral("/none.conf"))).slamEngine == SlamEngine::Pimax); // default
+    CHECK(ioSettings(Conf(tmp.path() + QStringLiteral("/none.conf"))).slamEngine == SlamEngine::Basalt); // default (2026-11-22)
 }
 
 TEST(session_pimax_engine_runs_winbridge_before_monado_and_stops_it_after) {
-    Rig r([](RecSetup& s) { s.io.slamEngine = SlamEngine::Pimax; });
+    Rig r([](RecSetup& s) { s.io.slamEngine = SlamEngine::Pimax; s.io.ctrlEngine = CtrlEngine::Pimax; });
     r.dataAtMs = 3000;
     CHECK(r.s->start(RecSession::Mode::Guided, twoSteps(), 0, QStringLiteral("20261020-120000")));
     r.at(600);
@@ -817,14 +817,14 @@ TEST(session_pimax_engine_runs_winbridge_before_monado_and_stops_it_after) {
     CHECK(r.s->runningPids().empty());
 
     // the kit without the controllers' LED models: pibridge-ctrltrack as before
-    Rig rm([](RecSetup& s) { s.io.slamEngine = SlamEngine::Pimax; s.winCtrlModels = false; });
+    Rig rm([](RecSetup& s) { s.io.slamEngine = SlamEngine::Pimax; s.io.ctrlEngine = CtrlEngine::Pimax; s.winCtrlModels = false; });
     rm.s->start(RecSession::Mode::Guided, twoSteps(), 0);
     rm.at(600);
     CHECK((rm.names() == QStringList{QStringLiteral("broker"), QStringLiteral("winbridge"), QStringLiteral("ctrltrack"),
                                      QStringLiteral("monado")}));
 
     // the engine ends during the session: Monado goes on (3DoF), the message says so
-    Rig r2([](RecSetup& s) { s.io.slamEngine = SlamEngine::Pimax; });
+    Rig r2([](RecSetup& s) { s.io.slamEngine = SlamEngine::Pimax; s.io.ctrlEngine = CtrlEngine::Pimax; });
     r2.dataAtMs = 3000;
     r2.s->start(RecSession::Mode::Guided, twoSteps(), 0);
     r2.at(600);

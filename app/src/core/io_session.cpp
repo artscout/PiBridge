@@ -984,8 +984,10 @@ void IoSessionControl::startRoom() {
     spec.program = setup_.roommap;
     spec.args = roomAutoArgs(setup_.roomName);
     if (setup_.io.slam && setup_.io.slamEngine == SlamEngine::Basalt) {
-        // Basalt keeps no map of its own: the room map recognised every 10 s corrects its drift (auto --follow)
-        spec.args << QStringLiteral("--follow") << QString::number(kRoomFollowS);
+        // Basalt keeps no map of its own and has not settled when the start fix is taken: the room is recognised once
+        // more a few seconds later and the start fix corrected if it was off (auto --confirm). The periodic follow
+        // (auto --follow) is gone: it applied every fix's centimetre scatter as a correction (2026-11-21).
+        spec.args << QStringLiteral("--confirm") << QString::number(kRoomConfirmS);
     }
     // the room tool's own switches from the extra environment (PIBRIDGE_ROOM_FOLLOW, PIBRIDGE_ROOM_FOLLOW_TAU, ...)
     for (const QString& w : setup_.extraEnv) {

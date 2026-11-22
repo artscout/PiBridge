@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <format>
 #include <string_view>
 
@@ -123,6 +124,31 @@ WinTracker::WinTracker(WinTrackCfg c, TrackCfg fallback) : cfg(c), fallback_(fal
     }
     if (const char* e = std::getenv("WT_REFIT")) {
         cfg.refit_turned = std::string_view(e) != "0";
+    }
+    if (const char* e = std::getenv("WT_TENTATIVE")) {
+        cfg.tentative_below = static_cast<std::size_t>(std::atoi(e));
+        cfg.tentative_one_cam = cfg.tentative_below > 0;
+    }
+    if (const char* e = std::getenv("WT_TENTATIVE_RMS")) {
+        cfg.tentative_rms_px = std::atof(e);
+    }
+    if (const char* e = std::getenv("WT_TENTATIVE_MIN")) {
+        cfg.tentative_min_leds = static_cast<std::size_t>(std::atoi(e));
+    }
+    if (const char* e = std::getenv("WT_TENTATIVE_ONECAM")) {
+        cfg.tentative_one_cam = std::string_view(e) != "0";
+    }
+    if (const char* e = std::getenv("WT_WARM_ROT")) {
+        // "base,per_s"; "0": the flat 30 deg
+        cfg.warm_rot_deg = std::atof(e);
+        cfg.warm_rot_deg_per_s = 0.0;
+        if (const char* k = std::strchr(e, ',')) {
+            cfg.warm_rot_deg_per_s = std::atof(k + 1);
+        }
+        if (cfg.warm_rot_deg <= 0.0) {
+            cfg.warm_rot_deg = 30.0; // off: the flat 30 for one-camera fits too
+            cfg.warm_rot_deg_per_s = 0.0;
+        }
     }
     for (Hand& h : h_) {
         h.win = Window(cfg.window);
@@ -871,6 +897,48 @@ std::optional<std::pair<WinTracker::HypFrame, g::Vec3>> WinTracker::hyp_step(std
     return out;
 }
 
+// ---------------------------------------------------------------- tentative relocks
+
+namespace {
+template <class PerCam>
+std::size_t cams_seen(const PerCam& per_cam) {
+    std::size_t n = 0;
+    for (const auto& m : per_cam) {
+        n += m.empty() ? 0 : 1;
+    }
+    return n;
+}
+} // namespace
+
+void WinTracker::tent_save(Hand& hd, const Window& win_before) {
+    hd.tentative = true;
+    hd.tent_win = win_before;
+    hd.tent_mode = hd.mode;
+    hd.tent_lost_t = hd.lost_t;
+    hd.tent_lost_count = hd.lost_count;
+    hd.tent_lost_threshold = hd.lost_threshold;
+    hd.tent_last_update = hd.last_update;
+    hd.tent_good_p = hd.good_p;
+    hd.tent_last_valid = hd.last_valid;
+    hd.tent_frames_tracked = hd.frames_tracked;
+    counts.relocks_tentative += 1;
+}
+
+void WinTracker::tent_revert(Hand& hd) {
+    hd.win = *hd.tent_win;
+    hd.mode = hd.tent_mode;
+    hd.lost_t = hd.tent_lost_t;
+    hd.lost_count = hd.tent_lost_count + 1; // the relock frame counts as lost
+    hd.lost_threshold = hd.tent_lost_threshold;
+    hd.last_update = hd.tent_last_update;
+    hd.good_p = hd.tent_good_p;
+    hd.last_valid = hd.tent_last_valid;
+    hd.frames_tracked = hd.tent_frames_tracked;
+    hd.tentative = false;
+    hd.tent_win.reset();
+    counts.relocks_reverted += 1;
+}
+
 // ---------------------------------------------------------------- the frame
 
 std::vector<Fix> WinTracker::step(const Rig& rig, const LedFrame& lf, std::uint64_t frame_ns) {
@@ -1003,6 +1071,21 @@ std::vector<Fix> WinTracker::step(const Rig& rig, const LedFrame& lf, std::uint6
                 counts.relock_late += 1;
             }
         }
+        if (hd.tentative && p.m && p.m->count < cfg.tentative_min_leds) {
+            p.m.reset(); // a weaker update does not confirm a tentative relock
+        }
+        if (!p.m && hd.tentative) {
+            // the tentative relock did not hold: back to the lost state it came from, the search goes on
+            if (dbg) {
+                std::fprintf(stderr, "wt %llu slot %zu TENTATIVE reverted t %llu (lost %u before the relock)\n",
+                             static_cast<unsigned long long>(frame_no_), s, static_cast<unsigned long long>(frame_ns),
+                             hd.tent_lost_count);
+            }
+            tent_revert(hd);
+            counts.misses += 1;
+            continue;
+        }
+        const bool was_lost = hd.mode == Mode::Lost;
         if (!p.m) {
             counts.misses += 1;
             if (dbg) {
@@ -1101,6 +1184,36 @@ std::vector<Fix> WinTracker::step(const Rig& rig, const LedFrame& lf, std::uint6
         counts.vis_rms_sum += hd.win.last_vis_rms_px;
         counts.vis_rms_n += 1;
         counts.inliers_sum += p.m->count;
+        bool hold_fix = false;
+        if (hd.tentative && hd.win.last_vis_rms_px > cfg.tentative_rms_px) {
+            // the update holds the relock only loosely: back to the lost state
+            if (dbg) {
+                std::fprintf(stderr, "wt %llu slot %zu TENTATIVE reverted t %llu (rms %.2f with n %zu)\n",
+                             static_cast<unsigned long long>(frame_no_), s, static_cast<unsigned long long>(frame_ns),
+                             hd.win.last_vis_rms_px, p.m->count);
+            }
+            tent_revert(hd);
+            counts.misses += 1;
+            continue;
+        }
+        if (hd.tentative) {
+            // held by this update: the relock stands
+            hd.tentative = false;
+            hd.tent_win.reset();
+            counts.relocks_confirmed += 1;
+            if (dbg) {
+                std::fprintf(stderr, "wt %llu slot %zu TENTATIVE confirmed n %zu\n", static_cast<unsigned long long>(frame_no_), s, p.m->count);
+            }
+        } else if (was_lost && cfg.tentative_below > 0 &&
+                   (p.m->count < cfg.tentative_below || (cfg.tentative_one_cam && cams_seen(p.m->per_cam) < 2))) {
+            // the matcher's relock from few LEDs: held back until the next frame holds it
+            tent_save(hd, backup);
+            hold_fix = true;
+            if (dbg) {
+                std::fprintf(stderr, "wt %llu slot %zu TENTATIVE relock (matcher) n %zu lost %u\n",
+                             static_cast<unsigned long long>(frame_no_), s, p.m->count, hd.lost_count);
+            }
+        }
         hd.last_update = frame_ns;
         hd.frames_tracked += 1;
         hd.last_valid = p.m->count;
@@ -1141,13 +1254,15 @@ std::vector<Fix> WinTracker::step(const Rig& rig, const LedFrame& lf, std::uint6
         claim(used, j);
         Found f{s, j, std::nullopt, 0.0, 0};
         pre.push_back(f);
-        Fix fx{s, f, p.m->count < 5, body, g::mat_vec(p.bfw.r, x.v)};
-        st.hand[s] += 1;
-        if (fx.few) {
-            st.few[s] += 1;
+        if (!hold_fix) {
+            Fix fx{s, f, p.m->count < 5, body, g::mat_vec(p.bfw.r, x.v)};
+            st.hand[s] += 1;
+            if (fx.few) {
+                st.few[s] += 1;
+            }
+            last_fix_ns_ = frame_ns;
+            out.push_back(std::move(fx));
         }
-        last_fix_ns_ = frame_ns;
-        out.push_back(std::move(fx));
         if (dbg) {
             std::fprintf(stderr, "wt %llu slot %zu upd t %llu n %zu (pred %zu err %.1f) kind %d dt %.3f dr %.1f rms %.2f cost %.1f v (%.2f %.2f %.2f) ba (%.2f %.2f %.2f) bg (%.3f %.3f %.3f) steps %zu%s\n",
                          static_cast<unsigned long long>(frame_no_), s, static_cast<unsigned long long>(frame_ns), p.m->count, p.m->pred_count, p.m->pred_err, p.m->kind,
@@ -1375,6 +1490,10 @@ std::vector<Fix> WinTracker::step(const Rig& rig, const LedFrame& lf, std::uint6
                 // (Letting any own-model fit through while the prediction is not credible was tried on win2: 5-LED
                 // fits 0.8-1.1 m above the head were accepted, hand 1 lost 32 -> 43 s and 6 more >15 cm episodes.)
                 const bool strong = why == nullptr && gf.model == s && d_other > 0.15 && jj->total() >= cfg.relock_strong;
+                if (why == nullptr && jj->cams() < 2 &&
+                    e > std::min(30.0, cfg.warm_rot_deg + cfg.warm_rot_deg_per_s * age)) {
+                    why = "turned for the age (one camera)"; // the gyro carries the orientation to degrees per second
+                }
                 if (why == nullptr && d > 0.15 + 1.0 * age && !strong) {
                     why = "far from the prediction";
                 }
@@ -1450,6 +1569,13 @@ std::vector<Fix> WinTracker::step(const Rig& rig, const LedFrame& lf, std::uint6
                 counts.relocks_strong += best_strong ? 1 : 0;
             }
             if (start) {
+                // a warm relock from few LEDs is tentative: the next frame's matcher update must hold it
+                const bool tentative = !cold[s] && cfg.tentative_below > 0 &&
+                                       (start_j->total() < cfg.tentative_below ||
+                                        (cfg.tentative_one_cam && start_j->cams() < 2));
+                if (tentative) {
+                    tent_save(hd, hd.win);
+                }
                 hd.win.reset(*start);
                 hd.mode = Mode::Tracking;
                 hd.last_update = frame_ns;
@@ -1461,14 +1587,16 @@ std::vector<Fix> WinTracker::step(const Rig& rig, const LedFrame& lf, std::uint6
                 claim(used, *start_j);
                 Found f{s, *start_j, std::nullopt, 0.0, 0};
                 pre.push_back(f);
-                Fix fx{s, f, false, start_j->body_from_model, g::mat_vec(bfw.r, start->v)};
-                st.hand[s] += 1;
-                last_fix_ns_ = frame_ns;
-                out.push_back(std::move(fx));
+                if (!tentative) {
+                    Fix fx{s, f, false, start_j->body_from_model, g::mat_vec(bfw.r, start->v)};
+                    st.hand[s] += 1;
+                    last_fix_ns_ = frame_ns;
+                    out.push_back(std::move(fx));
+                }
                 if (dbg) {
-                    std::fprintf(stderr, "wt %llu slot %zu %s leds %zu at (%.3f %.3f %.3f)\n",
+                    std::fprintf(stderr, "wt %llu slot %zu %s leds %zu at (%.3f %.3f %.3f)%s\n",
                                  static_cast<unsigned long long>(frame_no_), s, cold[s] ? "ACQUIRED" : "relocked",
-                                 start_j->total(), start->p[0], start->p[1], start->p[2]);
+                                 start_j->total(), start->p[0], start->p[1], start->p[2], tentative ? " TENTATIVE" : "");
                 }
             }
         }

@@ -116,14 +116,15 @@ SteamVR, so games start through SteamVR as usual, the same way as the original C
 PiBridge's Monado instead ([docs/monado.md](docs/monado.md)). The headset's cameras and IMU feed one of
 two interchangeable head-tracking engines, chosen on the Tracking page:
 
-- **Pimax Play's own engine** — the default, for parity with Windows: `pimax_slam.pi.dll` run under Wine in a small
-  host (`winbridge`) and reached through a VIT library, with the headset's factory calibration — the same tracking
-  Pimax Play uses on Windows ([docs/WINBRIDGE.md](docs/WINBRIDGE.md)).
-- **Basalt** — open source, the fallback: the Basalt visual-inertial tracker (loaded directly as a VIT library) on the
-  two lower cameras plus the IMU, with a config PiBridge generates from the headset calibration.
-
-Controllers are found by their LEDs in the cameras (Pimax's LED engine in the same winbridge, or our
-`pibridge-ctrltrack` + IMU fusion). The lens distortion/FOV is a selectable profile on the Display page (Crystal Super
+- **PiBridge's own tracking** — the default (since 2026-11-22): the open-source Basalt visual-inertial tracker (loaded
+  directly as a VIT library) on the two lower cameras plus the IMU, with PiBridge's output layer and a config generated
+  from the headset calibration; the controllers by their LEDs with `pibridge-ctrltrack` + IMU fusion. Nothing of
+  Pimax's is needed beyond the headset's factory calibration.
+- **Pimax Play's own engines** — optional, if the built-in tracking does not satisfy: `pimax_slam.pi.dll` and the
+  controllers' LED engine run under Wine in a small host (`winbridge`) and reached through a VIT library, the same
+  tracking Pimax Play uses on Windows ([docs/WINBRIDGE.md](docs/WINBRIDGE.md)). Needs Wine, MinGW once and Pimax
+  Play's files copied from a Windows PC. The head and the controllers are chosen separately (Pimax's head with our
+  controllers works too). The lens distortion/FOV is a selectable profile on the Display page (Crystal Super
 Oled native: the Pimax compositor geometry; Crystal Super Oled chovr: CustomHeadsetOpenVR's lens shape), both with
 each eye's axis set by a true rotation.
 

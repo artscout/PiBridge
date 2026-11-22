@@ -260,7 +260,7 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
     connect(&control_, &IoSessionControl::changed, this, &TrackingPage::updateSession);
 
     // ---- head tracking
-    auto* head = new pibridge::ui::Card(QStringLiteral("Tracking engine: head and controllers"));
+    auto* head = new pibridge::ui::Card(QStringLiteral("Head tracking"));
     slam_ = toggle(iokey::kSlam);
     addRow(head, QStringLiteral("6DoF head tracking"),
            QStringLiteral("The engine below follows the room in the two tracking cameras plus the IMU (PIMAX_SLAM). "
@@ -268,13 +268,12 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
            slam_, [](const IoSettings& io) { return io.slam; }, engineMissing);
     engine_ = seg({QStringLiteral("Basalt"), QStringLiteral("Pimax")}, iokey::kSlamEngine,
                   {QStringLiteral("basalt"), QStringLiteral("pimax")});
-    addRow(head, QStringLiteral("Tracking engine"),
-           QStringLiteral("Chooses both the head and the controller tracking. Basalt: the open-source head tracker, and "
-                          "PiBridge's own controller tracker (pibridge-ctrltrack). Pimax: Pimax Play's own engines, the "
-                          "head tracker and the controllers' LED engine, with the headset's factory calibration, run "
-                          "under Wine while tracking runs (their files are copied from Pimax Play once, see "
-                          "docs/WINBRIDGE.md). Start and Stop start and stop them with SteamVR."),
-           engine_, [](const IoSettings& io) { return io.slamEngine == SlamEngine::Pimax; },
+    addRow(head, QStringLiteral("Head tracking engine"),
+           QStringLiteral("Who tracks the head. Basalt: the open-source tracker with PiBridge's output layer. Pimax: "
+                          "Pimax Play's own engine with the headset's factory calibration, run under Wine while tracking "
+                          "runs (its files are copied from Pimax Play once, see docs/WINBRIDGE.md). The controllers are "
+                          "chosen separately below; with Basalt they are always PiBridge's."),
+           engine_, [](const IoSettings& io) { return io.slamEngine == SlamEngine::Basalt; },
            [engineMissing](const IoSettings& io, const RecSetup& s) { return engineMissing(io, s); });
     const auto needBase = [basaltOnly](const IoSettings& io, const RecSetup& s) -> QString {
         if (QString w = basaltOnly(io, s); !w.isEmpty()) {
@@ -423,6 +422,33 @@ TrackingPage::TrackingPage(StateSource& source, Conf& conf, IoSessionControl& co
         }
         return io.ctrlTrack ? QString() : QStringLiteral("Optical tracking is off.");
     };
+    ctrlEngine_ = seg({QStringLiteral("Pimax LED engine"), QStringLiteral("PiBridge")}, iokey::kCtrlEngine,
+                      {QStringLiteral("pimax"), QStringLiteral("ours")});
+    addRow(ctrl, QStringLiteral("Controller tracking engine"),
+           QStringLiteral("Who finds the controllers. Pimax LED engine: Pimax Play's own, in the same winbridge as its "
+                          "head engine (so only with the Pimax head engine and the kit's LED models). PiBridge: "
+                          "pibridge-ctrltrack (the Pimax-scheme sliding-window tracker); with the Pimax head engine its LED "
+                          "engine is then left off (PIBRIDGE_WB_CTRL=0, PIBRIDGE_CTRL_ENGINE=0)."),
+           ctrlEngine_, [](const IoSettings& io) { return io.ctrlEngine == CtrlEngine::Ours; },
+           [](const IoSettings& io, const RecSetup& s) -> QString {
+               if (!io.ctrlTrack) {
+                   return QStringLiteral("Optical tracking is off.");
+               }
+               if (io.slamEngine != SlamEngine::Pimax) {
+                   return QStringLiteral("With the Basalt head engine the controllers are PiBridge's (Pimax's LED engine "
+                                         "runs only with its head engine).");
+               }
+               RecSetup cur = s;
+               cur.io = io;
+               if (!pimaxSlamReady(cur)) {
+                   return QStringLiteral("The Pimax engine is not complete: the controllers are PiBridge's.");
+               }
+               if (!s.winCtrlModels) {
+                   return QStringLiteral("The Pimax files have no controller LED models (slam/H1): the controllers are "
+                                         "PiBridge's.");
+               }
+               return QString();
+           });
     ctrlAngle_ = spin(kCtrlAngleMin, kCtrlAngleMax, QStringLiteral(" deg"));
     connect(ctrlAngle_, &QSpinBox::valueChanged, this, [this](int v) { save(iokey::kCtrlAngle, QString::number(v)); });
     addRow(ctrl, QStringLiteral("Controller angle"),
@@ -588,6 +614,7 @@ void TrackingPage::load() {
     camModel_->setCurrent(io_.camAeCrystal ? 0 : 1);
     camLaw_->setCheckedQuiet(io_.camAeNewLaw);
     ctrlTrack_->setCheckedQuiet(io_.ctrlTrack);
+    ctrlEngine_->setCurrent(io_.ctrlEngine == CtrlEngine::Ours ? 1 : 0);
     ctrlAngle_->setValue(io_.ctrlAngle);
     ctrlLost_->setValue(io_.ctrlLostS);
     ctrlSteady_->setCheckedQuiet(io_.ctrlSteady);

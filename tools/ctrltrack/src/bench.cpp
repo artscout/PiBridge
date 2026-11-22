@@ -273,7 +273,7 @@ std::vector<FrameOut> run(const tr::Rig& rig, const std::vector<Frame>& frames, 
         std::fprintf(stderr, "wintrack: updates %llu misses %llu lost frames %llu initing %llu acquisitions %llu relocks %llu "
                              "far resets %llu budget resets %llu | hypotheses %llu (p3p %llu p2p %llu p1p %llu) picked pred %llu "
                              "p3p %llu p2p %llu p1p %llu alt %llu | contested %llu | still strict %llu loose %llu fast-stop %llu | "
-                             "imu gaps %llu | iters %.2f rms %.2f px inliers %.1f | acq hyp %llu drops %llu acc %llu fail %llu other %llu | reverted %llu relock short %llu | misses: no pairs %llu one %llu | ms: match %.2f push %.2f search %.2f per update\n",
+                             "imu gaps %llu | iters %.2f rms %.2f px inliers %.1f | acq hyp %llu drops %llu acc %llu fail %llu other %llu | reverted %llu relock short %llu | tentative %llu confirmed %llu undone %llu | misses: no pairs %llu one %llu | ms: match %.2f push %.2f search %.2f per update\n",
                      (unsigned long long)c.updates, (unsigned long long)c.misses, (unsigned long long)c.lost_frames,
                      (unsigned long long)c.initing_frames, (unsigned long long)c.acquisitions, (unsigned long long)c.relocks,
                      (unsigned long long)c.far_resets, (unsigned long long)c.budget_resets, (unsigned long long)c.hyp_total,
@@ -287,6 +287,8 @@ std::vector<FrameOut> run(const tr::Rig& rig, const std::vector<Frame>& frames, 
                      (unsigned long long)c.hyp_gyro_drops, (unsigned long long)c.hyp_accepted,
                      (unsigned long long)c.hyp_motion_fail, (unsigned long long)c.hyp_other_hand,
                      (unsigned long long)c.reverted, (unsigned long long)c.relock_short,
+                     (unsigned long long)c.relocks_tentative, (unsigned long long)c.relocks_confirmed,
+                     (unsigned long long)c.relocks_reverted,
                      (unsigned long long)c.miss_no_pairs, (unsigned long long)c.miss_one,
                      c.updates ? c.match_ms / (double)c.updates : 0.0, c.updates ? c.push_ms / (double)c.updates : 0.0,
                      c.updates ? c.search_ms / (double)c.updates : 0.0);
@@ -719,11 +721,13 @@ int run_dump(const std::string& path, const tr::Rig& rig, const tr::TrackCfg& cf
     print_metrics(wintrack ? "wintrack (dump)" : imutrack ? "imutrack (dump)" : "frame tracker (dump)", m, 0.0);
     if (std::getenv("BENCH_STATS") != nullptr && wintrack) {
         const auto& c = wtk.counts;
-        std::fprintf(stderr, "wintrack: updates %llu misses %llu lost %llu initing %llu acquisitions %llu relocks %llu far %llu budget %llu | reverted %llu relock short %llu | no pairs %llu one %llu | fallback %llu | imu no acc %llu | ms match %.2f push %.2f search %.2f\n",
+        std::fprintf(stderr, "wintrack: updates %llu misses %llu lost %llu initing %llu acquisitions %llu relocks %llu far %llu budget %llu | reverted %llu relock short %llu | tentative %llu confirmed %llu undone %llu | no pairs %llu one %llu | fallback %llu | imu no acc %llu | ms match %.2f push %.2f search %.2f\n",
                      (unsigned long long)c.updates, (unsigned long long)c.misses, (unsigned long long)c.lost_frames,
                      (unsigned long long)c.initing_frames, (unsigned long long)c.acquisitions, (unsigned long long)c.relocks,
                      (unsigned long long)c.far_resets, (unsigned long long)c.budget_resets, (unsigned long long)c.reverted,
-                     (unsigned long long)c.relock_short, (unsigned long long)c.miss_no_pairs, (unsigned long long)c.miss_one,
+                     (unsigned long long)c.relock_short, (unsigned long long)c.relocks_tentative,
+                     (unsigned long long)c.relocks_confirmed, (unsigned long long)c.relocks_reverted,
+                     (unsigned long long)c.miss_no_pairs, (unsigned long long)c.miss_one,
                      (unsigned long long)c.fallback_frames, (unsigned long long)c.imu_no_acc, c.updates ? c.match_ms / (double)c.updates : 0.0,
                      c.updates ? c.push_ms / (double)c.updates : 0.0, c.updates ? c.search_ms / (double)c.updates : 0.0);
     }

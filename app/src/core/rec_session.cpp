@@ -221,6 +221,9 @@ RecProcSpec winbridgeSpec(const RecSetup& s, const QString& logDir) {
     QString kit = QStringLiteral("Z:") + s.winKit;
     kit.replace(QLatin1Char('/'), QLatin1Char('\\'));
     QStringList env{QStringLiteral("WINEDEBUG=-all"), QStringLiteral("PIBRIDGE_WINDATA=") + kit};
+    if (oursWithPimaxHead(s)) {
+        env << QStringLiteral("PIBRIDGE_WB_CTRL=0"); // the LED engine stays off: pibridge-ctrltrack tracks the controllers
+    }
     // winbridge's own switches from the extra environment (PIBRIDGE_WB_CTRL_THREAD, PIBRIDGE_WB_CAM_ARG6, ...)
     for (const QString& w : s.extraEnv) {
         if (w.startsWith(QStringLiteral("PIBRIDGE_WB_"))) {
@@ -242,6 +245,9 @@ RecProcSpec headtrackSpec(const RecSetup& s, const QString& logDir) {
         // Pimax's engine: all four cameras, its pose at IMU rate (one per camera frame otherwise)
         args << QStringLiteral("--vit") << s.vitBridge.path << QStringLiteral("--cams") << QStringLiteral("0,1,2,3");
         env << QStringLiteral("PIBRIDGE_VIT_POSE_RATE=imu");
+        if (oursWithPimaxHead(s)) {
+            env << QStringLiteral("PIBRIDGE_CTRL_ENGINE=0"); // the controllers from pibridge-ctrltrack, not the LED engine
+        }
         // head shadow mode (PIBRIDGE_HEAD_SHADOW=1): Basalt beside it on the same frames, logged only
         if (s.extraEnv.contains(QStringLiteral("PIBRIDGE_HEAD_SHADOW=1")) && !s.basalt.path.isEmpty()) {
             const QString cfg = s.sessionSlamConfig.isEmpty() ? s.slamConfig.path : s.sessionSlamConfig;

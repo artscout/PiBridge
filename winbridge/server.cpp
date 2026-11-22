@@ -588,7 +588,13 @@ int main(int argc, char** argv) {
     if (const char* a = getenv("PIBRIDGE_LED_HEAD_ALIGN")) g_ledHeadAlign = (atoi(a) != 0);
     if (const char* a = getenv("PIBRIDGE_WB_CTRL_THREAD")) g_ctrlThread = (atoi(a) != 0);
     if (!find_kit() || !init_slam()) return 1;
-    init_ctrl();
+    // PIBRIDGE_WB_CTRL=0 (the app: PiBridge's own controller tracking with Pimax's head): the LED engine is not set up,
+    // its models not loaded; pibridge-headtrack reads pibridge-ctrltrack's poses instead (PIBRIDGE_CTRL_ENGINE=0)
+    if (const char* a = getenv("PIBRIDGE_WB_CTRL"); a && atoi(a) == 0) {
+        printf("controller engine: off (PIBRIDGE_WB_CTRL=0; pibridge-ctrltrack tracks the controllers)\n");
+    } else {
+        init_ctrl();
+    }
     // heapfix (heapfix.h): the kit's malloc / free served by a size-class cache in front of Wine's heap, whose free-list
     // walk made the engines slower by the minute. Default on; PIBRIDGE_WB_HEAP=0 keeps Wine's heap (A/B).
     if (const char* hf = getenv("PIBRIDGE_WB_HEAP"); !(hf && strcmp(hf, "0") == 0)) {

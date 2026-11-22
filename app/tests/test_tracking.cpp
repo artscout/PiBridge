@@ -130,6 +130,7 @@ TEST(conf_round_trip_and_clamping) {
     s.camAeCrystal = false;
     s.camAeNewLaw = false;
     s.ctrlTrack = false;
+    s.ctrlEngine = CtrlEngine::Ours;
     s.ctrlAngle = -15;
     s.ctrlLostS = 7;
     s.ctrlSteady = false;
@@ -175,6 +176,28 @@ TEST(env_and_readiness_of_the_original_crystal_on_monado) {
     CHECK(recReadiness(s, {}).blocking.join(QString()).contains(QStringLiteral("Lighthouse module")));
     s.lighthouseModule = true;
     CHECK(!recReadiness(s, {}).blocking.join(QString()).contains(QStringLiteral("Lighthouse module")));
+}
+
+TEST(controller_engine_and_tracker_switches) {
+    // pibridge-ctrltrack's tracker is not a setting (the sliding window; PIBRIDGE_CTRL_TRACKER only for experiments)
+    RecSetup s = fakeRecSetup(QStringLiteral("/r"));
+    CHECK(s.io.slamEngine == SlamEngine::Basalt && s.io.ctrlEngine == CtrlEngine::Ours); // built-in tracking by default
+    CHECK(!ctrltrackSpec(s, QStringLiteral("/l")).env.join(QLatin1Char(' ')).contains(QStringLiteral("PIBRIDGE_CTRL_TRACKER")));
+    // PiBridge's controllers with Pimax's head: winbridge's LED engine off, headtrack reads pibridge-ctrltrack
+    s.io.slamEngine = SlamEngine::Pimax;
+    s.io.ctrlEngine = CtrlEngine::Ours;
+    if (pimaxSlamReady(s) && s.winCtrlModels) {
+        CHECK(!pimaxCtrlEngine(s) && oursWithPimaxHead(s));
+        CHECK(winbridgeSpec(s, QStringLiteral("/l")).env.contains(QStringLiteral("PIBRIDGE_WB_CTRL=0")));
+        CHECK(headtrackSpec(s, QStringLiteral("/l")).env.contains(QStringLiteral("PIBRIDGE_CTRL_ENGINE=0")));
+        s.io.ctrlEngine = CtrlEngine::Pimax;
+        CHECK(pimaxCtrlEngine(s) && !oursWithPimaxHead(s));
+        CHECK(!winbridgeSpec(s, QStringLiteral("/l")).env.contains(QStringLiteral("PIBRIDGE_WB_CTRL=0")));
+    }
+    // with Basalt the controllers are PiBridge's whatever the switch says
+    s.io.slamEngine = SlamEngine::Basalt;
+    s.io.ctrlEngine = CtrlEngine::Pimax;
+    CHECK(!pimaxCtrlEngine(s) && !oursWithPimaxHead(s));
 }
 
 TEST(env_of_the_recommended_settings) {
@@ -927,7 +950,7 @@ TEST(room_map_auto_starts_with_a_saved_room_and_stops_by_pid) {
     QStringList want{QStringLiteral("auto"), QStringLiteral("--name"), QStringLiteral("home"), QStringLiteral("--wait"),
                      QStringLiteral("120"), QStringLiteral("--backend"), vrBackendName(currentVrBackend())};
     if (r.setup.io.slam && r.setup.io.slamEngine == SlamEngine::Basalt) {
-        want << QStringLiteral("--follow") << QStringLiteral("10"); // Basalt: the room map corrects its drift
+        want << QStringLiteral("--confirm") << QStringLiteral("12"); // Basalt: the start fix checked once more
     }
     CHECK(m.args == want);
     CHECK(m.logPath == r.c->session()->logDir() + QStringLiteral("/roommap.log"));

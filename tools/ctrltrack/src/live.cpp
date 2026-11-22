@@ -120,20 +120,23 @@ int cmd_live(std::span<const std::string> a) {
     const g::Pose aim_from_device = device_from_aim.inverse();
     tr::Tracker tracker(cfg);
     tracker.device_from_aim = device_from_aim.r;
-    // the IMU-led tracker (imutrack.h): the default unless PIBRIDGE_CTRL_TRACKER=frame (or parity, or --baseline). It
-    // runs the per-frame tracker itself while there is no IMU (hint file) or no head pose.
+    // PIBRIDGE_CTRL_TRACKER (the app: io_ctrl_tracker): win (default since 2026-11-21: on the live dumps win1-4 the
+    // EKF made 84 wrong relocks against the gated window tracker's 29 and lost 284 s against 203, docs/pibridge-
+    // ctrltrack.md), ekf (imutrack.h, the IMU-led EKF; it runs the per-frame tracker itself while there is no IMU
+    // or no head pose), frame (the per-frame tracker alone, as --baseline / parity).
     std::unique_ptr<tr::ImuTracker> itk;
-    // PIBRIDGE_CTRL_TRACKER=win: the Pimax-scheme sliding-window tracker (wintrack.h)
     std::unique_ptr<tr::WinTracker> wtk;
     if (!parity && !has(a, "--baseline")) {
         const auto e = cam::env_utf8("PIBRIDGE_CTRL_TRACKER");
-        if (e && rf::trim(*e) == "win") {
+        const std::string which = e ? std::string(rf::trim(*e)) : std::string("win");
+        if (which == "ekf" || which == "imu") {
+            itk = std::make_unique<tr::ImuTracker>(tr::ImuTrackCfg{}, cfg);
+            itk->device_from_aim = device_from_aim.r;
+            eprintln("tracker: IMU-led EKF (imutrack, PIBRIDGE_CTRL_TRACKER=ekf)");
+        } else if (which != "frame") {
             wtk = std::make_unique<tr::WinTracker>(tr::WinTrackCfg{}, cfg);
             wtk->device_from_aim = device_from_aim.r;
             eprintln("tracker: Pimax-scheme sliding window (wintrack)");
-        } else if (!(e && rf::trim(*e) == "frame")) {
-            itk = std::make_unique<tr::ImuTracker>(tr::ImuTrackCfg{}, cfg);
-            itk->device_from_aim = device_from_aim.r;
         }
     }
     std::FILE* trace = nullptr;

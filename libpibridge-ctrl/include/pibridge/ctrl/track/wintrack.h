@@ -115,6 +115,29 @@ struct WinTrackCfg {
     /// ring's twin, or a few-LED fit of a far controller: they scatter 20-40 deg) is refit from the gyro's orientation
     /// at its place (12 / 5 / 2.5 px windows) and accepted if 5+ LEDs hold that within 30 deg (WT_REFIT=0: refuse).
     bool refit_turned = true;
+    /// PiBridge (2026-11-21): a relock from fewer than this many LEDs (the matcher's in Lost, or the warm search's) is
+    /// tentative: the window takes it and its blobs are claimed, but no fix is published until the next frame's matcher
+    /// update holds it with tentative_min_leds inliers; a miss or a weaker update undoes it (the window and the lost
+    /// state come back as they were, the search goes on). win4: a 5-LED warm fit 2.1 m off (27 deg from the gyro,
+    /// 1.8 s after the loss) was accepted and held two frames by 3-LED P1P matches before the budget reset it; win5:
+    /// five 4-5 LED relocks sat up to 1 m off. 0 = off (WT_TENTATIVE).
+    std::size_t tentative_below = 7;
+    /// ... the confirming update needs this many inliers (WT_TENTATIVE_MIN) ...
+    std::size_t tentative_min_leds = 3;
+    /// ... and a window rms under this (px; WT_TENTATIVE_RMS). Measured on win1-4 (relock_quality.py): 4 / 1.5 px
+    /// undid 66 of 104 tentative relocks on win1, mostly right ones (the window's rms runs ~2 px), lost time +7 s;
+    /// 3 / 2.5 px undoes 43, lost time within +-1 s of the plain tracker on win1/win2 and 13 / 5 s less on win3, while
+    /// the wrong relocks it is for stay caught (all four 2 m one-camera ones, the 4-LED ones with 1.7-5.2 px).
+    double tentative_rms_px = 2.5;
+    /// ... and a relock seen by one camera only is tentative whatever its LED count: a single camera leaves the depth
+    /// to the LED pattern's scale, and the four 2 m relocks on win1-4 were all one-camera 5-7 LED fits.
+    bool tentative_one_cam = true;
+    /// PiBridge (2026-11-21): a warm fit seen by one camera must agree with the gyro-carried orientation within
+    /// warm_rot_deg + warm_rot_deg_per_s x age (deg), strong or not (the flat 30 stays for two-camera fits: their
+    /// right relocks sit up to 30 deg from the gyro after long losses). The four 2 m one-camera relocks sat 22-29 deg
+    /// off at ages 0.1-2.4 s; 3 of 47 right one-camera relocks fall to it (WT_WARM_ROT="base,per_s"; "0" = off).
+    double warm_rot_deg = 10.0;
+    double warm_rot_deg_per_s = 5.0;
     /// Cold hypotheses: a new fit extends one when its orientation is within this of the gyro-carried one (rad; Pimax
     /// 0.3); a fit of fewer than 8 LEDs gets the looser gate, since on the live dumps such fits of a far controller
     /// scattered 20-40 deg frame to frame and the chains never reached 3 frames (WT_HYP_FEW_RAD).
@@ -146,6 +169,9 @@ public:
         std::uint64_t relocks_refit = 0;   // of them, refit from the gyro's orientation (the fit's disagreed)
         std::uint64_t relocks_twin = 0;    // of those, off the ring's twin
         std::uint64_t relock_refused = 0;  // warm fits refused (orientation, position, tilt, the other controller)
+        std::uint64_t relocks_tentative = 0; // relocks from under tentative_below LEDs, held back one frame
+        std::uint64_t relocks_confirmed = 0; // of them, held by the next frame's update
+        std::uint64_t relocks_reverted = 0;  // of them, undone (a miss or a weaker update)
         std::uint64_t far_resets = 0;
         std::uint64_t budget_resets = 0;
         std::uint64_t hyp_total = 0;      // pose hypotheses scored
@@ -200,7 +226,18 @@ private:
         // the controller's up (gravity) learnt for the acquisition tilt test, as imutrack
         cam::geom::Vec3 up_w{0.0, 1.0, 0.0};
         std::uint32_t up_n = 0;
+        // a tentative relock (cfg.tentative_below): the state to go back to if the next frame does not hold it
+        bool tentative = false;
+        std::optional<Window> tent_win;
+        Mode tent_mode = Mode::Lost;
+        std::uint64_t tent_lost_t = 0, tent_last_update = 0;
+        std::uint32_t tent_lost_count = 0, tent_lost_threshold = 0, tent_frames_tracked = 0;
+        std::optional<cam::geom::Vec3> tent_good_p;
+        std::size_t tent_last_valid = 0;
     };
+    /// Remember the hand's state before a tentative relock / undo it.
+    void tent_save(Hand& hd, const Window& win_before);
+    void tent_revert(Hand& hd);
     std::array<Hand, 2> h_{};
     std::array<std::deque<ImuIn>, 2> imu_{};
     std::uint64_t head_seen_ = 0;

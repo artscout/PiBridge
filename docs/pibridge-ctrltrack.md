@@ -148,8 +148,18 @@ Measured in `docs/research/ctrl-tracking-improvements.md`. `track`, `scan`, `sho
   - **Snap on re-entry:** a re-entry over 15 cm from the shown pose snaps to the fix instead of blending.
 - **Parked controllers** (gyro quiet for 5 s) are searched for every 5th frame instead of never.
 - **Shown pose smoothing.**
-  - The fuser spreads each fix's step over 30 ms (`PIBRIDGE_CTRL_SMOOTH_MS`), and over 150 ms while the controller is
-    nearly still: gyro under 0.3 rad/s and the tracker's speed under 0.12 m/s (`PIBRIDGE_CTRL_SMOOTH_STILL_MS`).
+  - The fuser spreads each fix's step over 15 ms (`PIBRIDGE_CTRL_SMOOTH_MS`; 30 until 2026-11-22, 0 tried the same day: the lag below was the delivery, not the smoothing; 15 played right with the velocity published, low-speed jitter 1.7 mm as with 30): in the shadow logs
+    (`ext/slamrec/tools/ctrl_reversal_profile.py`) the shown pose trailed Pimax's by 3-5 cm on the approach to a swing
+    reversal, turned 12-24 ms later and ran 1-5 cm past the hand, which the user saw as the saber bending on in the
+    direction of the swing. Still 150 ms while the controller is nearly still: gyro under 0.3 rad/s and the tracker's
+    speed under 0.12 m/s (`PIBRIDGE_CTRL_SMOOTH_STILL_MS`).
+  - **Delivery (2026-11-22).** pibridge-headtrack publishes our controllers with the tracker's velocity carrying the
+    fix while optical (`Fuser::shown_velocity`), and CustomHeadsetOpenVR hands it to SteamVR with the sample's age as
+    poseTimeOffset, as for the head, so SteamVR predicts the controller's position to the display time. The angular
+    velocity is NOT published: the first live try handed SteamVR the gyro's rate through the calibration
+    (`Fuser::gyro_rate`) and the saber's blade flapped about the grip (the rate's frame or scale against the published
+    orientation is unverified; the orientation already carries the gyro to now). From 2026-11-20 the driver zeroed them (the EKF's optical<->held velocity flickered): a frame of lag behind
+    the head. If the 25 Hz step jitter shows again, this is where to look.
   - **Why.** At rest (still1, 2026-11-20) our 0.5-4 Hz bob matched Pimax's (likely the arms' own sway), but our fast
     jitter was about twice Pimax's.
   - **What was rejected.** Weighing fixes less in the tracker itself (Pimax's fast-stop, `CT_QUIET=3`) cost the left
@@ -343,3 +353,34 @@ synthetic IMU (`--fuse`).
   :223, velocity window 5-130 ms :442; "25 Hz" in live.rs:3 is a comment only).
 - Not the tracker's: Monado's Pimax camera code feeds SLAM "at 25 Hz" (`pimax_camera.c:725`, the Basalt calib writer
   `:812`) while the Crystal delivers 30 Hz per exposure kind.
+
+- **Relock gate (2026-11-21, `wintrack`):** measured on win1-4 against Pimax with `ext/slamrec/tools/relock_quality.py`
+  (every first fix after a gap: its error, LEDs, cameras, the gap, who moved in the next 0.5 s) and the tracker's
+  `WT_DEBUG` lines joined to it. Of 35 "wrong" relocks (> 15 cm) 10 were Pimax's own re-acquisition moving
+  (its pose steps 20-60 cm right after, ours does not), 13 were 9-10 LED two-camera fits 25-40 cm off that the window
+  pulls to the truth within 0.5 s (a far hand, weak depth; not a wrong assignment), and 8-12 were ours: four 2 m
+  relocks, all one-camera 5-7 LED warm fits 22-29 deg from the gyro-carried orientation (two of them "strong" 7-LED
+  fits that the orientation gate did not touch), three one-camera 5-LED fits 15-23 cm off, three 4-LED matcher relocks
+  pushed with 1.7-5.2 px. None was on the other hand. Two rules:
+  - *Tentative relock* (`tentative_below` 7, `tentative_one_cam`, `tentative_min_leds` 3, `tentative_rms_px` 2.5;
+    `WT_TENTATIVE=0` off): a relock from under 7 LEDs, or seen by one camera, takes the window and claims its blobs
+    but publishes no fix until the next frame's matcher update holds it with 3+ inliers under 2.5 px; a miss or a
+    weaker update puts the window and the lost state back (counters `tentative / confirmed / undone`). With 4 / 1.5 px
+    it undid 66 of 104 on win1, mostly right relocks (the window's rms runs ~2 px): lost time +7 s per hand.
+  - *One-camera orientation gate* (`warm_rot_deg` 10 + `warm_rot_deg_per_s` 5 x age, strong or not; `WT_WARM_ROT=0`
+    off): a warm fit seen by one camera must agree with the gyro-carried orientation that closely; two-camera fits keep
+    the flat 30 deg (their right relocks sit up to 30 deg off after long losses). On the joined data: 3 of 47 right
+    one-camera relocks refused, all four 2 m ones caught.
+  - *Result* (wrong relocks / lost s per hand, plain -> gated): win1 3 / 21.4, 11 / 44.1 -> 3 / 22.7, 11 / 47.7;
+    win2 2 / 15.4, 5 / 29.0 -> 0 / 16.2, 4 / 33.6; win3 3 / 55.3, 9 / 39.5 -> 1 / 42.5, 9 / 34.7; win4 0 / 2.6,
+    2 / 3.9 -> 0 / 1.0, 1 / 4.4. One-camera wrong relocks 7 -> 0, the 2 m ones 4 -> 0; the remaining "wrong" are
+    Pimax's moves and the far-hand convergence. beat1 masks (70 x 1 s, `--imu ... --imutrack`): relocked 70 / 70 as
+    before, wrong 1 -> 0, first-fix error p95 51 -> 40 mm, frames to relock p50 1 -> 2 (the held frame).
+  - *The live default, the EKF tracker (imutrack), on the same dumps* (wrong relocks / lost s per hand): win1 6 / 23.7,
+    24 / 69.4; win2 9 / 18.1, 15 / 30.4; win3 13 / 72.9, 14 / 56.3; win4 2 / 4.6, 1 / 8.6: 84 wrong relocks against
+    the gated window tracker's 29 (plain 35), 40 of them one-camera 5-7 LED fits 1-2 m off, the class the gate removes;
+    lost time 284 s against 203 s over the eight hands. The window tracker with the gate is the better tracker on every
+    dump: the default since 2026-11-21 and the only tracker the app offers (`PIBRIDGE_CTRL_TRACKER=ekf` in the extra
+    environment brings the EKF back for an A/B; `frame` the per-frame tracker). To be confirmed in sessions.
+  - *Not done:* the far-hand 25-40 cm first fixes (hold a relock's fixes until the window has 2-3 frames, or weight the
+    restart's depth), P2P / P1P fits with the gravity tilt, Hungarian assignment, the accel-bias gate by |w|.
