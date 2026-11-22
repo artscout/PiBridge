@@ -840,8 +840,11 @@ void Daemon::camera_loop() {
             say_("first frame set to the engine");
         }
     }
+    const auto bw = vit_ ? vit_->dropped_backward() : std::pair<std::uint64_t, std::uint64_t>{0, 0};
     say_("camera: " + std::to_string(sets) + " frame sets, " + std::to_string(untimed) + " before the IMU" +
-         (ae ? ", auto-exposure " + std::to_string(ae->changes) + " changes, " + std::to_string(ae_sent) + " sent" : ""));
+         (ae ? ", auto-exposure " + std::to_string(ae->changes) + " changes, " + std::to_string(ae_sent) + " sent" : "") +
+         ", time ran backward: " + std::to_string(bw.first) + " frame sets, " + std::to_string(bw.second) +
+         " IMU samples dropped");
 }
 
 void Daemon::to_world(ps::Device& d, bool position_valid, std::int64_t now_ns) {

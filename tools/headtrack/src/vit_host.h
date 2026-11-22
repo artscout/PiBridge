@@ -75,6 +75,9 @@ public:
     std::uint32_t cameras() const { return cameras_; }
     /// The library has winbridge's controller extension (Pimax's LED engine).
     bool has_controllers() const { return ext_ok_; }
+    /// Samples the engine never saw because their time was not after the previous one's (frame sets, IMU samples):
+    /// Basalt aborts on a backward timestamp (a user's build hit it once at a camera start), so they are dropped here.
+    std::pair<std::uint64_t, std::uint64_t> dropped_backward() const { return {backward_img_, backward_imu_}; }
     /// The four LED-exposure tiles (640x480 Y8), `shutter_ns` the exposure.
     void push_led(std::int64_t ts_ns, std::uint32_t shutter_ns, const std::vector<const std::uint8_t*>& tiles);
     /// One controller IMU sample in its raw axes (m/s^2, rad/s); hand 0 left, 1 right.
@@ -96,6 +99,8 @@ private:
     std::mutex gate_mu_;
     bool frame_seen_ = false;
     std::uint32_t since_frame_ = 0;
+    std::int64_t last_img_ns_ = INT64_MIN, last_imu_ns_ = INT64_MIN;
+    std::uint64_t backward_img_ = 0, backward_imu_ = 0;
     std::uint64_t imu_held_ = 0;
     bool ext_ok_ = false;
     void* ext_led_ = nullptr;

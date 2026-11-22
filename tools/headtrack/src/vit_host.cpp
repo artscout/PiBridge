@@ -93,6 +93,11 @@ bool VitHost::push_imu(std::int64_t ts_ns, const float accel[3], const float gyr
             imu_held_++;
             return false;
         }
+        if (ts_ns <= last_imu_ns_) {
+            backward_imu_++; // not after the previous sample: Basalt would abort
+            return false;
+        }
+        last_imu_ns_ = ts_ns;
     }
     vit_imu_sample_t s{};
     s.timestamp = ts_ns;
@@ -108,6 +113,14 @@ bool VitHost::push_imu(std::int64_t ts_ns, const float accel[3], const float gyr
 
 void VitHost::push_frames(std::int64_t ts_ns, const std::vector<const std::uint8_t*>& tiles, std::uint32_t w,
                           std::uint32_t h) {
+    {
+        std::lock_guard g(gate_mu_);
+        if (ts_ns <= last_img_ns_) {
+            backward_img_++; // the clock mapping or the mid-exposure shift ran backward: Basalt would abort
+            return;
+        }
+        last_img_ns_ = ts_ns;
+    }
     for (std::uint32_t c = 0; c < cameras_ && c < tiles.size(); c++) {
         vit_img_sample_t s{};
         s.cam_index = c;

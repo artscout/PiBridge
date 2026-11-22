@@ -12,7 +12,9 @@ session (START VR on the Dashboard; the settings are on the Tracking page, [TRAC
   inside-out pause marker and waits for `pibridge-keepalived` to pause; the volume buttons are relayed to it.
 - **The IMU**: device time (u32 us) unwrapped and mapped to `CLOCK_MONOTONIC` with the least delayed offset; OpenXR
   axes (-x, y, -z), m/s² and rad/s. A 3DoF orientation (Mahony, gyro bias learnt at rest) covers the gaps.
-- **The cameras**: frames from the camera broker (`pibridge-cam`) on the IMU timeline. The tracking exposure goes to
+- **The cameras**: frames from the camera broker (`pibridge-cam`) on the IMU timeline. A frame set or IMU sample whose
+  time is not after the previous one's is not handed to the engine (Basalt aborts on a backward timestamp; a user's
+  build hit it once at a camera start); the count is in the "camera:" line at the end of the log (2026-11-22). The tracking exposure goes to
   the SLAM engine (a VIT 2.0 library, `vit_host.{h,cpp}`, with the IMU gate 200 / every 10th up to 60 more); the LED
   exposure goes to Pimax's LED engine for the controllers.
 - **Engines** (`--engine`):
