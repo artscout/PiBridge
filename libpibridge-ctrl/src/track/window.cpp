@@ -157,10 +157,11 @@ Window::Window(WindowCfg c) : cfg(c) {
     }
 }
 
-void Window::reset(const WinState& s) {
+void Window::reset(const WinState& s, double init_scale) {
     frames_.clear();
     prior_.reset();
     init_ = s;
+    init_scale_ = init_scale;
     Frame f;
     f.x = s;
     frames_.push_back(std::move(f));
@@ -277,11 +278,12 @@ struct Eval {
                 MatrixXd J = MatrixXd::Zero(9, NP);
                 const auto d = boxminus(fr[0].x, *init_pose_);
                 VectorXd r(9);
-                J.block<3, 3>(0, 0) = Matrix3d::Identity() / cfg.init_r;
-                J.block<3, 3>(3, 3) = Matrix3d::Identity() / cfg.init_p;
+                const double ir = cfg.init_r * init_scale_, ip = cfg.init_p * init_scale_;
+                J.block<3, 3>(0, 0) = Matrix3d::Identity() / ir;
+                J.block<3, 3>(3, 3) = Matrix3d::Identity() / ip;
                 J.block<3, 3>(6, 6) = Matrix3d::Identity() / cfg.init_v;
-                r.segment<3>(0) = d.segment<3>(0) / cfg.init_r;
-                r.segment<3>(3) = d.segment<3>(3) / cfg.init_p;
+                r.segment<3>(0) = d.segment<3>(0) / ir;
+                r.segment<3>(3) = d.segment<3>(3) / ip;
                 r.segment<3>(6) = d.segment<3>(6) / cfg.init_v;
                 nrm.add(r, {{0, J}}, 1.0, 0.5 * r.squaredNorm());
             }
@@ -440,6 +442,7 @@ struct Eval {
     }
     g::Vec3 init_bg_{}, init_ba_{};
     std::optional<WinState> init_pose_;
+    double init_scale_ = 1.0; // Window::init_scale_: a relock's wider first-frame prior
 };
 } // namespace
 
@@ -472,6 +475,7 @@ double WindowAccess::evaluate(Window& w, MatrixXd& H, VectorXd& b) {
     e.init_bg_ = init_.bg;
     e.init_ba_ = init_.ba;
     e.init_pose_ = prior_ ? std::nullopt : std::optional<WinState>(init_);
+    e.init_scale_ = w.init_scale_;
     double vis_sq = 0.0;
     std::size_t vis_n = 0;
     e.run(nrm, &vis_sq, &vis_n);
@@ -582,6 +586,7 @@ void Window::marginalize() {
     e.init_bg_ = init_.bg;
     e.init_ba_ = init_.ba;
     e.init_pose_ = prior_ ? std::nullopt : std::optional<WinState>(init_);
+    e.init_scale_ = init_scale_;
     e.run(nrm, nullptr, nullptr);
     const MatrixXd H00 = nrm.H.block(0, 0, NP, NP) + MatrixXd::Identity(NP, NP) * 1e-9;
     const MatrixXd H01 = nrm.H.block(0, NP, NP, NP);

@@ -94,7 +94,10 @@ public:
     WindowCfg cfg;
 
     /// Start over from an acquisition: one frame with this state.
-    void reset(const WinState& s);
+    /// `init_scale` widens the first frame's pose prior (init_p, init_r x scale): a relock's fit is the window's only
+    /// knowledge, and a far hand's 9-10 LED fit sat 25-40 cm off on the live dumps, which the 5 mm prior made the next
+    /// frames pull in over 0.5 s (PiBridge 2026-11-22).
+    void reset(const WinState& s, double init_scale = 1.0);
     bool empty() const { return frames_.empty(); }
     std::size_t frames() const { return frames_.size(); }
     const WinState& newest() const { return frames_.back().x; }
@@ -132,6 +135,7 @@ private:
     std::deque<Frame> frames_;
     std::optional<Prior> prior_; // on the oldest frame
     WinState init_;              // the acquisition's state: the first frame's prior until a marginal prior exists
+    double init_scale_ = 1.0;    // see reset()
     bool fast_ = false;
 
     void marginalize();

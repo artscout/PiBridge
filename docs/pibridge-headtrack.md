@@ -253,5 +253,13 @@ A `PIBRIDGE_ROOM_FOLLOW=0` session of 7 min felt right to the user. Headset on t
 at ~3 mm/s in one direction and -6..-12 deg/min of yaw, so the shadow's still-hold reset it 30 times in 6 min and the
 held output's yaw drifted -25 deg (each re-zero carries the drifted yaw into the restarted tracker, which repeats its
 init transient). Replayed without resets: a 90 s transient after the put-down (15 cm, -8 deg), then +-3 cm; IMU noise
-models x10 do not change it. Next for the output layer: do not restart the tracker while still (hold the position
-only, or far less often), and hold yaw by the bias-corrected gyro while still rather than by the tracker.
+models x10 do not change it. Done the same night (output layer, `slam.cpp` / `headpose.cpp`):
+- the still freeze no longer re-latches its orientation to the live one (the 0.04 deg deadband followed the tracker's
+  drift step by step); the position may still re-latch within 1 mm;
+- a re-zero while still aligns the fresh tracker to the orientation the gyro held since the still period began
+  (`still_fix_`), not to the drifted tracker's;
+- when the freeze releases, the tracker world is turned about the head to the gyro-held yaw (`Supervisor::yaw_adjust`;
+  counted in `corr.yaw_realigned`) instead of the output sliding to the tracker's yaw;
+- re-zeros back off 1, 2, 4, 8, 16 s while the headset stays still (`StillParams::backoff_max` 4; each restart repeated
+  the 90 s init transient). To verify live: two minutes on the desk mid-session, the room's yaw must be where it was
+  when the headset is worn again.

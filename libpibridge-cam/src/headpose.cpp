@@ -959,9 +959,15 @@ void HeadTracker::freeze_step(Rel& raw) {
         live.lin_vel = {0.0, 0.0, 0.0};
         live.ang_vel = {0.0, 0.0, 0.0};
         Rel f = live;
-        if (frozen_ && geom::norm(qlog(qmul(raw.q, qconj(frozen_->q)))) <= p.freeze_deadband_rad &&
-            geom::norm(geom::sub(raw.pos, frozen_->pos)) <= p.freeze_deadband_m) {
-            f = *frozen_;
+        if (frozen_) {
+            // PiBridge (2026-11-22): the orientation never re-latches to the live one while frozen: still, the live
+            // orientation moves only by the tracker's drift (the gyro is quiet), which the old 0.04 deg deadband
+            // followed step by step (-25 deg in 6 min on the desk). The position may still re-latch (the hold's
+            // few-mm settling).
+            f.q = frozen_->q;
+            if (geom::norm(geom::sub(raw.pos, frozen_->pos)) <= p.freeze_deadband_m) {
+                f.pos = frozen_->pos;
+            }
         }
         frozen_ = f;
         raw = f;
@@ -971,7 +977,16 @@ void HeadTracker::freeze_step(Rel& raw) {
         frozen_.reset();
         // Released: the frozen pose stays this query's output; the correction carries the difference.
         const Vec3 uncorr_p = geom::sub(raw.pos, corr_p_);
-        const Quat uncorr_q = qmul(qexp(geom::scale(corr_r_, -1.0)), raw.q);
+        Quat uncorr_q = qmul(qexp(geom::scale(corr_r_, -1.0)), raw.q);
+        // PiBridge (2026-11-22): the yaw the gyro held through the freeze is right and the tracker's drifted, so the
+        // tracker world turns to the held yaw (about the head) instead of the output sliding to the tracker's.
+        const double dyaw = std::remainder(slam::yaw_of(f.q) - slam::yaw_of(uncorr_q), 2.0 * M_PI);
+        if (std::fabs(dyaw) < p.snap_rot) {
+            sup.yaw_adjust(dyaw, uncorr_p);
+            uncorr_q = qnorm(qmul(slam::qyaw(dyaw), uncorr_q));
+            corr.yaw_realigned += 1;
+            corr.yaw_realigned_deg += std::fabs(rf::to_degrees(dyaw));
+        }
         corr_p_ = geom::sub(f.pos, uncorr_p);
         corr_r_ = qlog(qmul(f.q, qconj(uncorr_q)));
         if (geom::norm(corr_p_) > p.snap_pos || geom::norm(corr_r_) > p.snap_rot) {

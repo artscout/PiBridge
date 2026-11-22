@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <limits>
 #include <string_view>
 
 namespace pibridge::ctrl::track {
@@ -36,6 +37,74 @@ bool env_flag(const char* name, bool def) {
         return def;
     }
     return std::string_view(e) != "0";
+}
+
+/// Minimum-cost assignment of rows to columns (Hungarian, O(n^3), potentials; e-maxx form). Rectangular matrices are
+/// padded; the result is the column of each row (-1: none). Costs must be finite.
+std::vector<int> hungarian(const std::vector<std::vector<double>>& a) {
+    const std::size_t n = a.size();
+    const std::size_t m = n == 0 ? 0 : a[0].size();
+    if (n == 0 || m == 0) {
+        return std::vector<int>(n, -1);
+    }
+    const bool transposed = n > m;
+    const std::size_t R = transposed ? m : n, C = transposed ? n : m; // R <= C
+    const auto cost = [&](std::size_t i, std::size_t j) { return transposed ? a[j][i] : a[i][j]; };
+    const double INF = std::numeric_limits<double>::infinity();
+    std::vector<double> u(R + 1, 0.0), v(C + 1, 0.0);
+    std::vector<int> p(C + 1, 0), way(C + 1, 0);
+    for (std::size_t i = 1; i <= R; i++) {
+        p[0] = static_cast<int>(i);
+        std::size_t j0 = 0;
+        std::vector<double> minv(C + 1, INF);
+        std::vector<char> used(C + 1, 0);
+        do {
+            used[j0] = 1;
+            const std::size_t i0 = static_cast<std::size_t>(p[j0]);
+            double delta = INF;
+            std::size_t j1 = 0;
+            for (std::size_t j = 1; j <= C; j++) {
+                if (used[j]) {
+                    continue;
+                }
+                const double cur = cost(i0 - 1, j - 1) - u[i0] - v[j];
+                if (cur < minv[j]) {
+                    minv[j] = cur;
+                    way[j] = static_cast<int>(j0);
+                }
+                if (minv[j] < delta) {
+                    delta = minv[j];
+                    j1 = j;
+                }
+            }
+            for (std::size_t j = 0; j <= C; j++) {
+                if (used[j]) {
+                    u[static_cast<std::size_t>(p[j])] += delta;
+                    v[j] -= delta;
+                } else {
+                    minv[j] -= delta;
+                }
+            }
+            j0 = j1;
+        } while (p[j0] != 0);
+        do {
+            const std::size_t j1 = static_cast<std::size_t>(way[j0]);
+            p[j0] = p[j1];
+            j0 = j1;
+        } while (j0 != 0);
+    }
+    std::vector<int> row_to_col(n, -1);
+    for (std::size_t j = 1; j <= C; j++) {
+        if (p[j] > 0) {
+            const std::size_t r = static_cast<std::size_t>(p[j]) - 1, c = j - 1;
+            if (transposed) {
+                row_to_col[c] = static_cast<int>(r);
+            } else {
+                row_to_col[r] = static_cast<int>(c);
+            }
+        }
+    }
+    return row_to_col;
 }
 
 /// Pimax's inlier gate by the nearest LED's distance to the camera.
@@ -128,6 +197,12 @@ WinTracker::WinTracker(WinTrackCfg c, TrackCfg fallback) : cfg(c), fallback_(fal
     if (const char* e = std::getenv("WT_TENTATIVE")) {
         cfg.tentative_below = static_cast<std::size_t>(std::atoi(e));
         cfg.tentative_one_cam = cfg.tentative_below > 0;
+    }
+    if (const char* e = std::getenv("WT_RELOCK_INIT")) {
+        cfg.relock_init_scale = std::atof(e);
+    }
+    if (const char* e = std::getenv("WT_ASSIGN")) {
+        cfg.assign_optimal = std::string_view(e) == "optimal";
     }
     if (const char* e = std::getenv("WT_TENTATIVE_RMS")) {
         cfg.tentative_rms_px = std::atof(e);
@@ -570,21 +645,62 @@ std::optional<WinTracker::Match> WinTracker::match(const Rig& rig, std::size_t s
                 }
             }
         }
-        std::sort(cand.begin(), cand.end(), [](const C3& a, const C3& b) { return a.d < b.d; });
-        std::vector<std::vector<bool>> bused(obs.size());
-        for (std::size_t ci = 0; ci < obs.size(); ci++) {
-            bused[ci].assign(obs[ci].px.size(), false);
-        }
-        std::vector<std::vector<bool>> lused(obs.size(), std::vector<bool>(model.leds.size(), false));
-        for (const C3& c : cand) {
-            if (bused[c.cam][c.blob] || lused[c.cam][c.led]) {
-                continue;
+        if (cfg.assign_optimal) {
+            // per camera: the assignment with the most pairs and, among those, the least summed distance (Hungarian on
+            // the candidate pairs; a missing pair costs far more than any distance). Greedy nearest-first mislabels
+            // neighbouring LEDs when the ring is seen edge-on and two blobs sit near one LED.
+            for (std::size_t ci = 0; ci < obs.size(); ci++) {
+                std::vector<std::size_t> leds, blobs;
+                for (const C3& c : cand) {
+                    if (c.cam != ci) {
+                        continue;
+                    }
+                    if (std::find(leds.begin(), leds.end(), c.led) == leds.end()) {
+                        leds.push_back(c.led);
+                    }
+                    if (std::find(blobs.begin(), blobs.end(), c.blob) == blobs.end()) {
+                        blobs.push_back(c.blob);
+                    }
+                }
+                if (leds.empty()) {
+                    continue;
+                }
+                constexpr double NONE = 1e6;
+                std::vector<std::vector<double>> cost(leds.size(), std::vector<double>(blobs.size(), NONE));
+                for (const C3& c : cand) {
+                    if (c.cam != ci) {
+                        continue;
+                    }
+                    const std::size_t i = std::find(leds.begin(), leds.end(), c.led) - leds.begin();
+                    const std::size_t j = std::find(blobs.begin(), blobs.end(), c.blob) - blobs.begin();
+                    cost[i][j] = std::min(cost[i][j], c.d);
+                }
+                const std::vector<int> col = hungarian(cost);
+                for (std::size_t i = 0; i < leds.size(); i++) {
+                    if (col[i] >= 0 && cost[i][static_cast<std::size_t>(col[i])] < NONE) {
+                        m.per_cam[ci].emplace_back(leds[i], blobs[static_cast<std::size_t>(col[i])]);
+                        m.count += 1;
+                        m.err += cost[i][static_cast<std::size_t>(col[i])];
+                    }
+                }
             }
-            bused[c.cam][c.blob] = true;
-            lused[c.cam][c.led] = true;
-            m.per_cam[c.cam].emplace_back(c.led, c.blob);
-            m.count += 1;
-            m.err += c.d;
+        } else {
+            std::sort(cand.begin(), cand.end(), [](const C3& a, const C3& b) { return a.d < b.d; });
+            std::vector<std::vector<bool>> bused(obs.size());
+            for (std::size_t ci = 0; ci < obs.size(); ci++) {
+                bused[ci].assign(obs[ci].px.size(), false);
+            }
+            std::vector<std::vector<bool>> lused(obs.size(), std::vector<bool>(model.leds.size(), false));
+            for (const C3& c : cand) {
+                if (bused[c.cam][c.blob] || lused[c.cam][c.led]) {
+                    continue;
+                }
+                bused[c.cam][c.blob] = true;
+                lused[c.cam][c.led] = true;
+                m.per_cam[c.cam].emplace_back(c.led, c.blob);
+                m.count += 1;
+                m.err += c.d;
+            }
         }
         scored.push_back(std::move(m));
     }
@@ -1576,7 +1692,7 @@ std::vector<Fix> WinTracker::step(const Rig& rig, const LedFrame& lf, std::uint6
                 if (tentative) {
                     tent_save(hd, hd.win);
                 }
-                hd.win.reset(*start);
+                hd.win.reset(*start, cold[s] ? 1.0 : cfg.relock_init_scale);
                 hd.mode = Mode::Tracking;
                 hd.last_update = frame_ns;
                 hd.good_p = start->p;

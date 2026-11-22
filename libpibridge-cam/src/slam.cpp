@@ -500,6 +500,9 @@ void Supervisor::set_still(bool still) {
         rezero_streak_ = 0;
     }
     still_ = still;
+    if (!still) {
+        still_fix_.reset(); // the gyro-held orientation is for one still period
+    }
 }
 
 void Supervisor::shift_world(const Vec3& d) {
@@ -699,7 +702,8 @@ std::uint32_t Supervisor::rezero(std::uint64_t now_ns) {
         const TrackSample l = *last_;
         held_pos_ = head_world(l.pos, l.q);
         const Quat world_q = qmul(tilt_, qmul(w_q_, qnorm(l.q)));
-        fix3dof_ = qnorm(qmul(world_q, qconj(qnorm(l.q3dof))));
+        // while still: the gyro-held orientation (still_fix_), not the tracker's drifted one
+        fix3dof_ = still_fix_ ? *still_fix_ : qnorm(qmul(world_q, qconj(qnorm(l.q3dof))));
     }
     state_ = TrackState::Lost;
     lost_since_ns_ = now_ns;
@@ -709,6 +713,20 @@ std::uint32_t Supervisor::rezero(std::uint64_t now_ns) {
     // cameras see too little to hold a position (dark or plain view), in plain words for the status line.
     reason_ = rezero_streak_ >= 3 ? "re-zeroed: cameras see too little" : "re-zeroed while still";
     return events::REZEROED | request_reset();
+}
+
+void Supervisor::yaw_adjust(double dyaw, const Vec3& head) {
+    w_q_ = qnorm(qmul(qyaw(dyaw), w_q_));
+    if (last_) {
+        const TrackSample l = *last_;
+        const Vec3 head_slam = geom::add(l.pos, qrot(qnorm(l.q), head_in_imu_));
+        w_t_ = geom::sub(head, qrot(w_q_, head_slam));
+        fix3dof_ = qnorm(qmul(qmul(tilt_, qmul(w_q_, qnorm(l.q))), qconj(qnorm(l.q3dof))));
+    }
+    if (still_ref_) {
+        still_ref_->second = head;
+    }
+    lost_w_.reset();
 }
 
 std::uint32_t Supervisor::hold_still(std::uint64_t now_ns) {
@@ -722,6 +740,9 @@ std::uint32_t Supervisor::hold_still(std::uint64_t now_ns) {
         const Vec3 r = still_anchor_.value_or(head_slam);
         still_anchor_.reset();
         still_ref_ = std::pair{r, geom::add(qrot(w_q_, r), w_t_)};
+        if (!still_fix_) {
+            still_fix_ = qnorm(qmul(qmul(tilt_, qmul(w_q_, qnorm(l.q))), qconj(qnorm(l.q3dof))));
+        }
         return 0;
     }
     const auto [ref_slam, target] = *still_ref_;

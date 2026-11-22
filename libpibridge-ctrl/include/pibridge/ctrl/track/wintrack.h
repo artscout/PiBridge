@@ -58,7 +58,9 @@ struct WinTrackCfg {
     /// Fewest inliers for an update, and for the first update after a loss (PiBridge: Pimax's detection minimum; a
     /// 2-3 blob relock at a drifted prediction placed the controller 10-60 cm off on the mask test).
     std::size_t min_leds = 2;
-    std::size_t min_leds_relock = 4;
+    /// 3 since 2026-11-22 (was 4): with the tentative gate checking the next frame, a 3-inlier relock near a fresh
+    /// prediction costs nothing (win1-4 lost time equal or a few s less, wrong relocks the same).
+    std::size_t min_leds_relock = 3;
     /// PiBridge: the matcher may relock a lost controller within this many frames of its last update; beyond it only
     /// the search (a full fit of 5+ LEDs near the prediction) may. Pimax matches the prediction on every lost frame;
     /// 2 frames (the mask test: 10-60 cm relocks after 0.5 s of IMU-only prediction, with 2-3 inliers) cost the live
@@ -136,6 +138,16 @@ struct WinTrackCfg {
     /// warm_rot_deg + warm_rot_deg_per_s x age (deg), strong or not (the flat 30 stays for two-camera fits: their
     /// right relocks sit up to 30 deg from the gyro after long losses). The four 2 m one-camera relocks sat 22-29 deg
     /// off at ages 0.1-2.4 s; 3 of 47 right one-camera relocks fall to it (WT_WARM_ROT="base,per_s"; "0" = off).
+    /// PiBridge (2026-11-22): a warm relock restarts the window with its first-frame pose prior this many times wider
+    /// than an acquisition's (Window::reset init_scale; WT_RELOCK_INIT). Tried at 10 for the far hand's 25-40 cm
+    /// first fixes: the window then drifted off its relock before the next fits held it, lost time 22.7 -> 39.4 s on
+    /// win1 hand 0 and 33.6 -> 57.3 s on win2 hand 1. Stays 1.
+    double relock_init_scale = 1.0;
+    /// PiBridge (2026-11-22): the matcher's LED-blob pairs per camera by an optimal assignment (Hungarian, WT_ASSIGN=
+    /// optimal) instead of the greedy nearest-first one. Off: more pairs for every hypothesis also means more pairs
+    /// for the wrong ones, and the choice by inlier count then picks them (win2 hand 1 lost 33.6 -> 46.7 s, the rest
+    /// within noise); the greedy match is the more conservative scorer.
+    bool assign_optimal = false;
     double warm_rot_deg = 10.0;
     double warm_rot_deg_per_s = 5.0;
     /// Cold hypotheses: a new fit extends one when its orientation is within this of the gyro-carried one (rad; Pimax

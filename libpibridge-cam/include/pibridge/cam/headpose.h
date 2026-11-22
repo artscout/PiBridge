@@ -393,6 +393,9 @@ struct VioSample {
 struct CorrStats {
     /// Corrections blended in.
     std::uint64_t blended = 0;
+    /// PiBridge (2026-11-22): still-freeze releases that turned the tracker world to the gyro-held yaw, and their sum (deg).
+    std::uint64_t yaw_realigned = 0;
+    double yaw_realigned_deg = 0.0;
     /// Corrections applied at once (too large).
     std::uint64_t snapped = 0;
     /// Largest blended position correction (m).

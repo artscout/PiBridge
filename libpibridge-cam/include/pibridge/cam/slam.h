@@ -259,7 +259,9 @@ struct StillParams {
     /// waits twice as long as the one before, up to reset_every_ns << backoff_max (0 = a re-zero every
     /// reset_every_ns as in Rust). A fresh tracker that sees too little drifts again at once; resetting it every
     /// second keeps it in its weakest phase (study 2: 32 re-zeros in 36 s on the desk).
-    std::uint32_t backoff_max = 0;
+    /// PiBridge 2026-11-22: 4 (1, 2, 4, 8, 16 s). On the desk (take 21:55) a fresh tracker repeated its 90 s init
+    /// transient after every re-zero; 30 re-zeros in 6 min did more harm than the drift they reset.
+    std::uint32_t backoff_max = 4;
 
     bool operator==(const StillParams&) const = default;
 };
@@ -355,6 +357,10 @@ public:
     void set_still_anchor(const Vec3& head_slam) { still_anchor_ = head_slam; }
     /// The IMU says the headset is perfectly still (call before update).
     void set_still(bool still);
+    /// PiBridge (2026-11-22): turn the world alignment about the vertical through the head (world position `head`) by
+    /// `dyaw` (rad): the head stays where it is, the world's yaw follows the gyro-held orientation when the still
+    /// freeze releases (the tracker's yaw drifted while the headset lay still, the gyro's did not).
+    void yaw_adjust(double dyaw, const Vec3& head);
     /// Current state.
     TrackState state() const { return state_; }
     /// Current world_from_slam (translation, yaw).
@@ -424,6 +430,10 @@ private:
     Quat tilt_ = QUAT_ID;
     // Tracker-world head position where the still period really began.
     std::optional<Vec3> still_anchor_;
+    /// PiBridge (2026-11-22): the 3DoF -> world orientation when the still hold began. A re-zero while still aligns
+    /// the fresh tracker to it (the gyro-held yaw) instead of to the drifted tracker's: on the desk the raw tracker
+    /// drifted -6..-12 deg/min and 30 re-zeros in 6 min carried -25 deg into the output.
+    std::optional<Quat> still_fix_;
     // Re-zeros since the headset last moved (StillParams::backoff_max).
     std::uint32_t rezero_streak_ = 0;
 };

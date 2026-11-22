@@ -382,5 +382,14 @@ synthetic IMU (`--fuse`).
     lost time 284 s against 203 s over the eight hands. The window tracker with the gate is the better tracker on every
     dump: the default since 2026-11-21 and the only tracker the app offers (`PIBRIDGE_CTRL_TRACKER=ekf` in the extra
     environment brings the EKF back for an A/B; `frame` the per-frame tracker). To be confirmed in sessions.
-  - *Not done:* the far-hand 25-40 cm first fixes (hold a relock's fixes until the window has 2-3 frames, or weight the
-    restart's depth), P2P / P1P fits with the gravity tilt, Hungarian assignment, the accel-bias gate by |w|.
+  - *2026-11-22, same day, measured on win1-4 (lost s per hand):*
+    (1) a 10x wider first-frame pose prior after a warm relock (`relock_init_scale`, `WT_RELOCK_INIT`), meant for the
+    far hand's 25-40 cm first fixes that the 5 mm acquisition prior held for 0.5 s: the window drifted off its relock
+    before the next fits held it, win1 hand 0 22.7 -> 39.4, win2 hand 1 33.6 -> 57.3. Off (1).
+    (2) an optimal LED-blob assignment per camera in the matcher (Hungarian, `assign_optimal`, `WT_ASSIGN=optimal`)
+    in place of the greedy nearest-first: more pairs for every hypothesis, the wrong ones included, and the choice by
+    inlier count then takes them: win2 hand 1 33.6 -> 46.7, the rest within noise. Off; the code stays for A/B.
+    (3) the matcher relocks a lost hand from 3 inliers (`min_leds_relock` 3, was 4) now that the tentative gate checks
+    the next frame: 22.6 / 43.9, 15.9 / 33.6, 41.3 / 35.7, 1.0 / 4.4 against 22.7 / 47.7, 16.2 / 33.6, 42.5 / 34.7,
+    1.0 / 4.4 with 4, wrong relocks the same. On.
+  - *Not done:* P2P / P1P fits with the gravity tilt for 1-2 LEDs in a cold search, the accel-bias gate by |w|.
